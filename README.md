@@ -2,6 +2,10 @@
 
 #### Odnośniki https://github.com/pwasiewi/eulinks/tree/master/sw_raspberry
 
+1. mkdir dl
+2. cd make...
+3. make emulate
+
 Raspberry Pi Lab przygotowane na podstawie 
 1) https://wiki.gentoo.org/wiki/Cross_build_environment
 2) http://mgalgs.github.io/2015/05/16/how-to-build-a-custom-linux-kernel-for-qemu-2015-edition.html
