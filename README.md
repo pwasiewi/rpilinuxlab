@@ -2,9 +2,12 @@
 
 #### Odnośniki https://github.com/pwasiewi/eulinks/tree/master/sw_raspberry
 
-1. mkdir dl
-2. cd make...
-3. make emulate
+1. install Gentoo Linux
+2. pull github repository rpilinuxlab https://github.com/pwasiewi/rpilinuxlab
+3. cd rpilinuxlab
+4. mkdir dl
+5. cd make...
+6. make emulate
 
 Raspberry Pi Lab przygotowane na podstawie 
 1) https://wiki.gentoo.org/wiki/Cross_build_environment
@@ -20,9 +23,9 @@ w "Makefile" trzeba je poprawić.
 1. Instalacja pakietu CROSSDEV
 
 ----------------------------------------------------------------------------
-
+```
 emerge -av crossdev
-
+```
 ----------------------------------------------------------------------------
 
 2. Generacja narzędzi dla platformy ARM
