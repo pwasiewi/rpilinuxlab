@@ -54,7 +54,7 @@ mkdir -p src bin.kernel bin.busybox out.initrd emulacja
 wget http://www.kernel.org/pub/linux/kernel/v4.0/linux-4.16.7.tar.xz
 wget http://busybox.net/downloads/busybox-1.28.3.tar.bz2
 tar xjf linux-4.16.7.tar.xz -C src
-tar xjf busybox-1.19.3.tar.bz2 -C src
+tar xjf busybox-1.28.3.tar.bz2 -C src
 ```
 ----------------------------------------------------------------------------
 
