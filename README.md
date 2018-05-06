@@ -2,7 +2,7 @@
 
 #### Odnośniki https://github.com/pwasiewi/eulinks/tree/master/sw_raspberry
 
-1. install Gentoo Linux
+1. install Gentoo Linux e.g. from UbuntuLiveDVD https://github.com/pwasiewi/gentools
 2. pull github repository rpilinuxlab https://github.com/pwasiewi/rpilinuxlab
 3. cd rpilinuxlab
 4. mkdir dl
