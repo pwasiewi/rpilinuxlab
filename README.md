@@ -30,7 +30,7 @@ emerge -av crossdev
 
 2. Generacja narzędzi dla platformy ARM
 ```
-crossdev --target arm-softfloat-linux-gnueabi --gcc 4.9.3 --libc 2.23 --kernel 4.7.5
+crossdev --target arm-softfloat-linux-gnueabi --gcc 6.4.0 --libc 2.25-r11 --kernel 4.16.7
 ```
 ----------------------------------------------------------------------------
 
@@ -51,9 +51,9 @@ make $@
 ----------------------------------------------------------------------------
 ```
 mkdir -p src bin.kernel bin.busybox out.initrd emulacja
-wget http://www.kernel.org/pub/linux/kernel/v3.0/linux-3.1.4.tar.bz2
-wget http://busybox.net/downloads/busybox-1.19.3.tar.bz2
-tar xjf linux-3.1.4.tar.bz2 -C src
+wget http://www.kernel.org/pub/linux/kernel/v4.0/linux-4.16.7.tar.xz
+wget http://busybox.net/downloads/busybox-1.28.3.tar.bz2
+tar xjf linux-4.16.7.tar.xz -C src
 tar xjf busybox-1.19.3.tar.bz2 -C src
 ```
 ----------------------------------------------------------------------------
@@ -62,7 +62,7 @@ tar xjf busybox-1.19.3.tar.bz2 -C src
 
 ----------------------------------------------------------------------------
 ```
-cd src/linux-3.1.4
+cd src/linux-4.16.7
 ../../armmake O=../../bin.kernel menuconfig
 cd ../..
 ```
@@ -82,7 +82,7 @@ cd ..
 
 ----------------------------------------------------------------------------
 ```
-cd src/busybox-1.19.3
+cd src/busybox-1.28.3
 ../../armmake O=../../bin.busybox menuconfig
 cd ../..
 ```
@@ -123,7 +123,7 @@ ln -s ../bin.kernel/arch/arm/boot/zImage emulacja/vmlinuz
 
 ----------------------------------------------------------------------------
 ```
-qemu-system-arm -M versatilepb -m 256 -kernel emulacja/vmlinuz -initrd emulacja/initrd -append "root=/dev/ram0"
+qemu-system-arm -M versatilepb -m 256 -kernel emulacja/vmlinuz -initrd emulacja/initrd -append "init=/init" -serial=stdio
 ```
 ----------------------------------------------------------------------------
 
