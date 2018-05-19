@@ -16,8 +16,8 @@ HERE=$(PWD)
 BUSYBOX_VER=1.28.3
 BUSYBOX_MD5=82e5ad09ae4a07c266fc179492b51757
 
-#KERNEL_VER=4.16.7
-#KERNEL_MD5=9795a3187c791e3b79153519733f045d
+#KERNEL_VER=4.16.9
+#KERNEL_MD5=e47b7c5deac10c5a5644dca4508640bc
 
 KERNEL_VER=raspberrypi-kernel_1.20180417-1
 KERNEL_MD5=b7ac4c4f84a76a8834bea2021799be6f
@@ -27,7 +27,6 @@ KERNEL_MD5=b7ac4c4f84a76a8834bea2021799be6f
 # +------------------------------------------------------------
 
 ARCH=arm
-#CROSS_COMPILE=arm-softfloat-linux-gnueabi-
 CROSS_COMPILE=armv7a-hardfloat-linux-gnueabi-
 
 # +------------------------------------------------------------
@@ -120,13 +119,11 @@ src:	src/busybox src/kernel
 	@echo "Potrzebujesz do tego Gentoo!"
 	exit
 
-/usr/bin/arm-softfloat-linux-gnueabi-gcc:
-	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi --gcc 4.9.3 --libc 2.23 --kernel 4.7.5
+/usr/bin/armv7a-hardfloat-linux-gnueabi-gcc:
+	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.3.0-r1 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
+#	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 6.4.0 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
 #	@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnueabi  --stable  --gcc 6.4.0 --libc 2.25-r11 --kernel 4.16.7 -oO /usr/portage
-#	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 6.4.0 --libc 2.25-r11 --kernel 4.16.7 -oO /usr/portage
-#	@USE="-fortran nossp" crossdev --target arm-softfloat-linux-gnueabi --gcc 4.9.3 --libc 2.23 --kernel 4.7.5
-#	@USE="-cxx nocxx" crossdev --target arm-softfloat-linux-gnueabi -s1 --without-headers
-#	@USE="cxx -nocxx" crossdev --target arm-softfloat-linux-gnueabi
+#	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi --gcc 4.9.3 --libc 2.23 --kernel 4.7.5
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
@@ -135,18 +132,18 @@ gentoo: /etc/gentoo-release
 
 crossdev:	gentoo /usr/bin/crossdev
 
-toolchain:	crossdev /usr/bin/arm-softfloat-linux-gnueabi-gcc
+toolchain:	crossdev /usr/bin/armv7a-hardfloat-linux-gnueabi-gcc
 	@echo $(HERE)
 
 # +------------------------------------------------------------
 # | Konfiguracja binarek poza drzewo źródłowe
 # +------------------------------------------------------------
 
-$(BIN_KERNEL)/Makefile: $(SRC_KERNEL)/Makefile
-	mkdir -p $(BIN_KERNEL)
+$(BIN_KERNEL)/Makefile: toolchain $(SRC_KERNEL)/Makefile 
+	@mkdir -p $(BIN_KERNEL)
 	@cd $(SRC_KERNEL) && make O=$(BIN_KERNEL) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) bcm2709_defconfig
 
-$(BIN_BUSYBOX)/Makefile: $(SRC_BUSYBOX)/Makefile
+$(BIN_BUSYBOX)/Makefile: toolchain $(SRC_BUSYBOX)/Makefile
 	@mkdir -p $(BIN_BUSYBOX)
 	@cd $(SRC_BUSYBOX) && make O=$(BIN_BUSYBOX) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) defconfig
 
