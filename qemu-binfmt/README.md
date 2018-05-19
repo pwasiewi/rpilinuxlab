@@ -1,4 +1,11 @@
-## Emulacja linuxa arm poprzez binfmt
+## Emulacja linuxa Gentoo arm poprzez binfmt
+
+Generujemy skrośny kompilator:
+```
+crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.3.0-r1 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
+```
+
+Do crosstoolsów w katalogu /usr/armv7a-hardfloat-linux-gnueabi rozpakowujemy podstawowe pakiety linuxa gentoo na platformę armv7a-hardfloat http://distfiles.gentoo.org/releases/arm/autobuilds/20161129/stage3-armv7a_hardfp-20161129.tar.bz2 usuwając poprzednią zawartość.
 
 ```
 [ -e /etc/binfmt.d/binfmt.conf ] && rm /etc/binfmt.d/binfmt.conf
@@ -31,7 +38,7 @@ else
    fi
 fi
 
-#in chroot
+#komendy w chroot uruchomione
 #emerge --sync
 #eselect profile set 23
 
