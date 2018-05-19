@@ -1,9 +1,9 @@
 #!/usr/bin/make -rf
-#!/usr/bin/make -rdf
 
 # +------------------------------------------------------------
 # | (C) 2011 Pawel Kraszewski <root@linuxpedia.pl>
-# | System generujący środowiso i system na procesory ARM
+# | System generujący środowisko i system na procesory ARM
+# | Extended by Piotr Wasiewicz <piotrwasiewiczeu@gmail.com>
 # +------------------------------------------------------------
 
 HERE=$(PWD)
@@ -15,8 +15,8 @@ HERE=$(PWD)
 BUSYBOX_VER=1.28.3
 BUSYBOX_MD5=82e5ad09ae4a07c266fc179492b51757
 
-KERNEL_VER=4.16.7
-KERNEL_MD5=9795a3187c791e3b79153519733f045d
+KERNEL_VER=4.16.9
+KERNEL_MD5=e47b7c5deac10c5a5644dca4508640bc
 
 # +------------------------------------------------------------
 # | Architektura
@@ -108,25 +108,22 @@ src:	src/busybox src/kernel
 
 # +------------------------------------------------------------
 # | Budowa potrzebnych narzędzi do Gentoo
-# +------------------------------------------------------------
-
-/etc/gentoo-release:
-	@echo "Potrzebujesz do tego Gentoo!"
-	exit
-
+# +------------------------------------------------------------\
+##########
+#/etc/gentoo-release:
+#	@echo "Potrzebujesz do tego Gentoo!"
+#	exit
+#
 #/usr/bin/x86_64-softfloat-linux-gnueabi-gcc:
-#	@USE="-fortran nossp" crossdev --target x86_64-unknown-linux-gnu  --stable  --gcc 6.4.0 --libc 2.25-r11 --kernel 4.16.7 -oO /usr/portage
-#	@crossdev --target x86_64-softfloat-linux-gnueabi --gcc 4.9.3 --libc 2.23 --kernel 4.7.5
-#	@USE="-cxx nocxx" crossdev --target x86_64-softfloat-linux-gnueabi -s1 --without-headers
-#	@USE="cxx -nocxx" crossdev --target x86_64-softfloat-linux-gnueabi
-
+#	@USE="-fortran nossp" crossdev --target x86_64-softfloat-linux-gnueabi-gcc  --stable  --gcc 7.3.0-r1 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
+#
 #/usr/bin/crossdev:
 #	@emerge -av crossdev
-
-gentoo: /etc/gentoo-release
-
+#
+#gentoo: /etc/gentoo-release
+#
 #crossdev:	gentoo /usr/bin/crossdev
-
+#
 #toolchain:	crossdev /usr/bin/x86_64-softfloat-linux-gnueabi-gcc
 #	@echo $(HERE)
 
@@ -207,15 +204,12 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
-	#qemu-system-x86_64 --enable-kvm -m 2048 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -nographic -append "console=ttyS0"
-	qemu-system-x86_64 --enable-kvm -m 4096 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -append "init=/init"
-
-
+	qemu-system-x86_64 --enable-kvm -m 2048 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -append "init=/init" 
+	#qemu-system-x86_64 --enable-kvm -m 2048 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -nographic -append "console=ttyS0" -serial stdio
 
 # +------------------------------------------------------------
 # | Administracyjne
 # +------------------------------------------------------------
-
 
 .phony: src src/busybox src/kernel toolchain crossdev kernconf busyboxconf emulate dl dl/kernel dl/busybox
 

@@ -1,9 +1,9 @@
 #!/usr/bin/make -rf
-#!/usr/bin/make -rdf
 
 # +------------------------------------------------------------
 # | (C) 2011 Pawel Kraszewski <root@linuxpedia.pl>
 # | System generujący środowiso i system na procesory ARM
+# | Extended by Piotr Wasiewicz <piotrwasiewiczeu@gmail.com>
 # +------------------------------------------------------------
 
 HERE=$(PWD)
@@ -15,8 +15,8 @@ HERE=$(PWD)
 BUSYBOX_VER=1.28.3
 BUSYBOX_MD5=82e5ad09ae4a07c266fc179492b51757
 
-KERNEL_VER=4.16.7
-KERNEL_MD5=9795a3187c791e3b79153519733f045d
+KERNEL_VER=4.16.9
+KERNEL_MD5=e47b7c5deac10c5a5644dca4508640bc
 
 # +------------------------------------------------------------
 # | Architektura
@@ -24,7 +24,6 @@ KERNEL_MD5=9795a3187c791e3b79153519733f045d
 
 ARCH=arm
 CROSS_COMPILE=arm-softfloat-linux-gnueabi-
-#CROSS_COMPILE=armv7a-hardfloat-linux-gnueabi-
 
 # +------------------------------------------------------------
 # | Host -j param
@@ -92,7 +91,7 @@ $(SRC_KERNEL)/Makefile:	$(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.xz
 	touch $(SRC_KERNEL)/Makefile
 
 # +------------------------------------------------------------
-# | Zarządzanie downloadami
+# | Zarządzanie downloadem
 # +------------------------------------------------------------
 
 dl/busybox: $(DOWNLOAD_DIR)/busybox-$(BUSYBOX_VER).tar.bz2
@@ -116,12 +115,7 @@ src:	src/busybox src/kernel
 	exit
 
 /usr/bin/arm-softfloat-linux-gnueabi-gcc:
-#	@USE="-fortran nossp" crossdev --target arm-softfloat-linux-gnueabi --gcc 4.9.3 --libc 2.23 --kernel 4.7.5
-#	#       @USE="-fortran nossp" crossdev --target arm-softfloat-linux-gnueabi --stable  --gcc 6.4.0 --libc 2.25-r11 --kernel 4.16.7 -oO /usr/portage
-#       @USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnueabi  --stable  --gcc 6.4.0 --libc 2.25-r11 --kernel 4.16.7 -oO /usr/portage
-	@USE="-fortran nossp" crossdev --target arm-softfloat-linux-gnueabi --gcc 4.9.3 --libc 2.23 --kernel 4.7.5
-#	@USE="-cxx nocxx" crossdev --target arm-softfloat-linux-gnueabi -s1 --without-headers
-#	@USE="cxx -nocxx" crossdev --target arm-softfloat-linux-gnueabi
+	@USE="-fortran nossp" crossdev --target arm-softfloat-linux-gnueabi --stable  --gcc 7.3.0-r1 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
@@ -137,11 +131,11 @@ toolchain:	crossdev /usr/bin/arm-softfloat-linux-gnueabi-gcc
 # | Konfiguracja binarek poza drzewo źródłowe
 # +------------------------------------------------------------
 
-$(BIN_KERNEL)/Makefile: $(SRC_KERNEL)/Makefile
+$(BIN_KERNEL)/Makefile: toolchain $(SRC_KERNEL)/Makefile
 	mkdir -p $(BIN_KERNEL)
 	@cd $(SRC_KERNEL) && make O=$(BIN_KERNEL) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) versatile_defconfig
 
-$(BIN_BUSYBOX)/Makefile: $(SRC_BUSYBOX)/Makefile
+$(BIN_BUSYBOX)/Makefile: toolchain $(SRC_BUSYBOX)/Makefile
 	@mkdir -p $(BIN_BUSYBOX)
 	@cd $(SRC_BUSYBOX) && make O=$(BIN_BUSYBOX) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) defconfig
 
@@ -209,10 +203,8 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
-	#qemu-system-arm -M versatileab -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb bin/kernel/arch/arm/boot/dts/versatile-ab.dtb -nographic -append "console=ttyAMA0 root=/dev/ram0"
-	#qemu-system-arm -M versatileab -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb bin/kernel/arch/arm/boot/dts/versatile-ab.dtb -append "rdinit=/init" -serial stdio
 	qemu-system-arm -M versatileab -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb bin/kernel/arch/arm/boot/dts/versatile-ab.dtb -append "rdinit=/init" -serial stdio
-
+	#-nographic  "console=ttyAMA0 root=/dev/ram0"
 
 
 # +------------------------------------------------------------

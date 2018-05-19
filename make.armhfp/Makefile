@@ -1,10 +1,9 @@
 #!/usr/bin/make -rf
-#!/usr/bin/make -rdf
 
 # +------------------------------------------------------------
 # | (C) 2011 Pawel Kraszewski <root@linuxpedia.pl>
-# | System generujący środowiso i system na procesory ARM
-# | Raspberry kernel added by Piotr Wasiewicz <pwasiewi@gmail.com>
+# | System generujący środowisko i system na procesory ARM
+# | Extended by Piotr Wasiewicz <piotrwasiewiczeu@gmail.com>
 # +------------------------------------------------------------
 
 HERE=$(PWD)
@@ -15,9 +14,6 @@ HERE=$(PWD)
 
 BUSYBOX_VER=1.28.3
 BUSYBOX_MD5=82e5ad09ae4a07c266fc179492b51757
-
-#KERNEL_VER=4.16.9
-#KERNEL_MD5=e47b7c5deac10c5a5644dca4508640bc
 
 KERNEL_VER=raspberrypi-kernel_1.20180417-1
 KERNEL_MD5=b7ac4c4f84a76a8834bea2021799be6f
@@ -121,9 +117,6 @@ src:	src/busybox src/kernel
 
 /usr/bin/armv7a-hardfloat-linux-gnueabi-gcc:
 	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.3.0-r1 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
-#	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 6.4.0 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
-#	@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnueabi  --stable  --gcc 6.4.0 --libc 2.25-r11 --kernel 4.16.7 -oO /usr/portage
-#	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi --gcc 4.9.3 --libc 2.23 --kernel 4.7.5
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
@@ -207,17 +200,11 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 
 # +------------------------------------------------------------
 # | Emulacja
-# | machine ID and DTB address is assigned to linux when bootloader loads linux
+# | machine ID and DTB address is assigned to linux when 
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
 	qemu-system-arm -M raspi2 -cpu amr1176 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2709-rpi-2-b.dtb -append "console=ttyAMA0 init=/init" -serial stdio
-	#qemu-system-arm -M raspi2 -cpu amr1176 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2709-rpi-2-b.dtb -serial stdio -append "init=/init"
-	#qemu-system-arm -M raspi2 -cpu amr1176 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -append "root=/dev/ram ro earlyprintk loglevel=8 console=ttyAMA0,115200 nomodeset nofb vga=normal video=vesafb:off modeset=off" -dtb ./dtb/bcm2709-rpi-2-b.dtb -serial stdio
-	#qemu-system-arm -M raspi2 -cpu amr1176 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -append "root=/dev/ram0 ro earlyprintk loglevel=8 console=ttyS0,115200 nomodeset nofb vga=normal video=vesafb:off modeset=off" -nographic -dtb ./dtb/bcm2709-rpi-2-b.dtb
-	#qemu-system-arm -M versatileab -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb bin/kernel/arch/arm/boot/dts/versatile-ab.dtb -append "rdinit=/init" -serial stdio
-
-
 
 # +------------------------------------------------------------
 # | Administracyjne
