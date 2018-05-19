@@ -30,7 +30,7 @@ emerge -av crossdev
 
 2. Generacja narzędzi dla platformy ARM
 ```
-crossdev --target arm-softfloat-linux-gnueabi --gcc 6.4.0 --libc 2.25-r11 --kernel 4.16.7
+crossdev --target arm-softfloat-linux-gnueabi --stable  --gcc 7.3.0-r1 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
 ```
 ----------------------------------------------------------------------------
 
