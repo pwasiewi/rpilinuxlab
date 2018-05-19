@@ -31,6 +31,11 @@ else
    fi
 fi
 
+#in chroot
+#emerge --sync
+#eselect profile set 23
+
+
 #umount lib/modules
 #umount usr/src/linux
 for i in dev/pts tmp sys var/tmp/packages_arm usr/local/portage dev proc; do 
