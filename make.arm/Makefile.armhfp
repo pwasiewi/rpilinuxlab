@@ -116,7 +116,7 @@ src:	src/busybox src/kernel
 	exit
 
 /usr/bin/armv7a-hardfloat-linux-gnueabi-gcc:
-	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.3.0-r1 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
+	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 6.4.0 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
@@ -200,7 +200,7 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 
 # +------------------------------------------------------------
 # | Emulacja
-# | machine ID and DTB address is assigned to linux when 
+# | machine ID and DTB address is assigned to linux when run
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
