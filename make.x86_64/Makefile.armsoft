@@ -2,7 +2,7 @@
 
 # +------------------------------------------------------------
 # | (C) 2011 Pawel Kraszewski <root@linuxpedia.pl>
-# | System generujący środowiso i system na procesory ARM
+# | System generujący środowisko i system na procesory ARM
 # | Extended by Piotr Wasiewicz <piotrwasiewiczeu@gmail.com>
 # +------------------------------------------------------------
 
@@ -15,8 +15,8 @@ HERE=$(PWD)
 BUSYBOX_VER=1.28.3
 BUSYBOX_MD5=82e5ad09ae4a07c266fc179492b51757
 
-KERNEL_VER=4.16.9
-KERNEL_MD5=e47b7c5deac10c5a5644dca4508640bc
+KERNEL_VER=4.16.12
+KERNEL_MD5=78a23928740a7be7107f933cb119de5d
 
 # +------------------------------------------------------------
 # | Architektura
@@ -115,7 +115,7 @@ src:	src/busybox src/kernel
 	exit
 
 /usr/bin/arm-softfloat-linux-gnueabi-gcc:
-	@USE="-fortran nossp" crossdev --target arm-softfloat-linux-gnueabi --stable  --gcc 7.3.0-r1 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
+	@USE="-fortran nossp" crossdev --target arm-softfloat-linux-gnueabi --stable  --gcc 8.1.0-r1 --libc 2.25-r11 --kernel 4.16.12 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
@@ -199,7 +199,7 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 
 # +------------------------------------------------------------
 # | Emulacja
-# | machine ID and DTB address is assigned to linux when bootloader loads linux
+# | machine ID and DTB address is assigned to linux when bootloader loads  
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
@@ -219,3 +219,4 @@ clean:
 .PRECIOUS: \
 $(DOWNLOAD_DIR)/busybox-$(BUSYBOX_VER).tar.bz2 \
 $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.bz2
+
