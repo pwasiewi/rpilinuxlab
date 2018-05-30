@@ -109,7 +109,7 @@ src:	src/busybox src/kernel
 # +------------------------------------------------------------
 # | Budowa potrzebnych narzędzi do Gentoo
 # +------------------------------------------------------------\
-##########
+#########
 #/etc/gentoo-release:
 #	@echo "Potrzebujesz do tego Gentoo!"
 #	exit

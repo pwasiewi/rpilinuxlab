@@ -115,7 +115,7 @@ src:	src/busybox src/kernel
 	exit
 
 /usr/bin/arm-softfloat-linux-gnueabi-gcc:
-	@USE="-fortran nossp" crossdev --target arm-softfloat-linux-gnueabi --stable  --gcc 8.1.0-r3 --libc 2.26-r6 --kernel 4.16.12 -oO /usr/portage
+	@USE="-fortran nossp" crossdev --target arm-softfloat-linux-gnueabi --stable  --gcc 8.1.0-r3 --libc 2.26-r7 --kernel 4.16.12 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev

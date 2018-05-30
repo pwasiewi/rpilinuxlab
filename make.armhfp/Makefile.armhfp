@@ -116,7 +116,7 @@ src:	src/busybox src/kernel
 	exit
 
 /usr/bin/armv7a-hardfloat-linux-gnueabi-gcc:
-	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.3.0-r3 --libc 2.26-r6 --kernel 4.16.12 -oO /usr/portage
+	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.3.0-r3 --libc 2.26-r7 --kernel 4.16.12 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
@@ -200,11 +200,11 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 
 # +------------------------------------------------------------
 # | Emulacja
-# | machine ID and DTB address is assigned to linux when 
+# | machine ID and DTB address is assigned to linuxboot
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
-	qemu-system-arm -M raspi2 -cpu arm1176 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2709-rpi-2-b.dtb -append "console=ttyAMA0 init=/init" -serial stdio
+	qemu-system-arm -M raspi2 -cpu cortex-a7 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2709-rpi-2-b.dtb -append "console=ttyAMA0 init=/init" -serial stdio
 
 # +------------------------------------------------------------
 # | Administracyjne

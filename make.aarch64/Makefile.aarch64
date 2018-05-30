@@ -116,7 +116,9 @@ src:	src/busybox src/kernel
 	exit
 
 /usr/bin/aarch64-unknown-linux-gnu-gcc:
-	@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnu  --stable  --gcc 7.3.0-r3 --libc 2.26-r6 --kernel 4.16.12 -oO /usr/portage
+	#crossdev -C aarch64-unknown-linux-gnu -f
+	#@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnu --stable --kernel 4.16.12 -oO /usr/portage
+	@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnu --stable --gcc 7.3.0-r3 --libc 2.26-r7 --kernel 4.16.12 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
