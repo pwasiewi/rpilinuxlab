@@ -136,6 +136,7 @@ toolchain:	crossdev /usr/bin/aarch64-unknown-linux-gnu-gcc
 
 $(BIN_KERNEL)/Makefile: toolchain $(SRC_KERNEL)/Makefile 
 	@mkdir -p $(BIN_KERNEL)
+	#@cd $(SRC_KERNEL) && make O=$(BIN_KERNEL) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) defconfig
 	@cd $(SRC_KERNEL) && make O=$(BIN_KERNEL) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) bcmrpi3_defconfig
 
 $(BIN_BUSYBOX)/Makefile: toolchain $(SRC_BUSYBOX)/Makefile
