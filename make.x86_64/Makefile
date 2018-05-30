@@ -15,8 +15,8 @@ HERE=$(PWD)
 BUSYBOX_VER=1.28.3
 BUSYBOX_MD5=82e5ad09ae4a07c266fc179492b51757
 
-KERNEL_VER=4.16.9
-KERNEL_MD5=e47b7c5deac10c5a5644dca4508640bc
+KERNEL_VER=4.16.12
+KERNEL_MD5=78a23928740a7be7107f933cb119de5d
 
 # +------------------------------------------------------------
 # | Architektura
