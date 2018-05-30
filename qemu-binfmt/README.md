@@ -1,4 +1,5 @@
 ## Emulacja linuxa Gentoo arm poprzez binfmt
+### https://wiki.gentoo.org/wiki/Embedded_Handbook/General/Compiling_with_qemu_user_chroot
 
 Generujemy skrośny kompilator:
 ```
