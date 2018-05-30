@@ -22,8 +22,8 @@ KERNEL_MD5=b7ac4c4f84a76a8834bea2021799be6f
 # | Architektura
 # +------------------------------------------------------------
 
-ARCH=arm
-CROSS_COMPILE=armv7a-hardfloat-linux-gnueabi-
+ARCH=arm64
+CROSS_COMPILE=aarch64-unknown-linux-gnu-
 
 # +------------------------------------------------------------
 # | Host -j param
@@ -115,8 +115,8 @@ src:	src/busybox src/kernel
 	@echo "Potrzebujesz do tego Gentoo!"
 	exit
 
-/usr/bin/armv7a-hardfloat-linux-gnueabi-gcc:
-	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.3.0-r3 --libc 2.26-r6 --kernel 4.16.12 -oO /usr/portage
+/usr/bin/aarch64-unknown-linux-gnu-gcc:
+	@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnu  --stable  --gcc 7.3.0-r3 --libc 2.26-r6 --kernel 4.16.12 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
@@ -125,7 +125,7 @@ gentoo: /etc/gentoo-release
 
 crossdev:	gentoo /usr/bin/crossdev
 
-toolchain:	crossdev /usr/bin/armv7a-hardfloat-linux-gnueabi-gcc
+toolchain:	crossdev /usr/bin/aarch64-unknown-linux-gnu-gcc
 	@echo $(HERE)
 
 # +------------------------------------------------------------
@@ -134,7 +134,7 @@ toolchain:	crossdev /usr/bin/armv7a-hardfloat-linux-gnueabi-gcc
 
 $(BIN_KERNEL)/Makefile: toolchain $(SRC_KERNEL)/Makefile 
 	@mkdir -p $(BIN_KERNEL)
-	@cd $(SRC_KERNEL) && make O=$(BIN_KERNEL) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) bcm2709_defconfig
+	@cd $(SRC_KERNEL) && make O=$(BIN_KERNEL) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) bcmrpi3_defconfig
 
 $(BIN_BUSYBOX)/Makefile: toolchain $(SRC_BUSYBOX)/Makefile
 	@mkdir -p $(BIN_BUSYBOX)
@@ -160,12 +160,12 @@ busyboxconf:	$(BIN_BUSYBOX)/.config
 
 $(BIN_BUSYBOX)/busybox: $(BIN_BUSYBOX)/.config
 	@sed -i "s:.*CONFIG_PREFIX=.*:CONFIG_PREFIX=\"$(INITRD_DIR)\":" $(BIN_BUSYBOX)/.config
-	@sed -i "s:.*CONFIG_CROSS_COMPILER_PREFIX=.*:CONFIG_CROSS_COMPILER_PREFIX=\"armv7a-hardfloat-linux-gnueabi-\":" $(BIN_BUSYBOX)/.config
+	@sed -i "s:.*CONFIG_CROSS_COMPILER_PREFIX=.*:CONFIG_CROSS_COMPILER_PREFIX=\"aarch64-unknown-linux-gnu-\":" $(BIN_BUSYBOX)/.config
 	@sed -i "s/# CONFIG_STATIC is not set/CONFIG_STATIC=y/g" $(BIN_BUSYBOX)/.config
 	@cd $(BIN_BUSYBOX) \
 	 && make ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) $(MULTICPU)
 
-$(BIN_KERNEL)/arch/arm/boot/zImage:	$(BIN_KERNEL)/.config
+$(BIN_KERNEL)/arch/arm64/boot/Image:	$(BIN_KERNEL)/.config
 	@cd $(BIN_KERNEL) \
 	 && make ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) $(MULTICPU)
 
@@ -183,14 +183,14 @@ $(INITRD_DIR)/bin/busybox: $(BIN_BUSYBOX)/busybox
 # | Składanie Emulatora
 # +------------------------------------------------------------
 
-$(EMUL_DIR)/vmlinuz:	$(BIN_KERNEL)/arch/arm/boot/zImage
+$(EMUL_DIR)/vmlinuz:	$(BIN_KERNEL)/arch/arm64/boot/Image
 	@mkdir -p $(EMUL_DIR)
 	@cd $(BIN_KERNEL) \
 	 && make ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) INSTALL_PATH=$(EMUL_DIR) $(MULTICPU) install
-	@cp $(BIN_KERNEL)/arch/arm/boot/zImage $(EMUL_DIR)/vmlinuz
+	@cp $(BIN_KERNEL)/arch/arm64/boot/Image $(EMUL_DIR)/vmlinuz
 	@touch $(EMUL_DIR)/vmlinuz
 
-$(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(wildcard $(INITRD_DIR)/etc/*) $(wildcard $(INITRD_DIR)/sbin/*) $(BIN_KERNEL)/arch/arm/boot/zImage
+$(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(wildcard $(INITRD_DIR)/etc/*) $(wildcard $(INITRD_DIR)/sbin/*) $(BIN_KERNEL)/arch/arm64/boot/Image
 	@mkdir -p $(INITRD_DIR)/{bin,sbin,etc,proc,sys,usr/{bin,sbin}}
 	@cd $(BIN_KERNEL) \
 	 && make ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) INSTALL_MOD_PATH=$(INITRD_DIR) $(MULTICPU) 
@@ -204,7 +204,8 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
-	qemu-system-arm -M raspi2 -cpu arm1176 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2709-rpi-2-b.dtb -append "console=ttyAMA0 init=/init" -serial stdio
+	qemu-system-aarch64 -M raspi3 -cpu cortex-a53 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2710-rpi-3-b.dtb 
+	#qemu-system-aarch64 -M raspi3 -cpu cortex-a53 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2710-rpi-3-b.dtb -append "console=ttyAMA0 init=/init" -serial stdio
 
 # +------------------------------------------------------------
 # | Administracyjne
