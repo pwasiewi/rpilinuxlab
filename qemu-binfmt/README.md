@@ -1,4 +1,4 @@
-## Emulacja linuxa Gentoo arm poprzez binfmt z wykorzystaniem narzędzi gentools 
+### Emulacja linuxa Gentoo arm poprzez binfmt z wykorzystaniem narzędzi gentools 
 #### https://github.com/pwasiewi/gentools
 #### podstawowa konfiguracja gentoo arm
 ```
@@ -22,7 +22,7 @@ v a arm4
 ```
 
 
-## Krok po kroku emulacja linuxa Gentoo arm poprzez binfmt
+### Krok po kroku emulacja linuxa Gentoo arm poprzez binfmt
 #### https://wiki.gentoo.org/wiki/Embedded_Handbook/General/Compiling_with_qemu_user_chroot
 
 #### Generujemy skrośny kompilator:
