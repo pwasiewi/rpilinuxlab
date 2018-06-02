@@ -12,7 +12,7 @@ v a arm2
 ```
 v a e #można w qemu chroocie wykonywać komendy linuxa arm
 ```
-#### zmiana gcc na 7.3.0-r3 (sprawdź czy największa możliwa wersja gcc: emerge -p gcc)
+#### zmiana gcc na 7.3.0-r3 (sprawdź czy największa możliwa wersja gcc i popraw w /usr/local/bin/v)
 ```
 v a arm3
 ```
