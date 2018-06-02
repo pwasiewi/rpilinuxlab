@@ -1,4 +1,27 @@
-## Emulacja linuxa Gentoo arm poprzez binfmt
+## Emulacja linuxa Gentoo arm poprzez binfmt z wykorzystaniem narzędzi gentools 
+### https://github.com/pwasiewi/gentools
+### podstawowa konfiguracja gentoo arm
+```
+v a f
+v a cross0
+v a arm1
+v a arm2
+```
+### chrootowanie się na środowisko gentoo arm7, CTRL-D wyjście lub komenda: exit 
+```
+v a e #można w qemu chroocie wykonywać komendy linuxa arm
+```
+### zmiana gcc na 7.3.0-r3 (sprawdź czy największa możliwa wersja gcc: emerge -p gcc)
+```
+v a arm3
+```
+### kompilacja xorg-server, openbox
+```
+v a arm4
+```
+
+
+## Krok po kroku emulacja linuxa Gentoo arm poprzez binfmt
 ### https://wiki.gentoo.org/wiki/Embedded_Handbook/General/Compiling_with_qemu_user_chroot
 
 Generujemy skrośny kompilator:
