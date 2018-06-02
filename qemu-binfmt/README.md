@@ -1,35 +1,36 @@
 ## Emulacja linuxa Gentoo arm poprzez binfmt z wykorzystaniem narzędzi gentools 
-### https://github.com/pwasiewi/gentools
-### podstawowa konfiguracja gentoo arm
+#### https://github.com/pwasiewi/gentools
+#### podstawowa konfiguracja gentoo arm
 ```
 v a f
 v a cross0
 v a arm1
+binfmt-run
 v a arm2
 ```
-### chrootowanie się na środowisko gentoo arm7, CTRL-D wyjście lub komenda: exit 
+#### chrootowanie się na środowisko gentoo arm7, CTRL-D wyjście lub komenda: exit 
 ```
 v a e #można w qemu chroocie wykonywać komendy linuxa arm
 ```
-### zmiana gcc na 7.3.0-r3 (sprawdź czy największa możliwa wersja gcc: emerge -p gcc)
+#### zmiana gcc na 7.3.0-r3 (sprawdź czy największa możliwa wersja gcc: emerge -p gcc)
 ```
 v a arm3
 ```
-### kompilacja xorg-server, openbox
+#### kompilacja xorg-server, openbox
 ```
 v a arm4
 ```
 
 
 ## Krok po kroku emulacja linuxa Gentoo arm poprzez binfmt
-### https://wiki.gentoo.org/wiki/Embedded_Handbook/General/Compiling_with_qemu_user_chroot
+#### https://wiki.gentoo.org/wiki/Embedded_Handbook/General/Compiling_with_qemu_user_chroot
 
-Generujemy skrośny kompilator:
+#### Generujemy skrośny kompilator:
 ```
 crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.3.0-r1 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
 ```
 
-Do crosstoolsów w katalogu /usr/armv7a-hardfloat-linux-gnueabi rozpakowujemy podstawowe pakiety linuxa gentoo na platformę armv7a-hardfloat http://distfiles.gentoo.org/releases/arm/autobuilds/20161129/stage3-armv7a_hardfp-20161129.tar.bz2 usuwając poprzednią zawartość.
+#### Do crosstoolsów w katalogu /usr/armv7a-hardfloat-linux-gnueabi rozpakowujemy podstawowe pakiety linuxa gentoo na platformę armv7a-hardfloat http://distfiles.gentoo.org/releases/arm/autobuilds/20161129/stage3-armv7a_hardfp-20161129.tar.bz2 usuwając poprzednią zawartość.
 
 ```
 [ -e /etc/binfmt.d/binfmt.conf ] && rm /etc/binfmt.d/binfmt.conf
