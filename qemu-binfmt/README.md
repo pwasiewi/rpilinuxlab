@@ -1,6 +1,6 @@
 ### Emulacja linuxa Gentoo arm poprzez binfmt z wykorzystaniem narzędzi gentools 
 #### https://github.com/pwasiewi/gentools
-#### podstawowa konfiguracja gentoo arm
+#### Podstawowa konfiguracja gentoo arm
 ```
 v a f
 v a cross0
@@ -8,15 +8,15 @@ v a arm1
 binfmt-run
 v a arm2
 ```
-#### chrootowanie się na środowisko gentoo arm7, CTRL-D wyjście lub komenda: exit 
+#### Chrootowanie się na środowisko gentoo arm7, CTRL-D wyjście lub komenda: exit 
 ```
 v a e #można w qemu chroocie wykonywać komendy linuxa arm
 ```
-#### zmiana gcc na 7.3.0-r3 (sprawdź czy największa możliwa wersja gcc i popraw w /usr/local/bin/v)
+#### Zmiana gcc na 7.3.0-r3 (sprawdź czy największa możliwa wersja gcc i popraw w /usr/local/bin/v)
 ```
 v a arm3
 ```
-#### kompilacja xorg-server, openbox
+#### Kompilacja xorg-server, openbox
 ```
 v a arm4
 ```
