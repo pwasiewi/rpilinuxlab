@@ -2,23 +2,32 @@
 #### https://github.com/pwasiewi/gentools
 #### Podstawowa konfiguracja gentoo arm
 ```
-v a f
-v a cross0
-v a arm1
+v r p     #zmienia na katalog z ustawieniami stage3/4 itp. lub bez mc uruchamia vim settings z tym katalogu
+v r f
+v r cross0
+v r arm1
 binfmt-run
-v a arm2
+v r arm2  #zmienia także /etc/portage hosta na swój arma (CZASAMI SIĘ PRZYDAJE)
 ```
 #### Chrootowanie się na środowisko gentoo arm7, CTRL-D wyjście lub komenda: exit 
 ```
-v a e #można w qemu chroocie wykonywać komendy linuxa arm
+v r e     #można w qemu chroocie wykonywać komendy linuxa arm
 ```
 #### Zmiana gcc na 7.3.0-r3 (sprawdź czy największa możliwa wersja gcc i popraw w /usr/local/bin/v)
 ```
-v a arm3
+v r arm3
 ```
 #### Kompilacja xorg-server, openbox
 ```
-v a arm4
+v r arm4
+```
+#### Zmiana /etc/portage z arm na hosta z /etc/portage.host (po etapie v r arm2)
+```
+vcdx64
+```
+#### Zmiana /etc/portage z hosta na arm z /etc/portage.arm
+```
+vcdarm
 ```
 
 
