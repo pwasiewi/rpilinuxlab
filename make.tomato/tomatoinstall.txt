@@ -1,0 +1,108 @@
+﻿UWAGA Wgrywasz na własną odpowiedzialność. Nie ponoszę żadnej
+odpowiedzialności za ewentualne uszkodzenie sprzętu.
+
+Moja udana kompilacja źródeł tomato-shibby:
+#Ściągnięcie źródeł tomato-shibby:
+mkdir  /root/tomato_git
+cd /root/tomato_git
+git clone git://repo.or.cz/tomato.git
+cd tomato
+git checkout -b origin/tomato-shibby
+git pull origin tomato-shibby
+mkdir /root/tomato
+cp -a * /root/tomato
+cp -a /root/tomato/tools/brcm /opt
+#add to path /opt/brcm/hndtools-mipsel-linux/bin:/opt/brcm/hndtools-mipsel-uclibc/bin
+
+#Kompilacja źródeł
+ln -sfn /usr/bin/gawk /usr/bin/mawk
+cd  /root/tomato/release/src-rt
+make clean
+make help
+make V1=rt5x V2=-84beta r2b
+#po błędzie: wrong format 
+ln -sfn /root/tomato/release/src-rt/router/libnfsidmap/staged/usr/lib/libnfsidmap.so /usr/lib/libnfsidmap.so
+#i znowu
+make V1=rt5x V2=-84beta r2b
+
+ln -sfn  /usr/lib/libnfsidmap.so.0.3.0  /usr/lib/libnfsidmap.so
+
+#Update źródeł:
+cd /root/tomato_git/tomato
+git pull origin tomato-shibby
+rm -rf /root/tomato
+mkdir /root/tomato
+cp -a * /root/tomato
+cd /root/tomato/release/src-rt
+
+Dwie porady z OpenLinksys:
+I. Tak więc zaczynając: 
+1. Ściągam dd-wrt.v24-14896_NEWD-2_K2.6_mini-WNR3500L.chk
+2. Ściągam tomato-K26USB-1.28.8054RAF-PL-MIPSR2-beta-0??H-BigVPN.trx i zmieniam rozszerzenie na .bin
+3. Odłączam router od netu wypinając kabel WLAN.
+4. Ustawiam na sztywno w kompie IP 192.168.1.2 Bramę 192.168.1.1 i maskę 255.255.255.0 lub zdaje sie na dhcp
+5. Wyłączam Antyvira, firewalla i inne zbędne programy.
+6. Robię twardy reset routera (trzymając wciśnięty WPS włączam zasilanie i puszczam jak zaczyna migać dioda zasilania)
+7. Loguję się na router (admin/password) i w zakłądce Router Upgrade wybieram
+ścieżkę do dd-wrt.v24-14896_NEWD-2_K2.6_mini-WNR3500L.chk po czym akceptuję
+8. Po skończonej aktualizacji czekam z 5 minut aż się wszystko uspokoi i
+wyłączam router po czym znowu robię twardy reset przy użyciu WPS
+9. Loguję się do routera (root/admin)
+10. Uruchamiam telnet 192.168.1.1 i wpisuję komendę nvram get http_passwd (zapisuje gdzieś otrzymane hasło)
+11. Ponownie wybieram Router Upgrade (lub odpowiednik w D-WRT) i wskazuję
+ścieżkę do tomato-K26USB-1.28.8054RAF-PL-MIPSR2-beta-032H-Ext.bin oraz
+czyszczenie nvram jako opcje zaznaczam
+12. Po aktualizacji router się zrestartuje i poprosi o logowanie. Wpisuje
+login root i hasło wcześniej uzyskane w telnecie lub jesli wyczyszczony to
+uzytkownik/haslo admin/admin
+13. Czyszczę NVRAM i czekam aż się router zrestaruje.
+14. Loguje się tak jak poprzednio i zmieniam hasło na swoje.
+15. Jeśli router nie zechce załapać IP od providera to resetuje router
+wciskając z tyłu mały przycisk RESTORE (aż do skutku).
+16. Zabawa w konfigurację tego potworka Grin
+17. Jeśli coś jest nie tek to proszę o rady. Nie chce uszkodzić nowego nabytku.
+  	
+II.Ja zrobiłem to tak:
+1. Reset do ustawień fabrycznych
+2. Wpięty tylko komp w port LAN (sam uzyskał adres z DHCP - wiec nie musisz niczego ustawiać na sztywno)
+3. Zalogowałem się na ruter i dałem firmware upgrade (wrzuciłem DD-WRT mini)
+4. Restart
+5. Zalogowałem się na ruter wróciłem do fabrycznych ustawień i ustawiłem pass na www
+6. Ładowanie się telnetem do ddwrt i wydanie komendy: nvram get http_passwd. Zapisać wynik!
+7. Zmień rozszerzenie obrazu tomato z trx na bin i wgraj przez gui ddwrt, jesli z opcja czyszczenie nvram to idź do punktu 10
+8. Logujesz sie do tomato podając wcześniej zapisane hasło
+9. Robisz erase all data in NVRAM memory (albo przez telnet lub przez web )
+10. Logujesz się do tomato admin/admin
+11. konfigurujesz "potworka" Wink
+
+//ENTWARE dodatkowe pakiety: http://code.google.com/p/wl500g-repo/
+//http://wl500g-repo.googlecode.com/svn/ipkg/openwrt/
+To use repository on your router, please do: 
+Mount /opt folder to any empty partition or folder on USB/jffs2 -storage. For example: 
+$ mkdir /tmp/harddisk/opt
+$ mount -o bind /tmp/harddisk/opt /opt
+Download and run bootstrap script: 
+$ wget http://wl500g-repo.googlecode.com/svn/ipkg/entware_install.sh
+$ chmod +x ./entware_install.sh
+$ ./entware_install.sh
+List avaliable packages and install desired ones: 
+$ opkg list
+$ opkg install mc
+Make sure your /opt partition is mounted on every boot. 
+
+//OPTWARE 
+cd /tmp
+wget http://update.groov.pl/optware-install.sh
+chmod +x optware-install.sh
+./optware-install.sh
+ipkg update
+ipkg install mc
+Musimy przeedytowac plik /opt/etc/profile i zmienić linijki PATH i
+LD_LIBRARY_PATH na:
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/opt/sbin:/opt/bin
+LD_LIBRARY_PATH=/lib:/usr/lib:/usr/local/lib:/opt/lib:/opt/usr/lib
+Następnie edytujemy plik /opt/etc/ld.so.conf by wyglądał tak:
+/lib
+/usr/lib
+/opt/lib
+/opt/usr/lib
