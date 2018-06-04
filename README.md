@@ -6,7 +6,7 @@
 2. pull from github: git clone https://github.com/pwasiewi/rpilinuxlab
 3. cd rpilinuxlab
 4. mkdir dl
-5. cd make...
+5. cd make... np. make.armhfp jest dla raspberrypi2/3 32bit
 6. make emulate
 
 Raspberry Pi Lab przygotowane na podstawie 
@@ -132,3 +132,22 @@ qemu-system-arm -M versatilepb -m 256 -kernel emulacja/vmlinuz -initrd emulacja/
 make emulate
 ```
 i to by było na tyle!
+
+# Inne crossdev generowane crosscompilatory
+## https://wiki.gentoo.org/wiki/Embedded_systems/ARM_hardware_list
+
+The BeagleBone Black was needed:
+```
+    crossdev -v -S -t armv7-none-linux-gnueabi --env
+    'EXTRA_ECONF="--with-arch=armv7-a
+    --with-fpu=vfpv3-d16
+    --with-float-abi=hard
+    libc_cv_forced_unwind=yes
+    libc_cv_ctors_header=yes
+    libc_cv_c_cleanup=yes"'
+```
+For musl rpi3 (do not work!):
+```
+    crossdev --target armv7a-hardfloat-linux-musleabi  --stable  --gcc 7.3.0-r3  --kernel 4.16.12 -oO /usr/portage --env 'EXTRA_ECONF="--with-arch=armv7-a --with-fpu=neon-vfpv4 --with-float-abi=hard"'
+```
+

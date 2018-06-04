@@ -3,37 +3,37 @@ odpowiedzialności za ewentualne uszkodzenie sprzętu.
 
 Moja udana kompilacja źródeł tomato-shibby:
 #Ściągnięcie źródeł tomato-shibby:
-mkdir  /root/tomato_git
-cd /root/tomato_git
+mkdir  /mnt/tmp//COMPILE/tomato_git
+cd /mnt/tmp//COMPILE/tomato_git
 git clone git://repo.or.cz/tomato.git
 cd tomato
 git checkout -b origin/tomato-shibby
 git pull origin tomato-shibby
-mkdir /root/tomato
-cp -a * /root/tomato
-cp -a /root/tomato/tools/brcm /opt
+mkdir /mnt/tmp//COMPILE/tomato
+cp -a * /mnt/tmp//COMPILE/tomato
+cp -a /mnt/tmp//COMPILE/tomato/tools/brcm /opt
 #add to path /opt/brcm/hndtools-mipsel-linux/bin:/opt/brcm/hndtools-mipsel-uclibc/bin
 
 #Kompilacja źródeł
 ln -sfn /usr/bin/gawk /usr/bin/mawk
-cd  /root/tomato/release/src-rt
+cd  /mnt/tmp//COMPILE/tomato/release/src-rt
 make clean
 make help
 make V1=rt5x V2=-84beta r2b
 #po błędzie: wrong format 
-ln -sfn /root/tomato/release/src-rt/router/libnfsidmap/staged/usr/lib/libnfsidmap.so /usr/lib/libnfsidmap.so
+ln -sfn /mnt/tmp//COMPILE/tomato/release/src-rt/router/libnfsidmap/staged/usr/lib/libnfsidmap.so /usr/lib/libnfsidmap.so
 #i znowu
 make V1=rt5x V2=-84beta r2b
 
 ln -sfn  /usr/lib/libnfsidmap.so.0.3.0  /usr/lib/libnfsidmap.so
 
 #Update źródeł:
-cd /root/tomato_git/tomato
+cd /mnt/tmp//COMPILE/tomato_git/tomato
 git pull origin tomato-shibby
-rm -rf /root/tomato
-mkdir /root/tomato
-cp -a * /root/tomato
-cd /root/tomato/release/src-rt
+rm -rf /mnt/tmp//COMPILE/tomato
+mkdir /mnt/tmp//COMPILE/tomato
+cp -a * /mnt/tmp//COMPILE/tomato
+cd /mnt/tmp//COMPILE/tomato/release/src-rt
 
 Dwie porady z OpenLinksys:
 I. Tak więc zaczynając: 
