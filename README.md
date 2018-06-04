@@ -1,5 +1,5 @@
 # Raspberry Pi Lab 
-
+## i nie tylko ;) https://wiki.gentoo.org/wiki/Embedded_systems/ARM_hardware_list
 #### Odnośniki https://github.com/pwasiewi/eulinks/tree/master/sw_raspberry
 
 1. install Gentoo Linux e.g. from UbuntuLiveDVD https://github.com/pwasiewi/gentools
