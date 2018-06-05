@@ -13,6 +13,7 @@ mkdir /mnt/tmp//COMPILE/tomato
 cp -a * /mnt/tmp//COMPILE/tomato
 cp -a /mnt/tmp//COMPILE/tomato/tools/brcm /opt
 #add to path /opt/brcm/hndtools-mipsel-linux/bin:/opt/brcm/hndtools-mipsel-uclibc/bin
+export PATH=$PATH:/opt/brcm/hndtools-mipsel-linux/bin:/opt/brcm/hndtools-mipsel-uclibc/bin
 
 #Kompilacja źródeł
 ln -sfn /usr/bin/gawk /usr/bin/mawk
