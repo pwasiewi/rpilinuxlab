@@ -16,13 +16,13 @@ cp -a /mnt/tmp//COMPILE/tomato/tools/brcm /opt
 export PATH=$PATH:/opt/brcm/hndtools-mipsel-linux/bin:/opt/brcm/hndtools-mipsel-uclibc/bin
 
 #Kompilacja źródeł
-ln -sfn /usr/bin/gawk /usr/bin/mawk
+#niepotrzebne teraz ln -sfn /usr/bin/gawk /usr/bin/mawk
 cd  /mnt/tmp//COMPILE/tomato/release/src-rt
 make clean
 make help
 make V1=rt5x V2=-84beta r2b
 #po błędzie: wrong format 
-ln -sfn /mnt/tmp//COMPILE/tomato/release/src-rt/router/libnfsidmap/staged/usr/lib/libnfsidmap.so /usr/lib/libnfsidmap.so
+#niepotrzebne teraz: ln -sfn /mnt/tmp//COMPILE/tomato/release/src-rt/router/libnfsidmap/staged /usr/lib/libnfsidmap.so /usr/lib/libnfsidmap.so
 #i znowu
 make V1=rt5x V2=-84beta r2b
 
