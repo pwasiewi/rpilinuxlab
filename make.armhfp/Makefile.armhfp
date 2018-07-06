@@ -12,11 +12,11 @@ HERE=$(PWD)
 # | Wersje
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.28.3
-BUSYBOX_MD5=82e5ad09ae4a07c266fc179492b51757
+BUSYBOX_VER=1.29.0
+BUSYBOX_MD5=3c4a8f5d544907277e9df7130bac9f14
 
-KERNEL_VER=raspberrypi-kernel_1.20180417-1
-KERNEL_MD5=b7ac4c4f84a76a8834bea2021799be6f
+KERNEL_VER=raspberrypi-kernel_1.20180619-1
+KERNEL_MD5=11a8d1781f398bf18bf06dfa0f3a1953
 
 # +------------------------------------------------------------
 # | Architektura
@@ -54,9 +54,9 @@ INITRD_DIR=$(HERE)/initrd
 # Katalog emulatora
 EMUL_DIR=$(HERE)/emu
 
-# +------------------------------------------------------------
+# +----------------------------------------------------------
 # | Ściąganie z sieci
-# +------------------------------------------------------------
+# +----------------------------------------------------------
 
 $(DOWNLOAD_DIR)/busybox-$(BUSYBOX_VER).tar.bz2:
 	@mkdir -p $(DOWNLOAD_DIR)
@@ -67,12 +67,12 @@ $(DOWNLOAD_DIR)/busybox-$(BUSYBOX_VER).tar.bz2:
 	fi
 	touch $(DOWNLOAD_DIR)/busybox-$(BUSYBOX_VER).tar.bz2
 
+#https://github.com/raspberrypi/linux/archive/raspberrypi-kernel_1.20180619-1.tar.gz 
 $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.gz:
 	@mkdir -p $(DOWNLOAD_DIR)
 	@echo "$(KERNEL_MD5)  $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.gz" > $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).md5
 	@if ! md5sum -c --quiet $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).md5; then \
 	    echo "Pobieranie linux-$(KERNEL_VER).tar.gz"; \
-	    #wget -O $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.gz http://www.kernel.org/pub/linux/kernel/v4.x/linux-$(KERNEL_VER).tar.gz; \
 	    wget -O $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.gz https://github.com/raspberrypi/linux/archive/$(KERNEL_VER).tar.gz; \
 	fi
 	touch $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.gz
@@ -116,7 +116,7 @@ src:	src/busybox src/kernel
 	exit
 
 /usr/bin/armv7a-hardfloat-linux-gnueabi-gcc:
-	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.3.0-r3 --libc 2.26-r7 --kernel 4.16.12 -oO /usr/portage
+	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.3.0-r3 --libc 2.27-r5 --kernel 4.17.4 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev

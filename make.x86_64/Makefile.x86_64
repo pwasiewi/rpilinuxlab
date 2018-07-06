@@ -12,11 +12,11 @@ HERE=$(PWD)
 # | Wersje
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.28.3
-BUSYBOX_MD5=82e5ad09ae4a07c266fc179492b51757
+BUSYBOX_VER=1.29.0
+BUSYBOX_MD5=3c4a8f5d544907277e9df7130bac9f14
 
-KERNEL_VER=4.16.12
-KERNEL_MD5=78a23928740a7be7107f933cb119de5d
+KERNEL_VER=4.17.4
+KERNEL_MD5=98edc677c6f438ca1cd28b1d98b15934
 
 # +------------------------------------------------------------
 # | Architektura

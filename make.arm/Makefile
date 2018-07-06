@@ -12,11 +12,11 @@ HERE=$(PWD)
 # | Wersje 
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.28.3
-BUSYBOX_MD5=82e5ad09ae4a07c266fc179492b51757
+BUSYBOX_VER=1.29.0
+BUSYBOX_MD5=3c4a8f5d544907277e9df7130bac9f14
 
-KERNEL_VER=4.16.12
-KERNEL_MD5=78a23928740a7be7107f933cb119de5d
+KERNEL_VER=4.17.4
+KERNEL_MD5=98edc677c6f438ca1cd28b1d98b15934
 
 # +------------------------------------------------------------
 # | Architektura
@@ -115,7 +115,7 @@ src:	src/busybox src/kernel
 	exit
 
 /usr/bin/arm-softfloat-linux-gnueabi-gcc:
-	@USE="-fortran nossp" crossdev --target arm-softfloat-linux-gnueabi --stable  --gcc 8.1.0-r3 --libc 2.26-r7 --kernel 4.16.12 -oO /usr/portage
+	@USE="-fortran nossp" crossdev --target arm-softfloat-linux-gnueabi --gcc 8.1.0-r3 --libc 2.27-r5 --kernel 4.17.4 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
@@ -199,12 +199,11 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 
 # +------------------------------------------------------------
 # | Emulacja
-# | machine ID and DTB address is assigned to linux when bootloader loads  
+# | machine ID and DTB address is assigned to linux when bootloader load
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
 	qemu-system-arm -M versatileab -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb bin/kernel/arch/arm/boot/dts/versatile-ab.dtb -append "rdinit=/init" -serial stdio
-	#-nographic  "console=ttyAMA0 root=/dev/ram0"
 
 
 # +------------------------------------------------------------
