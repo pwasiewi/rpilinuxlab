@@ -12,11 +12,11 @@ HERE=$(PWD)
 # | Wersje
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.28.3
-BUSYBOX_MD5=82e5ad09ae4a07c266fc179492b51757
+BUSYBOX_VER=1.29.0
+BUSYBOX_MD5=3c4a8f5d544907277e9df7130bac9f14
 
-KERNEL_VER=raspberrypi-kernel_1.20180417-1
-KERNEL_MD5=b7ac4c4f84a76a8834bea2021799be6f
+KERNEL_VER=raspberrypi-kernel_1.20180619-1
+KERNEL_MD5=11a8d1781f398bf18bf06dfa0f3a1953
 
 # +------------------------------------------------------------
 # | Architektura
@@ -118,7 +118,7 @@ src:	src/busybox src/kernel
 /usr/bin/aarch64-unknown-linux-gnu-gcc:
 	#crossdev -C aarch64-unknown-linux-gnu -f
 	#@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnu --stable --kernel 4.16.12 -oO /usr/portage
-	@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnu --stable --gcc 7.3.0-r3 --libc 2.26-r7 --kernel 4.16.12 -oO /usr/portage
+	@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnu --stable --gcc 7.3.0-r3 --libc 2.27-r5 --kernel 4.17.4 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
