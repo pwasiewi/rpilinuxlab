@@ -31,6 +31,7 @@ make
 #najlepiej rozpakuj działający kernel bazujący na AnyKernel2
 #np.https://mega.nz/#F!0mY1XS5S!EPmMJshHh6lleyK7FQ8NDg kernel LG G3 bazujący na kodzie, 
 #który skompilowaliśmy https://github.com/ppajda/kernel_g3.git
+#skopiuj do niego nowy zImage i dtb i ponownie spakuj
 zip -r9 d855UberKernel.zip * -x .git
 
 #w razie fastboot:
