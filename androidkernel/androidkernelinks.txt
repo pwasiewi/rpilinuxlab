@@ -27,7 +27,7 @@ make
 #copy dtbtool to kernel root
 ./dtbtool -2 -o ./arch/arm/boot/dtb -s 2048 -p ./scripts/dtc/ ./arch/arm/boot/
 
-#git clone https://github.com/osm0sis/AnyKernel2
+#git clone https://github.com/nathanchance/AnyKernel2
 #najlepiej rozpakuj działający kernel bazujący na AnyKernel2
 #np.https://mega.nz/#F!0mY1XS5S!EPmMJshHh6lleyK7FQ8NDg kernel LG G3 bazujący na kodzie, 
 #który skompilowaliśmy https://github.com/ppajda/kernel_g3.git
@@ -44,6 +44,7 @@ make O=out -j$(nproc --all)
 ```
 
 # Inne odnosniki:
+ - https://androidmodguide.blogspot.com/p/blog-page.html
  - https://groups.google.com/forum/#!topic/android-contrib/VEhnuU887YY
  - https://github.com/Artx-II/ultra_kernel_lge_g3
  - http://xdshao.com/2018/04/10/Android-exploitation-Kernel-stack-buffer-overflow/
@@ -56,6 +57,12 @@ make O=out -j$(nproc --all)
 ### android ndk toolchain
 ```
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=/opt/android-ndk/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-
+```
+### linaro gcc 7.1 toolchain
+#### https://github.com/nathanchance/gcc-prebuilts
+```
+git clone --depth=1  https://github.com/nathanchance/gcc-prebuilts.git -b arm-linaro-7.x
+export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/gcc-prebuilts/bin/arm-linaro-linux-androideabi-
 ```
 ### UBER androideabi toolchain (nowsza kompilacja)
 #### https://forum.xda-developers.com/android/software/toolchain-uber-toolchains-t3527997
