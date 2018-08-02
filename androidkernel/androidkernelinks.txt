@@ -10,11 +10,8 @@ Do kompilacji kernela używa się arm-eabi toolchaina, a do kompilacji ROM-u and
 ```
 git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9/bin/arm-eabi-
-```
 
-```
 git clone --depth=1 https://github.com/ppajda/kernel_g3.git -b los-15.1 g3k3rn3l
-git clone https://github.com/osm0sis/AnyKernel2
 ln -sfn $(pwd)/g3k3rn3l /usr/src/linux
 cd g3k3rn3l
 ln -sfn  $(pwd)/include/linux/ /usr/include/linux
@@ -27,7 +24,12 @@ cd android_system_tools_dtbtool
 make
 #copy dtbtool to kernel root
 ./dtbtool -2 -o ./arch/arm/boot/dtb -s 2048 -p ./scripts/dtc/ ./arch/arm/boot/
-zip -r9 d855Snapdragon.zip * -x .git
+
+#git clone https://github.com/osm0sis/AnyKernel2
+#najlepiej rozpakuj działający kernel bazujący na AnyKernel2
+#np.https://mega.nz/#F!0mY1XS5S!EPmMJshHh6lleyK7FQ8NDg kernel LG G3 bazujący na kodzie, 
+#który skompilowaliśmy https://github.com/ppajda/kernel_g3.git
+zip -r9 d855UberKernel.zip * -x .git
 
 #w razie fastboot:
 /opt/android-sdk/platform-tools/fastboot reboot bootloader
@@ -38,10 +40,6 @@ make O=out clean && make O=out mrproper && make O=out lineageos_d855_defconfig
 make O=out -j$(nproc --all)
 ```
 
-
-
-
-
 # Inne odnosniki:
  - https://groups.google.com/forum/#!topic/android-contrib/VEhnuU887YY
  - https://github.com/Artx-II/ultra_kernel_lge_g3
@@ -50,7 +48,7 @@ make O=out -j$(nproc --all)
  - https://github.com/ResurrectionRemix/platform_manifest/blob/lollipop/README.mkdn
  - https://github.com/ResurrectionRemix/platform_manifest
 
-# Inne toolchainy
+# Inne toolchainy nie testowane
 
 ### android ndk toolchain
 ```
