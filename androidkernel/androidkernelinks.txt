@@ -2,15 +2,17 @@
 
 Do kompilacji kernela używa się arm-eabi toolchaina, a do kompilacji ROM-u androideabi toolchaina.
 
-# Przepis na własny kernel dla LG G3
 ### W nowym katalogu zaczynamy
-### https://forum.xda-developers.com/chef-central/android/guide-switching-to-custom-toolchain-t2927662
+# https://forum.xda-developers.com/chef-central/android/guide-switching-to-custom-toolchain-t2927662
 
-## UBER arm-eabi toolchain
+### Użyjemy UBER arm-eabi toolchain z 2016 roku
 ```
 git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9/bin/arm-eabi-
+```
 
+### Kompilacja własnego kernela dla LG G3
+```
 git clone --depth=1 https://github.com/ppajda/kernel_g3.git -b los-15.1 g3k3rn3l
 ln -sfn $(pwd)/g3k3rn3l /usr/src/linux
 cd g3k3rn3l
