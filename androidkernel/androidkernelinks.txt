@@ -5,10 +5,18 @@ Do kompilacji kernela używa się arm-eabi toolchaina, a do kompilacji ROM-u and
 ### W nowym katalogu zaczynamy
 #### https://forum.xda-developers.com/chef-central/android/guide-switching-to-custom-toolchain-t2927662
 
-### Użyjemy UBER arm-eabi toolchain z 2016 roku
+### Sprawdzony UBER arm-eabi toolchain z 2016 roku
 ```
 git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9/bin/arm-eabi-
+```
+
+### Sprawdzony linaro gcc 7.1 toolchain z 2017
+#### https://forum.xda-developers.com/android/development/toolchains-gnu-linaro-5th-2017-t3606941
+##### https://github.com/nathanchance/gcc-prebuilts
+```
+git clone --depth=1  https://github.com/nathanchance/gcc-prebuilts.git -b arm-linaro-7.x
+export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/gcc-prebuilts/bin/arm-linaro-linux-androideabi-
 ```
 
 ### Kompilacja własnego kernela dla LG G3
@@ -24,14 +32,18 @@ make clean && time make -j$(nproc --all) all
 git clone git@github.com:pwasiewi/android_system_tools_dtbtool.git
 cd android_system_tools_dtbtool
 make
-#copy dtbtool to kernel root
-./dtbtool -2 -o ./arch/arm/boot/dtb -s 2048 -p ./scripts/dtc/ ./arch/arm/boot/
 
+#copy dtbtool to kernel root
+cp ../android_system_tools_dtbtool/dtbtool .
+./dtbtool -2 -o ./arch/arm/boot/dtb -s 2048 -p ./scripts/dtc/ ./arch/arm/boot/
 #git clone https://github.com/nathanchance/AnyKernel2
 #najlepiej rozpakuj działający kernel bazujący na AnyKernel2
 #np.https://mega.nz/#F!0mY1XS5S!EPmMJshHh6lleyK7FQ8NDg kernel LG G3 bazujący na kodzie, 
 #który skompilowaliśmy https://github.com/ppajda/kernel_g3.git
 #skopiuj do niego nowy zImage i dtb i ponownie spakuj
+cp ./arch/arm/boot/dtb ../AnyKernel2G3/kernel_files/dtb-d855
+cp ./arch/arm/boot/zImage ../AnyKernel2G3/kernel_files/zImage-d855
+cd ../AnyKernel2G3
 zip -r9 d855UberKernel.zip * -x .git
 
 #w razie fastboot:
@@ -58,12 +70,7 @@ make O=out -j$(nproc --all)
 ```
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=/opt/android-ndk/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-
 ```
-### linaro gcc 7.1 toolchain
-#### https://github.com/nathanchance/gcc-prebuilts
-```
-git clone --depth=1  https://github.com/nathanchance/gcc-prebuilts.git -b arm-linaro-7.x
-export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/gcc-prebuilts/bin/arm-linaro-linux-androideabi-
-```
+
 ### UBER androideabi toolchain (nowsza kompilacja)
 #### https://forum.xda-developers.com/android/software/toolchain-uber-toolchains-t3527997
 ```
@@ -73,6 +80,7 @@ git clone https://bitbucket.org/matthewdalex/arm-linux-androideabi-4.9.git
 ```
 git clone -b linaro-4.8 https://github.com/ArchiDroid/Toolchain prebuilts/gcc/linux-x86/arm/arm-linux-eabi-linaro-4.8
 cd ..; export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-eabi-linaro-4.8/bin/arm-eabi- ; cd kernel_g3
+
 ```
 ### Google toolchain
 ```
