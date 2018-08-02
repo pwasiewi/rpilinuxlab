@@ -3,7 +3,7 @@
 Do kompilacji kernela używa się arm-eabi toolchaina, a do kompilacji ROM-u androideabi toolchaina.
 
 ### W nowym katalogu zaczynamy
-# https://forum.xda-developers.com/chef-central/android/guide-switching-to-custom-toolchain-t2927662
+#### https://forum.xda-developers.com/chef-central/android/guide-switching-to-custom-toolchain-t2927662
 
 ### Użyjemy UBER arm-eabi toolchain z 2016 roku
 ```
