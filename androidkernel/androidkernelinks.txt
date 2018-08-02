@@ -1,43 +1,10 @@
-### Intro
+# Intro
 
 Do kompilacji kernela używa się arm-eabi toolchaina, a do kompilacji ROM-u androideabi toolchaina.
 
-### android ndk toolchain
-```
-export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=/opt/android-ndk/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-
-```
-### UBER androideabi toolchain (nowsza kompilacja)
-### https://forum.xda-developers.com/android/software/toolchain-uber-toolchains-t3527997
-```
-git clone https://bitbucket.org/matthewdalex/arm-linux-androideabi-4.9.git
-```
-### linaro toolchain
-```
-git clone -b linaro-4.8 https://github.com/ArchiDroid/Toolchain prebuilts/gcc/linux-x86/arm/arm-linux-eabi-linaro-4.8
-cd ..; export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-eabi-linaro-4.8/bin/arm-eabi- ; cd kernel_g3
-```
-### Google toolchain
-```
-git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.7 prebuilts/gcc/linux-x86/arm/arm-eabi-4.7
-cd ..; export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-eabi-4.7/bin/arm-eabi- ; cd kernel_g3
-```
-
-### W WYBRANYM KATALOGU ZACZYNAMY
+# Przepis na własny kernel dla LG G3
+### W nowym katalogu zaczynamy
 ### https://forum.xda-developers.com/chef-central/android/guide-switching-to-custom-toolchain-t2927662
-## UBER toolchain
-```
-git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
-export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9/bin/arm-linux-androideabi-
-#cd ..; export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9/bin/arm-linux-androideabi-; cd kernel_g3
-```
-## snapdragon toolchain
-```
-wget https://developer.qualcomm.com/qfile/26662/snapdragon-llvm-6.0.2-linux64.tar.gz
-#unpack to /opt/android-ndk
-#go to  /opt/android-ndk/build/tools
-/opt/android-ndk/build/tools/make_standalone_toolchain_snapdragon_llvm.py --arch arm --api 27 --install-dir /opt/snapdragon
-export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=/opt/snapdragon/bin/arm-linux-androideabi-
-```
 
 ## UBER arm-eabi toolchain
 ```
@@ -45,7 +12,6 @@ git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9/bin/arm-eabi-
 ```
 
-### Przepis na własny kernel
 ```
 git clone --depth=1 https://github.com/ppajda/kernel_g3.git -b los-15.1 g3k3rn3l
 git clone https://github.com/osm0sis/AnyKernel2
@@ -72,7 +38,11 @@ make O=out clean && make O=out mrproper && make O=out lineageos_d855_defconfig
 make O=out -j$(nproc --all)
 ```
 
-### Inne odnosniki:
+
+
+
+
+# Inne odnosniki:
  - https://groups.google.com/forum/#!topic/android-contrib/VEhnuU887YY
  - https://github.com/Artx-II/ultra_kernel_lge_g3
  - http://xdshao.com/2018/04/10/Android-exploitation-Kernel-stack-buffer-overflow/
@@ -80,3 +50,38 @@ make O=out -j$(nproc --all)
  - https://github.com/ResurrectionRemix/platform_manifest/blob/lollipop/README.mkdn
  - https://github.com/ResurrectionRemix/platform_manifest
 
+# Inne toolchainy
+
+### android ndk toolchain
+```
+export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=/opt/android-ndk/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-
+```
+### UBER androideabi toolchain (nowsza kompilacja)
+#### https://forum.xda-developers.com/android/software/toolchain-uber-toolchains-t3527997
+```
+git clone https://bitbucket.org/matthewdalex/arm-linux-androideabi-4.9.git
+```
+### linaro toolchain
+```
+git clone -b linaro-4.8 https://github.com/ArchiDroid/Toolchain prebuilts/gcc/linux-x86/arm/arm-linux-eabi-linaro-4.8
+cd ..; export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-eabi-linaro-4.8/bin/arm-eabi- ; cd kernel_g3
+```
+### Google toolchain
+```
+git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.7 prebuilts/gcc/linux-x86/arm/arm-eabi-4.7
+cd ..; export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-eabi-4.7/bin/arm-eabi- ; cd kernel_g3
+```
+## UBER toolchain
+```
+git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
+export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9/bin/arm-linux-androideabi-
+#cd ..; export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9/bin/arm-linux-androideabi-; cd kernel_g3
+```
+## snapdragon toolchain
+```
+wget https://developer.qualcomm.com/qfile/26662/snapdragon-llvm-6.0.2-linux64.tar.gz
+#unpack to /opt/android-ndk
+#go to  /opt/android-ndk/build/tools
+/opt/android-ndk/build/tools/make_standalone_toolchain_snapdragon_llvm.py --arch arm --api 27 --install-dir /opt/snapdragon
+export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=/opt/snapdragon/bin/arm-linux-androideabi-
+```
