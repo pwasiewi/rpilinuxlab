@@ -1,27 +1,29 @@
 # Intro
 
-Android to system napisany w Javie z kernelem z Linuxa, każdy program jest
+*Android* to system napisany w Javie z kernelem z Linuxa, każdy program jest
 uzytkownikiem i ma prawa do pewnych grup np. video oraz kernel ma rozbudowaną
 komunikację między programami.
 
-Stock to system fabrycznie przygotowany i sprzedawany z telefonem (a także
+*Stock* to system fabrycznie przygotowany i sprzedawany z telefonem (a także
 kolejne updaty tego systemu).
 
-Root to modyfikacja systemu Android "usuwająca" hasło z roota i pozwalająca na
+*Root* to modyfikacja systemu Android "usuwająca" hasło z roota i pozwalająca na
 korzystanie z jego uprawnień aplikacjom czyszczącym cache, poprawiającym
 wydajność lub monitorującym działanie kernela Linuxa.
 
-AOSP, Lineage i liczne mutacje typu ResurrectionRemix, cDroid to systemy
+*AOSP, Lineage* i liczne mutacje typu *ResurrectionRemix, cDroid* to systemy
 powstałe w oparciu o źródła zmodyfikowanego kernela ze stocka oraz najnowszy
-system google dostosowany do urządzeń przez grupy programistów typu Lineage, a
+system google dostosowany do urządzeń przez grupy programistów typu *Lineage*, a
 potem zwykłych uzytkowników z forum np. xda.
 
 
-# Kompilacja Androida Oreo ResurrectionRemix
+# Kompilacja Androida **Oreo** *ResurrectionRemix*
 ##### https://github.com/ResurrectionRemix/platform_manifest/tree/oreo
 ##### https://github.com/G3-Development/local_manifests
 
-### Inicjuje archiwum Androida Oreo
+### Inicjuje archiwum Androida Oreo 
+#### Wymagane około **140GB** na pełne archiwum bez opcji --depth=1 
+#### (126GB zajęła jedna kompilacja bez ccache, które zabiera dodatkowe 140GB)
 ```
 ln -sfn /opt/android-sdk/platform-tools/adb /usr/local/bin/adb
 curl http://commondatastorage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
