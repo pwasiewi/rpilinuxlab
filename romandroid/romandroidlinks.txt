@@ -34,7 +34,7 @@ repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo
 #### np. modem z wersji 21C działa z wszystkimi nie stockowymi systemami
 ##### https://forum.xda-developers.com/lg-g3/general/radio-modem-lg-g3-t3110376
 
-### tworzę local_manifests z dopracowanymi sterownikami konkretnego modelu
+### Tworzę local_manifests z dopracowanymi sterownikami konkretnego modelu
 komórki
 ```
 # https://github.com/TheMuppets/proprietary_vendor_lge/tree/lineage-15.1/d855
@@ -69,22 +69,28 @@ curl --create-dirs -L -o .repo/local_manifests/g3.xml -O -L https://raw.githubus
 ```
 repo sync  -f --force-sync --no-clone-bundle -j$(nproc --all)
 #wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
+```
 
-# sprawdzam, czy trzeba to zmnienić, jeśli kompiluje RR, a mam sterowniki z Lineage
+### Sprawdzam, czy trzeba to zmnienić, jeśli kompiluje RR, a mam sterowniki z Lineage
+```
 # mv ./device/lge/d855/lineage.mk ./device/lge/d855/rr.mk
 # sed -i 's/lineage/rr/g' ./device/lge/d855/rr.mk
+```
 
-# Python musi być w wersji 2.7
+#### Python musi być w wersji 2.7
+```
 # sed -i 's/\#!\/usr\/bin\/env python/\#!\/usr\/bin\/env python2.7/g' $i
 eselect python set 2 # select python 2.7
+```
 
-# ustawiam najprostsze LC_ALL 
+### Ustawiam najprostsze LC_ALL 
 export LC_ALL=C
 
-# generuje OTA z nazwą romu
-# https://github.com/ResurrectionRemix/packages_apps_ResurrectionOTA
+### Generuje OTA z nazwą romu i archiwami, gdzie wrzuca się kopie skompilowanego systemu
+##### https://github.com/ResurrectionRemix/packages_apps_ResurrectionOTA
 
-# podmieniamy gcc na UBER gcc (można podmienić na inny lub nowszy UBER toolchain)
+### podmieniamy gcc na UBER gcc (można podmienić na inny lub nowszy UBER toolchain, a także zmieniając konfig w XML-u)
+```
 git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
 git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
 mv prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9.orig
@@ -93,13 +99,20 @@ cd prebuilts/gcc/linux-x86/arm
 ln -sfn arm-linux-androideabi-UB-4.9 arm-linux-androideabi-4.9
 ln -sfn arm-linux-eabi-UB-4.9 arm-eabi-4.8
 cd ../../../..
+```
 
+### Kompiluje wybraną wersję Androida RR
+```
 . build/envsetup.sh && brunch d855
 cd ./out/target/product/<devicename>/
+```
 
+### W razie porażki usuwam kompilację i robię sync od nowa, jeśli usunąłem katalogi z poprzednimi dodatkowymi sterownikami, czy kernelem z local_manifests
+```
 make clean
 repo sync -f --force-sync --no-clone-bundle -j$(nproc --all)
-#repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
+#wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
+. build/envsetup.sh && brunch d855
 ```
 
 # Inne odnośniki
