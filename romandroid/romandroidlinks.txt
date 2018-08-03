@@ -1,19 +1,18 @@
 # Intro
 ### https://github.com/ResurrectionRemix/platform_manifest/tree/oreo
 
+```
 ln -sfn /opt/android-sdk/platform-tools/adb /usr/local/bin/adb
 curl http://commondatastorage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
 chmod 755 /usr/local/bin/repo
 mkdir RR && cd RR
 repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo --depth=1
-repo sync -f --force-sync --no-clone-bundle
+#repo sync -f --force-sync --no-clone-bundle
+repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
 
-cd android/system/device/your_device/codename
- ./extract-files.sh
-# all blobs goes to android/system/vendor/your_device
 # https://forum.xda-developers.com/lg-g3/general/radio-modem-lg-g3-t3110376
 # https://github.com/TheMuppets/proprietary_vendor_lge/tree/lineage-15.1/d855
-#add file RR/.repo/local_manifests/roomservice.xml
+# add file RR/.repo/local_manifests/roomservice.xml
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
   <project name="lineageOS/android_device_lge_d855" path="device/lge/d855" remote="github" revision="lineage-15.1" />
@@ -23,19 +22,50 @@ cd android/system/device/your_device/codename
   <project name="LineageOS/android_packages_resources_devicesettings" path="packages/resources/devicesettings"/>
   <project name="TheMuppets/proprietary_vendor_lge" path="proprietary/vendor/lge" remote="github" revision="lineage-15.1" />
 </manifest>
+# lub
+# dodaj linki z https://github.com/ResurrectionRemix-Devices
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <project name="ResurrectionRemix-Devices/device_lge_d855" path="device/lge/d855" remote="github" revision="oreo" />
+  <project name="ResurrectionRemix-Devices/android_device_lge_g3-common" path="device/lge/g3-common" remote="github" revision="8.1" />
+  <project name="pwasiewi/kernel_g3" path="kernel/lge/g3" remote="github" revision="los-15.1" />
+  <project name="lineageOS/android_device_qcom_common" path="device/qcom/common" remote="github" />
+  <project name="LineageOS/android_packages_resources_devicesettings" path="packages/resources/devicesettings" />
+  <project name="ResurrectionRemix-Devices/proprietary_vendor_lge" path="vendor/lge" remote="github" revision="8.1" />
+</manifest>
 
-cd ./device/lge/d855
-mv ./lineage.mk ./rr.mk
-cd ../../..
-sed -i 's/lineage/rr/g' ./rr.mk
+# lub po prostu
+curl --create-dirs -L -o .repo/local_manifests/g3.xml -O -L https://raw.githubusercontent.com/G3-Development/local_manifests/8.1/g3.xml
+
+mv ./device/lge/d855/lineage.mk ./device/lge/d855/rr.mk
+sed -i 's/lineage/rr/g' ./device/lge/d855/rr.mk
 
 #sed -i 's/\#!\/usr\/bin\/env python/\#!\/usr\/bin\/env python2.7/g' $i
 eselect python set 2 # select python 2.7
+export LC_ALL=C
 
+#wygeneruj OTA z nazwą romu
 #### https://github.com/ResurrectionRemix/packages_apps_ResurrectionOTA
+
+#podmień gcc na UBER gcc
+git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
+git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
+mv prebuilts/gcc/linux-x86/arm/arm-linux-eabi-4.9 prebuilts/gcc/linux-x86/arm/arm-linux-eabi-4.9.orig
+mv prebuilts/gcc/linux-x86/arm/arm-linux-4.8 prebuilts/gcc/linux-x86/arm/arm-eabi-4.8-orig
+ln -sfn prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9 prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9
+ln -sfn prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9 prebuilts/gcc/linux-x86/arm/arm-eabi-4.8
+
+#wstaw #include "../../../../bootable/recovery/updater/include/updater/install.h"
+#wstaw #include "../../../../bootable/recovery/edify/expr.h"
+#do device/lge/d855/recovery/recovery_updater.cpp
 
 . build/envsetup.sh && brunch d855
 cd ./out/target/product/<devicename>/
+
+make clean
+repo sync -f --force-sync --no-clone-bundle -j$(nproc --all)
+#repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
+```
 
 # Inne odnośniki
  - https://www.lineageosrom.com/2017/01/how-to-build-lineageos-rom-for-any.html
