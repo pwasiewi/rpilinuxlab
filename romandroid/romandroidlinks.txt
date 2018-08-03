@@ -1,0 +1,43 @@
+# Intro
+### https://github.com/ResurrectionRemix/platform_manifest/tree/oreo
+
+ln -sfn /opt/android-sdk/platform-tools/adb /usr/local/bin/adb
+curl http://commondatastorage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+chmod 755 /usr/local/bin/repo
+mkdir RR && cd RR
+repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo --depth=1
+repo sync -f --force-sync --no-clone-bundle
+
+cd android/system/device/your_device/codename
+ ./extract-files.sh
+# all blobs goes to android/system/vendor/your_device
+# https://forum.xda-developers.com/lg-g3/general/radio-modem-lg-g3-t3110376
+# https://github.com/TheMuppets/proprietary_vendor_lge/tree/lineage-15.1/d855
+#add file RR/.repo/local_manifests/roomservice.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <project name="lineageOS/android_device_lge_d855" path="device/lge/d855" remote="github" revision="lineage-15.1" />
+  <project name="lineageOS/android_device_lge_g3-common" path="device/lge/g3-common" remote="github" revision="lineage-15.1" />
+  <project name="lineageOS/android_kernel_lge_g3" path="kernel/lge/g3" remote="github" revision="lineage-15.1" />
+  <project name="lineageOS/android_device_qcom_common" path="device/qcom/common" remote="github" />
+  <project name="LineageOS/android_packages_resources_devicesettings" path="packages/resources/devicesettings"/>
+  <project name="TheMuppets/proprietary_vendor_lge" path="proprietary/vendor/lge" remote="github" revision="lineage-15.1" />
+</manifest>
+
+cd ./device/lge/d855
+mv ./lineage.mk ./rr.mk
+cd ../../..
+sed -i 's/lineage/rr/g' ./rr.mk
+
+cd build/tools
+for i in *.py; do sed -i 's/\#!\/usr\/bin\/env python/\#!\/usr\/bin\/env python2.7/g' $i; done
+cd ../..
+
+#### https://github.com/ResurrectionRemix/packages_apps_ResurrectionOTA
+
+. build/envsetup.sh && brunch d855
+cd ./out/target/product/<devicename>/
+
+# Inne odnośniki
+ - https://www.lineageosrom.com/2017/01/how-to-build-lineageos-rom-for-any.html
+ - https://forum.xda-developers.com/chef-central/android/how-to-build-lineageos-14-1-t3551484
