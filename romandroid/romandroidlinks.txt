@@ -1,16 +1,42 @@
 # Intro
-### https://github.com/ResurrectionRemix/platform_manifest/tree/oreo
 
+Android to system napisany w Javie z kernelem z Linuxa, każdy program jest
+uzytkownikiem i ma prawa do pewnych grup np. video oraz kernel ma rozbudowaną
+komunikację między programami.
+
+Stock to system fabrycznie przygotowany i sprzedawany z telefonem (a także
+kolejne updaty tego systemu).
+
+Root to modyfikacja systemu Android "usuwająca" hasło z roota i pozwalająca na
+korzystanie z jego uprawnień aplikacjom czyszczącym cache, poprawiającym
+wydajność lub monitorującym działanie kernela Linuxa.
+
+AOSP, Lineage i liczne mutacje typu ResurrectionRemix, cDroid to systemy
+powstałe w oparciu o źródła zmodyfikowanego kernela ze stocka oraz najnowszy
+system google dostosowany do urządzeń przez grupy programistów typu Lineage, a
+potem zwykłych uzytkowników z forum np. xda.
+
+
+# Kompilacja Androida Oreo ResurrectionRemix
+##### https://github.com/ResurrectionRemix/platform_manifest/tree/oreo
+##### https://github.com/G3-Development/local_manifests
+
+### Inicjuje archiwum Androida Oreo
 ```
 ln -sfn /opt/android-sdk/platform-tools/adb /usr/local/bin/adb
 curl http://commondatastorage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
 chmod 755 /usr/local/bin/repo
 mkdir RR && cd RR
-repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo --depth=1
-#repo sync -f --force-sync --no-clone-bundle
-repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
+repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo
+#wersja krótszego pobierania: repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo --depth=1
+```
+### Dodaję części firmowe, binarne Androida systemu
+#### np. modem z wersji 21C działa z wszystkimi nie stockowymi systemami
+##### https://forum.xda-developers.com/lg-g3/general/radio-modem-lg-g3-t3110376
 
-# https://forum.xda-developers.com/lg-g3/general/radio-modem-lg-g3-t3110376
+### tworzę local_manifests z dopracowanymi sterownikami konkretnego modelu
+komórki
+```
 # https://github.com/TheMuppets/proprietary_vendor_lge/tree/lineage-15.1/d855
 # add file RR/.repo/local_manifests/roomservice.xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -35,29 +61,38 @@ repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
 </manifest>
 
 # lub po prostu
+# https://github.com/G3-Development/local_manifests
 curl --create-dirs -L -o .repo/local_manifests/g3.xml -O -L https://raw.githubusercontent.com/G3-Development/local_manifests/8.1/g3.xml
+```
 
-mv ./device/lge/d855/lineage.mk ./device/lge/d855/rr.mk
-sed -i 's/lineage/rr/g' ./device/lge/d855/rr.mk
+### Ściągam wskazane w manifeście dodatkowe sterowniki 
+```
+repo sync  -f --force-sync --no-clone-bundle -j$(nproc --all)
+#wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
 
-#sed -i 's/\#!\/usr\/bin\/env python/\#!\/usr\/bin\/env python2.7/g' $i
+# sprawdzam, czy trzeba to zmnienić, jeśli kompiluje RR, a mam sterowniki z Lineage
+# mv ./device/lge/d855/lineage.mk ./device/lge/d855/rr.mk
+# sed -i 's/lineage/rr/g' ./device/lge/d855/rr.mk
+
+# Python musi być w wersji 2.7
+# sed -i 's/\#!\/usr\/bin\/env python/\#!\/usr\/bin\/env python2.7/g' $i
 eselect python set 2 # select python 2.7
+
+# ustawiam najprostsze LC_ALL 
 export LC_ALL=C
 
-#wygeneruj OTA z nazwą romu
-#### https://github.com/ResurrectionRemix/packages_apps_ResurrectionOTA
+# generuje OTA z nazwą romu
+# https://github.com/ResurrectionRemix/packages_apps_ResurrectionOTA
 
-#podmień gcc na UBER gcc
+# podmieniamy gcc na UBER gcc (można podmienić na inny lub nowszy UBER toolchain)
 git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
 git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
-mv prebuilts/gcc/linux-x86/arm/arm-linux-eabi-4.9 prebuilts/gcc/linux-x86/arm/arm-linux-eabi-4.9.orig
-mv prebuilts/gcc/linux-x86/arm/arm-linux-4.8 prebuilts/gcc/linux-x86/arm/arm-eabi-4.8-orig
-ln -sfn prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9 prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9
-ln -sfn prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9 prebuilts/gcc/linux-x86/arm/arm-eabi-4.8
-
-#wstaw #include "../../../../bootable/recovery/updater/include/updater/install.h"
-#wstaw #include "../../../../bootable/recovery/edify/expr.h"
-#do device/lge/d855/recovery/recovery_updater.cpp
+mv prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9.orig
+mv prebuilts/gcc/linux-x86/arm/arm-eabi-4.8 prebuilts/gcc/linux-x86/arm/arm-eabi-4.8-orig
+cd prebuilts/gcc/linux-x86/arm
+ln -sfn arm-linux-androideabi-UB-4.9 arm-linux-androideabi-4.9
+ln -sfn arm-linux-eabi-UB-4.9 arm-eabi-4.8
+cd ../../../..
 
 . build/envsetup.sh && brunch d855
 cd ./out/target/product/<devicename>/
