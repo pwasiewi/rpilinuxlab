@@ -57,11 +57,10 @@ make O=out -j$(nproc --all)
 
 # Inne odnosniki:
  - https://androidmodguide.blogspot.com/p/blog-page.html
- - https://groups.google.com/forum/#!topic/android-contrib/VEhnuU887YY
- - https://github.com/Artx-II/ultra_kernel_lge_g3
+ - https://jsteward.moe/category/gsoc-2018.html
  - http://xdshao.com/2018/04/10/Android-exploitation-Kernel-stack-buffer-overflow/
- - https://jsteward.moe/weekly-report-0723.html
- - https://github.com/ResurrectionRemix/platform_manifest/blob/lollipop/README.mkdn
+ - https://github.com/Artx-II/ultra_kernel_lge_g3
+ - https://groups.google.com/forum/#!topic/android-contrib/VEhnuU887YY
  - https://github.com/ResurrectionRemix/platform_manifest
 
 # Inne toolchainy nie testowane
