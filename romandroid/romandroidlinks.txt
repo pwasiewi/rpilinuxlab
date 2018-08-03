@@ -29,9 +29,8 @@ mv ./lineage.mk ./rr.mk
 cd ../../..
 sed -i 's/lineage/rr/g' ./rr.mk
 
-cd build/tools
-for i in *.py; do sed -i 's/\#!\/usr\/bin\/env python/\#!\/usr\/bin\/env python2.7/g' $i; done
-cd ../..
+#sed -i 's/\#!\/usr\/bin\/env python/\#!\/usr\/bin\/env python2.7/g' $i
+eselect python set 2 # select python 2.7
 
 #### https://github.com/ResurrectionRemix/packages_apps_ResurrectionOTA
 
