@@ -114,7 +114,9 @@ cd ./out/target/product/<devicename>/
 make clean
 repo sync -f --force-sync --no-clone-bundle -j$(nproc --all)
 #wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
-. build/envsetup.sh && brunch d855
+. build/envsetup.sh
+lunch rr_d855-userdebug
+make bacon -j16
 ```
 
 # Inne odnośniki
