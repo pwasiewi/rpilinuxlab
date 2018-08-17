@@ -29,8 +29,7 @@ ln -sfn /opt/android-sdk/platform-tools/adb /usr/local/bin/adb
 curl http://commondatastorage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
 chmod 755 /usr/local/bin/repo
 mkdir RR && cd RR
-repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo
-#wersja krótszego pobierania: repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo --depth=1
+repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo --depth=1
 ```
 ### Dodaję części firmowe, binarne Androida systemu
 #### np. modem z wersji 21C działa z wszystkimi nie stockowymi systemami
