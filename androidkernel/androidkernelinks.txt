@@ -100,3 +100,20 @@ wget https://developer.qualcomm.com/qfile/26662/snapdragon-llvm-6.0.2-linux64.ta
 /opt/android-ndk/build/tools/make_standalone_toolchain_snapdragon_llvm.py --arch arm --api 27 --install-dir /opt/snapdragon
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=/opt/snapdragon/bin/arm-linux-androideabi-
 ```
+
+### UBER arm-eabi toolchain z 2017 roku
+```
+git clone https://bitbucket.org/matthewdalex/arm-eabi-4.9 prebuilts/gcc/linux-x86/arm/arm-eabi-4.9 --depth=1
+git clone https://bitbucket.org/matthewdalex/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 --depth=1
+git clone https://bitbucket.org/matthewdalex/arm-linux-androideabi-5.x.git --depth=1 prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-5.0
+export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9/bin/arm-eabi-
+```
+
+### nathan toolchain 2017 
+```
+git clone -b arm-linaro-7.x --depth=1 https://github.com/nathanchance/gcc-prebuilts prebuilts/gcc/linux-x86/arm/arm-linaro-7.x
+```
+### clang toolchain RedDragon
+```
+git clone https://github.com/USA-RedDragon/prebuilts_clang_host_linux-x86_7.0-DragonTC prebuilts/clang/host/linux-x86/clang7.0-DragonTC --depth=1
+```
