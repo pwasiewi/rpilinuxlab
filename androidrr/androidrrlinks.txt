@@ -31,7 +31,7 @@ chmod 755 /usr/local/bin/repo
 mkdir RR && cd RR
 repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo --depth=1
 ```
-### Dodaję części firmowe, binarne Androida systemu
+### Dodaję odpowiednie części firmowe binarne Androida systemu przez np. recovery
 #### np. modem z wersji 21C działa z wszystkimi nie stockowymi systemami
 ##### https://forum.xda-developers.com/lg-g3/general/radio-modem-lg-g3-t3110376
 
@@ -110,6 +110,10 @@ cd scripts
 #lub
         arm) toolchaindir=arm/arm-linaro-7.2/bin
 #https://github.com/nathanchance/gcc-prebuilts/
+#pobieramy CLANG w nowszej wersji:
+git clone https://github.com/USA-RedDragon/prebuilts_clang_host_linux-x86_7.0-DragonTC prebuilts/clang/host/linux-x86/clang7.0-DragonTC --depth=1
+#podmieniamy linię z wyrażeniem "local CLANG_VERSION" np. na:
+        local CLANG_VERSION=clang7.0-DragonTC
 ```
 
 ### Kompiluje wybraną wersję Androida RR
