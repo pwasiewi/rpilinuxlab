@@ -89,7 +89,7 @@ export LC_ALL=C
 ### Generuje OTA z nazwą romu i archiwami, gdzie wrzuca się kopie skompilowanego systemu
 ##### https://github.com/ResurrectionRemix/packages_apps_ResurrectionOTA
 
-### podmieniamy gcc na UBER gcc (można podmienić na inny lub nowszy własny skompilowany UBER toolchain zmieniając konfig w *build/envsetup.sh*)
+### Podmieniam gcc na UBER gcc (można podmienić na inny lub nowszy własny skompilowany UBER toolchain zmieniając konfig w *build/envsetup.sh*)
 ```
 git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
 git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
@@ -111,14 +111,14 @@ cd scripts
         arm) toolchaindir=arm/arm-linaro-7.2/bin
 #https://github.com/nathanchance/gcc-prebuilts/
 ```
-### pobieramy CLANG w nowszej wersji i podobnie zmieniamy konfig w *build/envsetup.sh*
+### Pobieram CLANG w nowszej wersji i podobnie zmieniamy konfig w *build/envsetup.sh*
 ```
 git clone https://github.com/USA-RedDragon/prebuilts_clang_host_linux-x86_7.0-DragonTC prebuilts/clang/host/linux-x86/clang7.0-DragonTC --depth=1
 #podmieniamy linię z wyrażeniem "local CLANG_VERSION" np. na:
         local CLANG_VERSION=clang7.0-DragonTC
 ```
 
-### Kompiluje wybraną wersję Androida RR
+### Kompiluję wybraną wersję Androida RR
 ```
 . build/envsetup.sh && brunch d855
 cd ./out/target/product/<devicename>/
