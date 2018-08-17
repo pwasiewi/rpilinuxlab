@@ -93,15 +93,21 @@ export LC_ALL=C
 ```
 git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
 git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
-mv prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9.orig
-mv prebuilts/gcc/linux-x86/arm/arm-eabi-4.8 prebuilts/gcc/linux-x86/arm/arm-eabi-4.8-orig
-cd prebuilts/gcc/linux-x86/arm
-ln -sfn arm-linux-androideabi-UB-4.9 arm-linux-androideabi-4.9
-ln -sfn arm-linux-eabi-UB-4.9 arm-eabi-4.8
-cd ../../../..
-#lub w pliku: build/envsetup.sh
-#podmieniamy toolchain w linii:
-        #arm) toolchaindir=arm/arm-linux-androideabi-4.9/bin
+#lub kompilujemy własny UBER toolchain
+mkdir UBERTC && cd UBERTC
+repo init -u https://github.com/UBERTC/uber-manifest.git -b master
+repo sync
+cd scripts
+#wybieramy z kilku wersji np.
+./arm-linux-androideabi-4.9
+./arm-eabi-4.9
+#skompilowany toolchain z katalogu UBERTC/out kopiujemy do prebuilts/gcc/linux-x86/arm/ usuwając poprzednie wersje 
+#w pliku: build/envsetup.sh
+#podmieniamy linię z wyrażeniem "toolchaindir=arm" np. na:
+        arm) toolchaindir=arm/arm-linux-androideabi-4.9/bin
+#lub
+        arm) toolchaindir=arm/arm-linux-androideabi-UB-4.9/bin
+#lub
         arm) toolchaindir=arm/arm-linaro-7.2/bin
 #https://github.com/nathanchance/gcc-prebuilts/
 ```
