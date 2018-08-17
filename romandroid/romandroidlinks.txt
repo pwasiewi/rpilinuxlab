@@ -36,8 +36,7 @@ repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo
 #### np. modem z wersji 21C działa z wszystkimi nie stockowymi systemami
 ##### https://forum.xda-developers.com/lg-g3/general/radio-modem-lg-g3-t3110376
 
-### Tworzę local_manifests z dopracowanymi sterownikami konkretnego modelu
-komórki
+### Tworzę local_manifests z dopracowanymi sterownikami konkretnego modelu komórki
 ```
 # https://github.com/TheMuppets/proprietary_vendor_lge/tree/lineage-15.1/d855
 # add file RR/.repo/local_manifests/roomservice.xml
@@ -103,9 +102,9 @@ ln -sfn arm-linux-eabi-UB-4.9 arm-eabi-4.8
 cd ../../../..
 #lub w pliku: build/envsetup.sh
 #podmieniamy toolchain w linii:
-
         #arm) toolchaindir=arm/arm-linux-androideabi-4.9/bin
         arm) toolchaindir=arm/arm-linaro-7.2/bin
+#https://github.com/nathanchance/gcc-prebuilts/
 ```
 
 ### Kompiluje wybraną wersję Androida RR
