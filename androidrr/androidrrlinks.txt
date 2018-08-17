@@ -65,7 +65,7 @@ repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo 
 curl --create-dirs -L -o .repo/local_manifests/g3.xml -O -L https://raw.githubusercontent.com/G3-Development/local_manifests/8.1/g3.xml
 ```
 
-### Ściągam wskazane w manifeście dodatkowe sterowniki 
+### Ściągam wskazane w local_manifests dodatkowe sterowniki wraz z całym kodem Androida
 ```
 repo sync  -f --force-sync --no-clone-bundle -j$(nproc --all)
 #wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
@@ -109,7 +109,6 @@ cd scripts
         arm) toolchaindir=arm/arm-linux-androideabi-UB-4.9/bin
 #lub
         arm) toolchaindir=arm/arm-linaro-7.2/bin
-#https://github.com/nathanchance/gcc-prebuilts/
 ```
 #### Pobieram CLANG w nowszej wersji i podobnie zmieniamy konfig w *build/envsetup.sh*
 ```
@@ -134,5 +133,6 @@ lunch rr_d855-userdebug && time make bacon -j16
 ```
 
 # Inne odnośniki
+ - https://github.com/nathanchance/gcc-prebuilts/
  - https://www.lineageosrom.com/2017/01/how-to-build-lineageos-rom-for-any.html
  - https://forum.xda-developers.com/chef-central/android/how-to-build-lineageos-14-1-t3551484
