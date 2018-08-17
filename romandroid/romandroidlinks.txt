@@ -60,8 +60,8 @@ repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo
   <project name="LineageOS/android_packages_resources_devicesettings" path="packages/resources/devicesettings" />
   <project name="ResurrectionRemix-Devices/proprietary_vendor_lge" path="vendor/lge" remote="github" revision="8.1" />
 </manifest>
-
-# lub po prostu
+# lub z https://github.com/LiquidRemix-Devices
+# lub pobierz gotowy plik local_manifests
 # https://github.com/G3-Development/local_manifests
 curl --create-dirs -L -o .repo/local_manifests/g3.xml -O -L https://raw.githubusercontent.com/G3-Development/local_manifests/8.1/g3.xml
 ```
