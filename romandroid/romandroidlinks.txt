@@ -101,6 +101,11 @@ cd prebuilts/gcc/linux-x86/arm
 ln -sfn arm-linux-androideabi-UB-4.9 arm-linux-androideabi-4.9
 ln -sfn arm-linux-eabi-UB-4.9 arm-eabi-4.8
 cd ../../../..
+#lub w pliku: build/envsetup.sh
+#podmieniamy toolchain w linii:
+
+        #arm) toolchaindir=arm/arm-linux-androideabi-4.9/bin
+        arm) toolchaindir=arm/arm-linaro-7.2/bin
 ```
 
 ### Kompiluje wybraną wersję Androida RR
@@ -115,8 +120,7 @@ make clean
 repo sync -f --force-sync --no-clone-bundle -j$(nproc --all)
 #wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
 . build/envsetup.sh
-lunch rr_d855-userdebug
-make bacon -j16
+lunch rr_d855-userdebug && time make bacon -j16
 ```
 
 # Inne odnośniki
