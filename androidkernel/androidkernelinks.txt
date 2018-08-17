@@ -117,3 +117,13 @@ git clone -b arm-linaro-7.x --depth=1 https://github.com/nathanchance/gcc-prebui
 ```
 git clone https://github.com/USA-RedDragon/prebuilts_clang_host_linux-x86_7.0-DragonTC prebuilts/clang/host/linux-x86/clang7.0-DragonTC --depth=1
 ```
+### kompilujemy UBER toolchain
+```
+mkdir UBER && cd UBER
+repo init -u https://github.com/UBERTC/uber-manifest.git -b master
+repo sync
+cd scripts
+#wybieramy z kilku wersji
+./arm-linux-androideabi-4.9
+#skompilowany toolchain w katalogu out
+```
