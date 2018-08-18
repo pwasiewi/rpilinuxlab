@@ -24,6 +24,7 @@ potem zwykłych uzytkowników z forum np. xda.
 ### Inicjuje archiwum Androida Oreo 
 #### Wymagane około **140GB** na pełne archiwum bez opcji --depth=1 
 #### (126GB zajęła jedna kompilacja bez ccache, które zabiera dodatkowe 140GB)
+#### *Kompilacja trwa około 90 min*
 ```
 ln -sfn /opt/android-sdk/platform-tools/adb /usr/local/bin/adb
 curl http://commondatastorage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo

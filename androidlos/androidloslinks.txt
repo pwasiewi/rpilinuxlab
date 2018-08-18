@@ -17,9 +17,9 @@ system google dostosowany do urządzeń przez grupy programistów typu *Lineage*
 potem zwykłych uzytkowników z forum np. xda.
 
 
-# Kompilacja Androida *Nougat* *Lineage-14.1*
+# Kompilacja Androida *Nougat* *LineageOS CM-14.1*
 
-### Inicjuje archiwum Androida CM-14.1 Lineage
+### Inicjuje archiwum Androida CM-14.1 LineageOS
 #### Wymagane około **60GB** na pełne skompilowane archiwum (pobrane z opcją --depth=1)
 #### Kompilacja trwa 40 min
 ```
