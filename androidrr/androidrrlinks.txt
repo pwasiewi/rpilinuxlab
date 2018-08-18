@@ -133,6 +133,16 @@ lunch rr_d855-userdebug && time make bacon -j16
 ```
 
 # Inne odnośniki
+ - https://github.com/UBERTC/uber-manifest/tree/master
+ - https://forum.xda-developers.com/android/software/toolchain-uber-toolchains-t3527997
+ - https://forum.xda-developers.com/chef-central/android/guide-switching-to-custom-toolchain-t2927662
  - https://github.com/nathanchance/gcc-prebuilts/
+ - https://github.com/USA-RedDragon
+ - https://github.com/itsHardStyl3r
+ - https://www.codeaurora.org/project/android-for-msm
+ - https://forum.xda-developers.com/lg-g3/development/rom-resurrectionremix-6-0-0-t3785384
+ - https://forum.xda-developers.com/galaxy-mega/development/rom-resurrection-remix-nougat-v5-8-1-t3558468
  - https://www.lineageosrom.com/2017/01/how-to-build-lineageos-rom-for-any.html
  - https://forum.xda-developers.com/chef-central/android/how-to-build-lineageos-14-1-t3551484
+ - https://forum.xda-developers.com/lg-g3/development/d85x-ls990-vs985-g3ds-romcrdroidalpha-t3701855
+ - https://github.com/crdroidandroid/crdroid_build
