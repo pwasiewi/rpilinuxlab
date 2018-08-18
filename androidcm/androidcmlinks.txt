@@ -82,6 +82,7 @@ cd scripts
 breakfast i9152
 croot
 brunch i9152
+#wynik w katalogu out/target/product/i9152/lineage-14.1-20180818-UNOFFICIAL-i9152.zip
 ```
 
 ### W razie porażki usuwam kompilację i robię sync od nowa, jeśli usunąłem katalogi z poprzednimi dodatkowymi sterownikami, czy kernelem z local_manifests
