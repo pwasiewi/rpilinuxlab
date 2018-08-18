@@ -1,0 +1,100 @@
+# Intro
+
+*Android* to system napisany w Javie z kernelem z Linuxa, każdy program jest
+uzytkownikiem i ma prawa do pewnych grup np. video oraz kernel ma rozbudowaną
+komunikację między programami.
+
+*Stock* to system fabrycznie przygotowany i sprzedawany z telefonem (a także
+kolejne updaty tego systemu).
+
+*Root* to modyfikacja systemu Android "usuwająca" hasło z roota i pozwalająca na
+korzystanie z jego uprawnień aplikacjom czyszczącym cache, poprawiającym
+wydajność lub monitorującym działanie kernela Linuxa.
+
+*AOSP, Lineage* i liczne mutacje typu *ResurrectionRemix, cDroid* to systemy
+powstałe w oparciu o źródła zmodyfikowanego kernela ze stocka oraz najnowszy
+system google dostosowany do urządzeń przez grupy programistów typu *Lineage*, a
+potem zwykłych uzytkowników z forum np. xda.
+
+
+# Kompilacja Androida *Nougat* *Lineage-14.1*
+
+### Inicjuje archiwum Androida CM-14.1 Lineage
+#### Wymagane około **60GB** na pełne skompilowane archiwum (pobrane z opcją --depth=1)
+#### Kompilacja trwa 40 min
+```
+ln -sfn /opt/android-sdk/platform-tools/adb /usr/local/bin/adb
+curl http://commondatastorage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+chmod 755 /usr/local/bin/repo
+mkdir CM && cd CM
+repo init -u https://github.com/LineageOS/android.git -b cm-14.1 --depth=1
+git clone https://github.com/Kiborg-Man/local_manifests .repo/local_manifests
+```
+
+#### Ściągam wskazane dodatkowe bloby (nie wiem czy to jeszcze potrzebne!)
+```
+cd device/samsung/i9152/
+#podłącz telefon z USB debugging w Opcjach Programisty
+./extract-files.sh
+cd ../../..
+```
+
+### Pobieram kod Androida plus katalogi z local_manifests
+```
+repo sync  -f --force-sync --no-clone-bundle -j$(nproc --all)
+#wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
+```
+
+#### Python musi być w wersji 2.7
+```
+# sed -i 's/\#!\/usr\/bin\/env python/\#!\/usr\/bin\/env python2.7/g' $i
+eselect python set 2 # select python 2.7
+```
+
+#### Ustawiam najprostsze LC_ALL 
+export LC_ALL=C
+
+#### Podmieniam gcc na UBER gcc (można podmienić na inny lub nowszy własny skompilowany UBER toolchain zmieniając konfig w *build/envsetup.sh*)
+```
+git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
+git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
+#lub kompilujemy własny UBER toolchain
+mkdir UBERTC && cd UBERTC
+repo init -u https://github.com/UBERTC/uber-manifest.git -b master
+repo sync
+cd scripts
+#wybieramy z kilku wersji np.
+./arm-linux-androideabi-4.9
+./arm-eabi-4.9
+#skompilowany toolchain z katalogu UBERTC/out kopiujemy do prebuilts/gcc/linux-x86/arm/ usuwając poprzednie wersje 
+#w pliku: build/envsetup.sh
+#podmieniamy linię z wyrażeniem "toolchaindir=arm" np. na:
+        arm) toolchaindir=arm/arm-linux-androideabi-4.9/bin
+#lub
+        arm) toolchaindir=arm/arm-linux-androideabi-UB-4.9/bin
+#lub
+        arm) toolchaindir=arm/arm-linaro-7.2/bin
+```
+
+### Kompiluję wybraną wersję Androida CM Lineage
+```
+. build/envsetup.sh
+breakfast i9152
+croot
+brunch i9152
+```
+
+### W razie porażki usuwam kompilację i robię sync od nowa, jeśli usunąłem katalogi z poprzednimi dodatkowymi sterownikami, czy kernelem z local_manifests
+```
+make clean
+repo sync -f --force-sync --no-clone-bundle -j$(nproc --all)
+. build/envsetup.sh
+#lunch i9152 && time make bacon -j16
+breakfast i9152
+croot
+brunch i9152
+```
+
+# Inne odnośniki
+ - https://www.lineageosrom.com/2017/01/how-to-build-lineageos-rom-for-any.html
+ - https://forum.xda-developers.com/chef-central/android/how-to-build-lineageos-14-1-t3551484
