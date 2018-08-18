@@ -31,18 +31,19 @@ repo init -u https://github.com/LineageOS/android.git -b cm-14.1 --depth=1
 git clone https://github.com/Kiborg-Man/local_manifests .repo/local_manifests
 ```
 
-#### Ściągam wskazane dodatkowe bloby (nie wiem czy to jeszcze potrzebne!)
+### Pobieram kod Androida plus katalogi z local_manifests
+```
+repo sync  -f --force-sync --no-clone-bundle -j$(nproc --all)
+#wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
+```
+
+#### Ściągam wskazane dodatkowe bloby z oficjalnej wersji Androida 
+#### nie wiem czy to jeszcze potrzebne!
 ```
 cd device/samsung/i9152/
 #podłącz telefon z USB debugging w Opcjach Programisty
 ./extract-files.sh
 cd ../../..
-```
-
-### Pobieram kod Androida plus katalogi z local_manifests
-```
-repo sync  -f --force-sync --no-clone-bundle -j$(nproc --all)
-#wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
 ```
 
 #### Python musi być w wersji 2.7
