@@ -21,7 +21,7 @@ potem zwykłych uzytkowników z forum np. xda.
 
 ### Inicjuje archiwum Androida CM-14.1 LineageOS
 #### Wymagane około **60GB** na pełne skompilowane archiwum (pobrane z opcją --depth=1)
-#### Kompilacja trwa 40 min
+#### Kompilacja trwa 40 min na i7 
 ```
 ln -sfn /opt/android-sdk/platform-tools/adb /usr/local/bin/adb
 curl http://commondatastorage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
@@ -37,8 +37,7 @@ repo sync  -f --force-sync --no-clone-bundle -j$(nproc --all)
 #wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
 ```
 
-#### Ściągam wskazane dodatkowe bloby z oficjalnej wersji Androida 
-#### nie wiem czy to jeszcze potrzebne!
+#### Ściągam wskazane dodatkowe bloby z oficjalnej wersji Androida (nie wiem czy to jeszcze potrzebne!)
 ```
 cd device/samsung/i9152/
 #podłącz telefon z USB debugging w Opcjach Programisty
