@@ -37,7 +37,7 @@ repo sync  -f --force-sync --no-clone-bundle -j$(nproc --all)
 #wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
 ```
 
-### Patchuję ze zmodyfikowanego build_tools dla danej komórki
+### Patchuję ze zmodyfikowanego build_tools z local_manifests dla danej komórki
 ```
 cd build_tools && ./patch && cd ..
 ```
