@@ -37,6 +37,11 @@ repo sync  -f --force-sync --no-clone-bundle -j$(nproc --all)
 #wersja bez tagów: repo sync  -f --force-sync --no-clone-bundle --no-tags -j$(nproc --all)
 ```
 
+### Patchuję ze zmodyfikowanego build_tools dla danej komórki
+```
+cd build_tools && ./patch && cd ..
+```
+
 #### Ściągam wskazane dodatkowe bloby z oficjalnej wersji Androida (nie wiem czy to jeszcze potrzebne!)
 ```
 cd device/samsung/i9152/
