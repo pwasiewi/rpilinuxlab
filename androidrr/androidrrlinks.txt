@@ -111,12 +111,6 @@ cd scripts
 #lub
         arm) toolchaindir=arm/arm-linaro-7.2/bin
 ```
-#### Pobieram CLANG w nowszej wersji i podobnie zmieniamy konfig w *build/envsetup.sh*
-```
-git clone https://github.com/USA-RedDragon/prebuilts_clang_host_linux-x86_7.0-DragonTC prebuilts/clang/host/linux-x86/clang7.0-DragonTC --depth=1
-#podmieniamy linię z wyrażeniem "local CLANG_VERSION" np. na:
-        local CLANG_VERSION=clang7.0-DragonTC
-```
 
 ### Kompiluję wybraną wersję Androida RR
 ```
