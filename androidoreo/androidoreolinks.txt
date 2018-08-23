@@ -42,23 +42,31 @@ repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo 
 # add file RR/.repo/local_manifests/roomservice.xml
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
+  <!-- Device -->
   <project name="lineageOS/android_device_lge_d855" path="device/lge/d855" remote="github" revision="lineage-15.1" />
   <project name="lineageOS/android_device_lge_g3-common" path="device/lge/g3-common" remote="github" revision="lineage-15.1" />
+  <!-- Kernel -->
   <project name="lineageOS/android_kernel_lge_g3" path="kernel/lge/g3" remote="github" revision="lineage-15.1" />
+  <!-- Vendor -->
+  <project name="TheMuppets/proprietary_vendor_lge" path="proprietary/vendor/lge" remote="github" revision="lineage-15.1" />
+  <!-- Dependencies -->
   <project name="lineageOS/android_device_qcom_common" path="device/qcom/common" remote="github" />
   <project name="LineageOS/android_packages_resources_devicesettings" path="packages/resources/devicesettings"/>
-  <project name="TheMuppets/proprietary_vendor_lge" path="proprietary/vendor/lge" remote="github" revision="lineage-15.1" />
 </manifest>
 # lub
 # dodaj linki z https://github.com/ResurrectionRemix-Devices
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
+  <!-- Device -->
   <project name="ResurrectionRemix-Devices/device_lge_d855" path="device/lge/d855" remote="github" revision="oreo" />
   <project name="ResurrectionRemix-Devices/android_device_lge_g3-common" path="device/lge/g3-common" remote="github" revision="8.1" />
+  <!-- Kernel -->
   <project name="pwasiewi/kernel_g3" path="kernel/lge/g3" remote="github" revision="los-15.1" />
+  <!-- Vendor -->
+  <project name="ResurrectionRemix-Devices/proprietary_vendor_lge" path="vendor/lge" remote="github" revision="8.1" />
+  <!-- Dependencies -->
   <project name="lineageOS/android_device_qcom_common" path="device/qcom/common" remote="github" />
   <project name="LineageOS/android_packages_resources_devicesettings" path="packages/resources/devicesettings" />
-  <project name="ResurrectionRemix-Devices/proprietary_vendor_lge" path="vendor/lge" remote="github" revision="8.1" />
 </manifest>
 # lub z https://github.com/LiquidRemix-Devices
 # lub pobierz gotowy plik local_manifests
@@ -126,6 +134,60 @@ repo sync -f --force-sync --no-clone-bundle -j$(nproc --all)
 . build/envsetup.sh
 lunch rr_d855-userdebug && time make bacon -j16
 ```
+
+
+# Kompilacja Androida Oreo *crDroid* dla LG G3
+##### https://github.com/crdroidandroid/android/tree/8.1
+Kompilacja i przygotowania do niej są prawie takie same jak w RR, podam tylko
+**różnice**.
+
+### Inicjacja archiwum Androida:
+```
+repo init -u git://github.com/crdroidandroid/android.git -b 8.1
+```
+
+### Tworzę local_manifests z dopracowanymi sterownikami konkretnego modelu komórki
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+        <!-- Device -->
+        <project path="device/lge/d855" name="crdroidandroid/android_device_lge_d855" remote="github" revision="8.1" />
+        <project path="device/lge/g3-common" name="crdroidandroid/android_device_lge_g3-common" remote="github" revision="8.1" />
+        <!-- Kernel -->
+        <project path="kernel/lge/g3" name="crdroidandroid/android_kernel_lge_g3" remote="github" revision="8.1" />
+        <!-- Vendor -->
+        <project path="vendor/lge" name="crdroidandroid/proprietary_vendor_lge" remote="github" revision="8.1" />
+        <!-- Dependencies -->
+        <project path="device/qcom/common" name="LineageOS/android_device_qcom_common" remote="github" revision="lineage-15.1" />
+</manifest>
+```
+
+# Kompilacja Androida Oreo *LiquidRemix* dla LG G3
+#### https://github.com/LiquidRemix/android_manifest/tree/oc-mr2
+Kompilacja i przygotowania do niej są prawie takie same jak w RR, podam tylko
+**różnice**.
+
+### Inicjacja archiwum Androida:
+```
+repo init -u git://github.com/LiquidRemix/android_manifest.git -b oc-mr2
+```
+
+### Tworzę local_manifests z dopracowanymi sterownikami konkretnego modelu komórki
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+        <!-- Device -->
+        <project path="device/lge/d855" name="LiquidRemix-Devices/android_device_lge_d855" remote="github" revision="oc-mr2" />
+        <project path="device/lge/g3-common" name="LiquidRemix-Devices/android_device_lge_g3-common" remote="github" revision="oc-mr2" />
+        <!-- Kernel -->
+        <project path="kernel/lge/g3" name="LiquidRemix-Devices/android_kernel_lge_g3" remote="github" revision="oc-mr2" />
+        <!-- Vendor -->
+        <project path="vendor/lge" name="itsHardStyl3r/vendor_rebase" remote="github" revision="lineage-15.1" />
+        <!-- Dependencies -->
+        <project path="device/qcom/common" name="LineageOS/android_device_qcom_common" remote="github" revision="lineage-15.1" />
+</manifest>
+```
+
 
 # Inne odnośniki
  - https://github.com/UBERTC/uber-manifest/tree/master
