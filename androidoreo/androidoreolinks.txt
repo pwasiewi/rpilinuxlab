@@ -40,36 +40,20 @@ repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo 
 ```
 # https://github.com/TheMuppets/proprietary_vendor_lge/tree/lineage-15.1/d855
 # add file RR/.repo/local_manifests/roomservice.xml
+# z repozytoriów https://github.com/LiquidRemix-Devices (najnowsze sterowniki 2018.08)
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
-  <!-- Device -->
-  <project name="lineageOS/android_device_lge_d855" path="device/lge/d855" remote="github" revision="lineage-15.1" />
-  <project name="lineageOS/android_device_lge_g3-common" path="device/lge/g3-common" remote="github" revision="lineage-15.1" />
-  <!-- Kernel -->
-  <project name="lineageOS/android_kernel_lge_g3" path="kernel/lge/g3" remote="github" revision="lineage-15.1" />
-  <!-- Vendor -->
-  <project name="TheMuppets/proprietary_vendor_lge" path="proprietary/vendor/lge" remote="github" revision="lineage-15.1" />
-  <!-- Dependencies -->
-  <project name="lineageOS/android_device_qcom_common" path="device/qcom/common" remote="github" />
-  <project name="LineageOS/android_packages_resources_devicesettings" path="packages/resources/devicesettings"/>
+        <!-- Device -->
+        <project path="device/lge/d855" name="LiquidRemix-Devices/android_device_lge_d855" remote="github" revision="oc-mr2" />
+        <project path="device/lge/g3-common" name="LiquidRemix-Devices/android_device_lge_g3-common" remote="github" revision="oc-mr2" />
+        <!-- Kernel -->
+        <project path="kernel/lge/g3" name="LiquidRemix-Devices/android_kernel_lge_g3" remote="github" revision="oc-mr2" />
+        <!-- Vendor -->
+        <project path="vendor/lge" name="itsHardStyl3r/vendor_rebase" remote="github" revision="lineage-15.1" />
+        <!-- Dependencies -->
+        <project path="device/qcom/common" name="LineageOS/android_device_qcom_common" remote="github" revision="lineage-15.1" />
 </manifest>
-# lub
-# dodaj linki z https://github.com/ResurrectionRemix-Devices
-<?xml version="1.0" encoding="UTF-8"?>
-<manifest>
-  <!-- Device -->
-  <project name="ResurrectionRemix-Devices/device_lge_d855" path="device/lge/d855" remote="github" revision="oreo" />
-  <project name="ResurrectionRemix-Devices/android_device_lge_g3-common" path="device/lge/g3-common" remote="github" revision="8.1" />
-  <!-- Kernel -->
-  <project name="pwasiewi/kernel_g3" path="kernel/lge/g3" remote="github" revision="los-15.1" />
-  <!-- Vendor -->
-  <project name="ResurrectionRemix-Devices/proprietary_vendor_lge" path="vendor/lge" remote="github" revision="8.1" />
-  <!-- Dependencies -->
-  <project name="lineageOS/android_device_qcom_common" path="device/qcom/common" remote="github" />
-  <project name="LineageOS/android_packages_resources_devicesettings" path="packages/resources/devicesettings" />
-</manifest>
-# lub z https://github.com/LiquidRemix-Devices
-# lub pobierz gotowy plik local_manifests
+# lub pobierz gotowy plik local_manifests (starsze sterowniki)
 # https://github.com/G3-Development/local_manifests
 curl --create-dirs -L -o .repo/local_manifests/g3.xml -O -L https://raw.githubusercontent.com/G3-Development/local_manifests/8.1/g3.xml
 ```
