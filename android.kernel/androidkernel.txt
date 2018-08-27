@@ -19,7 +19,6 @@ git clone --depth=1  https://github.com/nathanchance/gcc-prebuilts.git -b arm-li
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/gcc-prebuilts/bin/arm-linaro-linux-androideabi-
 ```
 
-
 ### Sprawdzony skompilowany własny toolchain UBERTC gcc
 ```
 mkdir UBERTC && cd UBERTC
@@ -30,6 +29,7 @@ cd scripts
 ./arm-linux-androideabi-4.9
 ./arm-eabi-4.9
 #skompilowany toolchain z katalogu UBERTC/out kopiujemy do prebuilts/gcc/linux-x86/arm/ usuwając poprzednie wersje 
+export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/
 ```
 
 
