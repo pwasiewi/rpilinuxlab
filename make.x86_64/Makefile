@@ -12,11 +12,11 @@ HERE=$(PWD)
 # | Wersje
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.29.0
-BUSYBOX_MD5=3c4a8f5d544907277e9df7130bac9f14
+BUSYBOX_VER=1.29.2
+BUSYBOX_MD5=46617af37a39579711d8b36f189cdf1e
 
-KERNEL_VER=4.17.4
-KERNEL_MD5=98edc677c6f438ca1cd28b1d98b15934
+KERNEL_VER=4.18.5
+KERNEL_MD5=22851fe6c82db6673a844bbb7c62df67
 
 # +------------------------------------------------------------
 # | Architektura
@@ -204,12 +204,15 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
-	qemu-system-x86_64 --enable-kvm -m 2048 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -append "init=/init" 
+	qemu-system-x86_64 -m 2048 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -append "init=/init" 
 	#qemu-system-x86_64 --enable-kvm -m 2048 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -nographic -append "console=ttyS0" -serial stdio
 
 # +------------------------------------------------------------
-# | Administracyjne
+# | Administracyjne usuwanie plików
 # +------------------------------------------------------------
+
+clean:
+	@rm -rf bin emu initrd src
 
 .phony: src src/busybox src/kernel toolchain crossdev kernconf busyboxconf emulate dl dl/kernel dl/busybox
 
