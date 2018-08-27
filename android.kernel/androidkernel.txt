@@ -38,6 +38,7 @@ cd scripts
 git clone --depth=1 https://github.com/ppajda/kernel_g3.git -b los-15.1 g3k3rn3l
 ln -sfn $(pwd)/g3k3rn3l /usr/src/linux
 cd g3k3rn3l
+mv /usr/src/linux /usr/src/linux.417
 ln -sfn  $(pwd)/include/linux/ /usr/include/linux
 make clean && make mrproper && make lineageos_d855_defconfig
 #poprawki w .config i następnie: make oldconfig
