@@ -1,4 +1,4 @@
-# AndroidLab
+# AndroidModLab
 ### Własne kompilacje androida i jego kernela 
 Aby zainstalować skompilowany kernel i system najpierw trzeba umieć zrootować telefon i zainstalować TWRP- uwaga ryzykowna operacja - uzywać metod i plików sprawdzonych najlepiej na forum xda <https://forum.xda-developers.com> lub android polska ma odnośniki do xda i komentarze <https://forum.android.com.pl/>.
 
