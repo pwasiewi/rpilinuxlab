@@ -70,6 +70,8 @@ make O=out -j$(nproc --all)
 ```
 
 # Inne odnosniki:
+ - https://android.googlesource.com
+ - https://source.codeaurora.org/quic/la
  - https://androidmodguide.blogspot.com/p/blog-page.html
  - https://jsteward.moe/category/gsoc-2018.html
  - http://xdshao.com/2018/04/10/Android-exploitation-Kernel-stack-buffer-overflow/
