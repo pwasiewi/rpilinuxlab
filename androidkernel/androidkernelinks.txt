@@ -77,7 +77,6 @@ make O=out -j$(nproc --all)
  - http://xdshao.com/2018/04/10/Android-exploitation-Kernel-stack-buffer-overflow/
  - https://github.com/Artx-II/ultra_kernel_lge_g3
  - https://groups.google.com/forum/#!topic/android-contrib/VEhnuU887YY
- - https://github.com/ResurrectionRemix/platform_manifest
 
 # Inne toolchainy nie testowane
 
