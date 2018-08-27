@@ -183,6 +183,5 @@ repo init -u git://github.com/LiquidRemix/android_manifest.git -b oc-mr2
  - https://github.com/itsHardStyl3r
  - https://www.codeaurora.org/project/android-for-msm
  - https://forum.xda-developers.com/lg-g3/development/rom-resurrectionremix-6-0-0-t3785384
- - https://forum.xda-developers.com/galaxy-mega/development/rom-resurrection-remix-nougat-v5-8-1-t3558468
  - https://forum.xda-developers.com/lg-g3/development/d85x-ls990-vs985-g3ds-romcrdroidalpha-t3701855
  - https://github.com/crdroidandroid/crdroid_build
