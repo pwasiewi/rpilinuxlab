@@ -71,6 +71,7 @@ make O=out -j$(nproc --all)
 
 # Inne odnosniki:
  - https://forum.xda-developers.com/android/software/guide-easy-kernel-building-tutorial-t3581057
+ - https://forum.xda-developers.com/android/software-hacking/reference-how-to-compile-android-kernel-t3627297
  - https://android.googlesource.com
  - https://source.codeaurora.org/quic/la
  - https://androidmodguide.blogspot.com/p/blog-page.html
