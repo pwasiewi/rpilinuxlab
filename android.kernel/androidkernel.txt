@@ -86,34 +86,34 @@ make O=out -j$(nproc --all)
 
 # Inne toolchainy nie testowane
 
-### android ndk toolchain
+#### android ndk toolchain
 ```
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=/opt/android-ndk/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin/arm-linux-androideabi-
 ```
 
-### UBER androideabi toolchain (nowsza kompilacja)
+#### UBER androideabi toolchain (nowsza kompilacja)
 #### https://forum.xda-developers.com/android/software/toolchain-uber-toolchains-t3527997
 ```
 git clone https://bitbucket.org/matthewdalex/arm-linux-androideabi-4.9.git
 ```
-### linaro toolchain
+#### linaro toolchain
 ```
 git clone -b linaro-4.8 https://github.com/ArchiDroid/Toolchain prebuilts/gcc/linux-x86/arm/arm-linux-eabi-linaro-4.8
 cd ..; export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-eabi-linaro-4.8/bin/arm-eabi- ; cd kernel_g3
 
 ```
-### Google toolchain
+#### Google toolchain
 ```
 git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.7 prebuilts/gcc/linux-x86/arm/arm-eabi-4.7
 cd ..; export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-eabi-4.7/bin/arm-eabi- ; cd kernel_g3
 ```
-## UBER toolchain
+#### UBER toolchain
 ```
 git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9/bin/arm-linux-androideabi-
 #cd ..; export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9/bin/arm-linux-androideabi-; cd kernel_g3
 ```
-## snapdragon toolchain
+#### snapdragon toolchain
 ```
 wget https://developer.qualcomm.com/qfile/26662/snapdragon-llvm-6.0.2-linux64.tar.gz
 #unpack to /opt/android-ndk
@@ -122,7 +122,7 @@ wget https://developer.qualcomm.com/qfile/26662/snapdragon-llvm-6.0.2-linux64.ta
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=/opt/snapdragon/bin/arm-linux-androideabi-
 ```
 
-### UBER arm-eabi toolchain z 2017 roku
+#### UBER arm-eabi toolchain z 2017 roku
 ```
 git clone https://bitbucket.org/matthewdalex/arm-eabi-4.9 prebuilts/gcc/linux-x86/arm/arm-eabi-4.9 --depth=1
 git clone https://bitbucket.org/matthewdalex/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9 --depth=1
@@ -130,12 +130,37 @@ git clone https://bitbucket.org/matthewdalex/arm-linux-androideabi-5.x.git --dep
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9/bin/arm-eabi-
 ```
 
-### nathan toolchain 2017 
+#### nathan toolchain 2017 
 ```
 git clone -b arm-linaro-7.x --depth=1 https://github.com/nathanchance/gcc-prebuilts prebuilts/gcc/linux-x86/arm/arm-linaro-7.x
 ```
-### clang toolchain RedDragon
+#### clang toolchain RedDragon
 ```
 git clone https://github.com/USA-RedDragon/prebuilts_clang_host_linux-x86_7.0-DragonTC prebuilts/clang/host/linux-x86/clang7.0-DragonTC --depth=1
 ```
 
+#### kompilacja linaro 7.3 - niesprawdzona do kompilacji całego androida
+```
+## kontener z ubuntu
+systemctl start lxd
+systemctl status lxd
+## wszystkie domyślne z założeniem bridge do komunikacji
+lxd init
+lxc launch ubuntu:18.04 myubuntu
+lxc list
+lxc exec myubuntu /bin/bash
+
+## po zalogowaniu na ubuntu
+apt update
+apt-get install flex bison ncurses-dev texinfo gcc gperf patch libtool automake g++ libncurses5-dev gawk subversion expat libexpat1-dev python-all-dev binutils-dev  bc libcloog-isl-dev libcap-dev autoconf libgmp-dev build-essential gcc-multilib g++-multilib pkg-config libmpc-dev libmpfr-dev autopoint gettext txt2man liblzma-dev libssl-dev libz-dev
+apt install g++-8 gcc-8 libc6-dev libc-dev make
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-7 700 --slave /usr/bin/g++ g++ /usr/bin/g++-7
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-8 800 --slave /usr/bin/g++ g++ /usr/bin/g++-8
+## as you can see the greater priority has gcc-8
+sudo update-alternatives --config gcc
+
+git clone https://github.com/USBhost/build-tools-gcc
+cd build-tools-gcc
+./build -h
+time ./build -a arm -s linaro -v 7 -p xz
+```
