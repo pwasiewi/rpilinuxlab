@@ -20,7 +20,7 @@ export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/gcc-prebuil
 ```
 
 
-### Sprawdzony - skompilowany własny toolchain UBERTC gcc
+### Sprawdzony skompilowany własny toolchain UBERTC gcc
 ```
 mkdir UBERTC && cd UBERTC
 repo init -u https://github.com/UBERTC/uber-manifest.git -b master
@@ -61,15 +61,12 @@ cd ../AnyKernel2G3
 zip -r9 d855UberKernel.zip * -x .git
 ```
 
-### Inne opcje kompilacji i przeładowania fastbootem, a nie TWRP
+### Inne opcje kompilacji
 ```
 ### wersja z oddzielnym katalogiem out dla poszczególnych wersji urządzenia
 mkdir -p out
 make O=out clean && make O=out mrproper && make O=out lineageos_d855_defconfig
 make O=out -j$(nproc --all)
-
-#w razie fastboot:
-/opt/android-sdk/platform-tools/fastboot reboot bootloader
 ```
 
 # Inne odnosniki:
