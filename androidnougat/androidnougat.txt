@@ -104,3 +104,4 @@ brunch i9152
 # Inne odnośniki
  - https://www.lineageosrom.com/2017/01/how-to-build-lineageos-rom-for-any.html
  - https://forum.xda-developers.com/chef-central/android/how-to-build-lineageos-14-1-t3551484
+ - https://forum.xda-developers.com/galaxy-mega/development/rom-resurrection-remix-nougat-v5-8-1-t3558468
