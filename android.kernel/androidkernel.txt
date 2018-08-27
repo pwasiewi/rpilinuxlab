@@ -139,7 +139,7 @@ git clone -b arm-linaro-7.x --depth=1 https://github.com/nathanchance/gcc-prebui
 git clone https://github.com/USA-RedDragon/prebuilts_clang_host_linux-x86_7.0-DragonTC prebuilts/clang/host/linux-x86/clang7.0-DragonTC --depth=1
 ```
 
-#### kompilacja linaro 7.3 - niesprawdzona do kompilacji całego androida
+#### kompilacja linaro 7.3 - kernel nie zbootował
 ```
 ## kontener z ubuntu
 systemctl start lxd
