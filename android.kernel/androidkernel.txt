@@ -70,12 +70,14 @@ make O=out -j$(nproc --all)
 ```
 
 # Inne odnosniki:
- - https://forum.xda-developers.com/android/software/guide-easy-kernel-building-tutorial-t3581057
  - https://forum.xda-developers.com/android/software-hacking/reference-how-to-compile-android-kernel-t3627297
+ - https://forum.xda-developers.com/android/software/guide-easy-kernel-building-tutorial-t3581057
  - https://forum.xda-developers.com/galaxy-s6/general/guide-how-to-build-samsung-kernel-july-t3429355
  - https://forum.xda-developers.com/chef-central/android/guide-how-to-build-android-kernel-t3654336
  - https://android.googlesource.com
  - https://source.codeaurora.org/quic/la
+ - https://forum.xda-developers.com/android/development/toolchains-gnu-linaro-5th-2017-t3606941
+ - https://github.com/nathanchance/build-tools-gcc
  - https://androidmodguide.blogspot.com/p/blog-page.html
  - https://jsteward.moe/category/gsoc-2018.html
  - http://xdshao.com/2018/04/10/Android-exploitation-Kernel-stack-buffer-overflow/
