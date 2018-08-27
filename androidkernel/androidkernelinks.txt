@@ -20,11 +20,8 @@ export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/gcc-prebuil
 ```
 
 
-### Kompilacja własnego toolchaina UBERTC gcc
+### Sprawdzony - skompilowany własny toolchain UBERTC gcc
 ```
-git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
-git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
-#lub kompilujemy własny UBER toolchain
 mkdir UBERTC && cd UBERTC
 repo init -u https://github.com/UBERTC/uber-manifest.git -b master
 repo sync
@@ -62,7 +59,10 @@ cp ./arch/arm/boot/dtb ../AnyKernel2G3/kernel_files/dtb-d855
 cp ./arch/arm/boot/zImage ../AnyKernel2G3/kernel_files/zImage-d855
 cd ../AnyKernel2G3
 zip -r9 d855UberKernel.zip * -x .git
+```
 
+### Inne opcje kompilacji i przeładowania fastbootem, a nie TWRP
+```
 ### wersja z oddzielnym katalogiem out dla poszczególnych wersji urządzenia
 mkdir -p out
 make O=out clean && make O=out mrproper && make O=out lineageos_d855_defconfig
@@ -134,13 +134,4 @@ git clone -b arm-linaro-7.x --depth=1 https://github.com/nathanchance/gcc-prebui
 ```
 git clone https://github.com/USA-RedDragon/prebuilts_clang_host_linux-x86_7.0-DragonTC prebuilts/clang/host/linux-x86/clang7.0-DragonTC --depth=1
 ```
-### kompilujemy UBER toolchain
-```
-mkdir UBER && cd UBER
-repo init -u https://github.com/UBERTC/uber-manifest.git -b master
-repo sync
-cd scripts
-#wybieramy z kilku wersji
-./arm-linux-androideabi-4.9
-#skompilowany toolchain w katalogu out
-```
+
