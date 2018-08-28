@@ -187,3 +187,4 @@ repo init -u git://github.com/LiquidRemix/android_manifest.git -b oc-mr2
  - https://github.com/crdroidandroid/crdroid_build
  - https://android-review.googlesource.com/
  - http://gerrit.aospextended.com
+ - https://review.lineageos.org
