@@ -102,6 +102,7 @@ brunch i9152
 ```
 
 # Inne odnośniki
+ - http://blog.udinic.com/2014/06/04/aosp-part-2-build-variants/
  - https://www.lineageosrom.com/2017/01/how-to-build-lineageos-rom-for-any.html
  - https://forum.xda-developers.com/chef-central/android/how-to-build-lineageos-14-1-t3551484
  - https://forum.xda-developers.com/galaxy-mega/development/rom-resurrection-remix-nougat-v5-8-1-t3558468
