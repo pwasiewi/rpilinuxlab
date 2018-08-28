@@ -188,3 +188,4 @@ repo init -u git://github.com/LiquidRemix/android_manifest.git -b oc-mr2
  - https://android-review.googlesource.com/
  - http://gerrit.aospextended.com
  - https://review.lineageos.org
+ - https://gerrit.aicp-rom.com
