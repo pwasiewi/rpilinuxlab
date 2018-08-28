@@ -23,7 +23,7 @@ export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/gcc-prebuil
 ```
 mkdir UBERTC && cd UBERTC
 repo init -u https://github.com/UBERTC/uber-manifest.git -b master
-repo sync
+repo sync -j4
 cd scripts
 #wybieramy z kilku wersji np.
 ./arm-linux-androideabi-4.9
