@@ -11,7 +11,7 @@ git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/
 export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9/bin/arm-eabi-
 ```
 
-### Sprawdzony linaro gcc 7.1 toolchain z 2017
+### Sprawdzony linaro gcc 7.2 toolchain z 2017
 #### https://forum.xda-developers.com/android/development/toolchains-gnu-linaro-5th-2017-t3606941
 ##### https://github.com/nathanchance/gcc-prebuilts
 ```
