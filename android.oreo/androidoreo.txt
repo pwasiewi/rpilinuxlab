@@ -172,6 +172,18 @@ repo init -u git://github.com/LiquidRemix/android_manifest.git -b oc-mr2
 </manifest>
 ```
 
+## Inne kompilacje np. dla wielu wariantów LG G3
+```
+for i in d850 d851 d852 d855 f400 g3ds ls990 vs985; do
+ make clean;
+ time repo sync  -f --force-sync --no-clone-bundle -j16;
+ export LC_ALL=C
+ . build/envsetup.sh;
+ lunch aicp_$i-userdebug;
+ time make bacon -j16;
+ mv out/target/product/${i}/aicp_${i}_o-13.1-UNOFFICIAL-* ..;
+done
+```
 
 # Inne odnośniki
  - https://github.com/UBERTC/uber-manifest/tree/master
