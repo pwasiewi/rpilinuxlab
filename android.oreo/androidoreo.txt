@@ -66,8 +66,8 @@ repo sync  -f --force-sync --no-clone-bundle -j$(nproc --all)
 
 #### Sprawdzam, czy trzeba zmnienić lineage.mk, jeśli kompiluje RR, a mam sterowniki z Lineage
 ```
-# mv ./device/lge/d855/lineage.mk ./device/lge/d855/rr.mk
-# sed -i 's/lineage/rr/g' ./device/lge/d855/rr.mk
+mv ./device/lge/d855/liquid.mk ./device/lge/d855/rr.mk
+sed -i 's/liquid/rr/g' ./device/lge/d855/rr.mk
 ```
 
 #### Python musi być w wersji 2.7
