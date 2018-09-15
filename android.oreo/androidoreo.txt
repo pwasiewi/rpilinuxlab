@@ -49,7 +49,7 @@ repo init -u https://github.com/ResurrectionRemix/platform_manifest.git -b oreo 
         <!-- Kernel -->
         <project path="kernel/lge/g3" name="LiquidRemix-Devices/android_kernel_lge_g3" remote="github" revision="oc-mr2" />
         <!-- Vendor -->
-        <project path="vendor/lge" name="itsHardStyl3r/vendor_rebase" remote="github" revision="lineage-15.1" />
+        <project path="vendor/lge" name="42n4/vendor_rebase" remote="github" revision="lineage-15.1" />
         <!-- Dependencies -->
         <project path="device/qcom/common" name="LineageOS/android_device_qcom_common" remote="github" revision="lineage-15.1" />
 </manifest>
@@ -166,7 +166,7 @@ repo init -u git://github.com/LiquidRemix/android_manifest.git -b oc-mr2
         <!-- Kernel -->
         <project path="kernel/lge/g3" name="LiquidRemix-Devices/android_kernel_lge_g3" remote="github" revision="oc-mr2" />
         <!-- Vendor -->
-        <project path="vendor/lge" name="itsHardStyl3r/vendor_rebase" remote="github" revision="lineage-15.1" />
+        <project path="vendor/lge" name="42n4/vendor_rebase" remote="github" revision="lineage-15.1" />
         <!-- Dependencies -->
         <project path="device/qcom/common" name="LineageOS/android_device_qcom_common" remote="github" revision="lineage-15.1" />
 </manifest>
