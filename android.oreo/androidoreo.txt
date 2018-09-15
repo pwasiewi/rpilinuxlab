@@ -82,7 +82,7 @@ export LC_ALL=C
 #### Generuje OTA z nazwą romu i archiwami, gdzie wrzuca się kopie skompilowanego systemu
 ##### https://github.com/ResurrectionRemix/packages_apps_ResurrectionOTA
 
-#### Podmieniam gcc na UBER gcc (można podmienić na inny lub nowszy własny skompilowany UBER toolchain zmieniając konfig w *build/envsetup.sh*)
+#### (OPCJONALNIE) Podmieniam gcc na UBER gcc (można podmienić na inny lub nowszy własny skompilowany UBER toolchain zmieniając konfig w *build/envsetup.sh*)
 ```
 git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
 git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
