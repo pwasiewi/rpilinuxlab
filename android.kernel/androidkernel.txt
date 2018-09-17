@@ -29,7 +29,7 @@ cd scripts
 ./arm-linux-androideabi-4.9
 ./arm-eabi-4.9
 #skompilowany toolchain z katalogu UBERTC/out kopiujemy do prebuilts/gcc/linux-x86/arm/ usuwając poprzednie wersje 
-export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-eabi-4.9
+export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/prebuilts/gcc/linux-x86/arm/arm-eabi-4.9/bin/arm-eabi-
 ```
 
 
