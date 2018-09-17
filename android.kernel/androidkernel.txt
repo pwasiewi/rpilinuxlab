@@ -66,16 +66,21 @@ zip -r9 d855UberKernel.zip * -x .git
 ### Inne opcje kompilacji
 ```
 ### wersja z oddzielnym katalogiem out dla poszczególnych wersji urządzenia
-for i in d850 d851 d852 d855 f400 g3ds ls990 vs985; do
- export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/../gcc-prebuilts/bin/arm-linaro-linux-androideabi-
+for i in d850 d851 d852 d855 f400 dualsim ls990 vs985; do
+ export ARCH=arm && export SUBARCH=arm && export CROSS_COMPILE=$(pwd)/../prebuilts/gcc/linux-x86/arm/arm-eabi-4.9/bin/arm-eabi-
  mkdir -p $i;
  make O=$i clean && make O=$i mrproper && make O=$i lineageos_${i}_defconfig
  make O=$i -j$(nproc --all)
  cp ../android_system_tools_dtbtool/dtbtool $i
  cd $i
  ./dtbtool -2 -o ./arch/arm/boot/dtb -s 2048 -p ./scripts/dtc/ ./arch/arm/boot/
- cp ./arch/arm/boot/dtb ../../AnyKernel2G3/kernel_files/dtb-${i}
- cp ./arch/arm/boot/zImage ../../AnyKernel2G3/kernel_files/zImage-${i}
+ if [ $i == "dualsim" ]; then
+  cp ./arch/arm/boot/dtb ../../AnyKernel2G3/kernel_files/dtb-d856
+  cp ./arch/arm/boot/zImage ../../AnyKernel2G3/kernel_files/zImage-d856
+ else
+  cp ./arch/arm/boot/dtb ../../AnyKernel2G3/kernel_files/dtb-${i}
+  cp ./arch/arm/boot/zImage ../../AnyKernel2G3/kernel_files/zImage-${i}
+ fi
  cd ..
 done
 ```
