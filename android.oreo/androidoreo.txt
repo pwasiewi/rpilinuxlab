@@ -18,7 +18,7 @@ potem zwykłych uzytkowników z forum np. xda.
 
 
 # Kompilacja Androida Oreo *ResurrectionRemix* dla LG G3
-##### https://github.com/ResurrectionRemix/platform_manifest/tree/oreo
+##### https://github.com/ResurrectionRemix/platform_manifest/tree/oreo - sprwadź czy masz zainstalowane potrzebne programy do kompilacji
 ##### https://github.com/G3-Development/local_manifests
 
 ### Inicjuje archiwum Androida Oreo 
