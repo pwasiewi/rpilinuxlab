@@ -85,6 +85,22 @@ for i in d850 d851 d852 d855 f400 dualsim ls990 vs985; do
 done
 ```
 
+### Porównywanie kerneli poprzez git-a
+```
+git clone https://github.com/ppajda/kernel_g3.git -b los-15.1 g3k3rn3l
+cd g3k3rn3l/
+git remote add artx https://github.com/Artx-II/ultra_kernel_lge_g3.git
+git fetch artx
+git remote add gamma https://github.com/oxavelar/D85X-Kernel-Gamma.git
+git fetch gamma
+git checkout -b gammatest gamma/lineage-15.1
+git checkout -b xtdtest origin/los-15.1
+git checkout -b artxtest artx/oreo2
+# podaje patche nie wchodzące do wspólnej części (common) (eliminuje duplikaty cherry-pickowane)
+git log  --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit --cherry-pick --left-right xtdtest...artxtest
+# do przenoszenia patchy pomiędzy kernelami użyć można **git cherry-pick** oraz **git rebase**
+```
+
 # Inne odnosniki:
  - https://forum.xda-developers.com/android/software-hacking/reference-how-to-compile-android-kernel-t3627297
  - [cherry pick and merge](https://forum.xda-developers.com/showthread.php?t=2763236)
