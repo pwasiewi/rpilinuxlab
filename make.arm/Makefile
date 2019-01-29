@@ -12,11 +12,11 @@ HERE=$(PWD)
 # | Wersje 
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.29.2
-BUSYBOX_MD5=46617af37a39579711d8b36f189cdf1e
+BUSYBOX_VER=1.30.0
+BUSYBOX_MD5=648bab2ee71e8f98ec535ac05d4b024d
 
-KERNEL_VER=4.18.5
-KERNEL_MD5=22851fe6c82db6673a844bbb7c62df67
+KERNEL_VER=4.20.5
+KERNEL_MD5=0d497f389e8860e887f73f5eda85c40d
 
 # +------------------------------------------------------------
 # | Architektura
@@ -115,7 +115,7 @@ src:	src/busybox src/kernel
 	exit
 
 /usr/bin/arm-softfloat-linux-gnueabi-gcc:
-	@USE="-fortran" crossdev --target arm-softfloat-linux-gnueabi --gcc 8.2.0-r2 --libc 2.27-r6 --kernel 4.18.5 -oO /usr/portage
+	@USE="-fortran" crossdev --target arm-softfloat-linux-gnueabi --gcc 8.2.0-r6 --libc 2.28-r5 --kernel 4.20.5 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
