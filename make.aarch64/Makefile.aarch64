@@ -207,8 +207,8 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
-	qemu-system-aarch64 -M raspi3 -cpu cortex-a53 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2710-rpi-3-b.dtb 
-	#qemu-system-aarch64 -M raspi3 -cpu cortex-a53 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2710-rpi-3-b.dtb -append "console=ttyAMA0 init=/init" -serial stdio
+	#qemu-system-aarch64 -M raspi3 -cpu cortex-a53 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2710-rpi-3-b.dtb 
+	qemu-system-aarch64 -M raspi3 -cpu cortex-a53 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2710-rpi-3-b.dtb -append "console=ttyAMA0 init=/init" -serial stdio
 
 # +------------------------------------------------------------
 # | Administracyjne
