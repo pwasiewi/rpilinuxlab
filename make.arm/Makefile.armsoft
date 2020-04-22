@@ -72,7 +72,7 @@ $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.xz:
 	@echo "$(KERNEL_MD5)  $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.xz" > $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).md5
 	@if ! md5sum -c --quiet $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).md5; then \
 	    echo "Pobieranie linux-$(KERNEL_VER).tar.xz"; \
-	    wget -O $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.xz http://www.kernel.org/pub/linux/kernel/v4.x/linux-$(KERNEL_VER).tar.xz; \
+	    wget -O $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.xz http://www.kernel.org/pub/linux/kernel/v5.x/linux-$(KERNEL_VER).tar.xz; \
 	fi
 	touch $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.xz
 
