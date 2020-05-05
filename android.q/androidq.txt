@@ -76,6 +76,8 @@ chmod 755 /usr/local/bin/repo
 cd ~/android/havoc
 # repo init -u git://github.com/LineageOS/android.git -b lineage-17.1
 ln -sfn /usr/bin/python3 /usr/bin/python
+git config --global user.email "you@example.com"
+git config --global user.name "Your Name"
 repo init -u https://github.com/Havoc-OS/android_manifest.git -b ten
 ```
 
