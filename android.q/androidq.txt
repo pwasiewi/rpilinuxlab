@@ -75,6 +75,7 @@ curl http://commondatastorage.googleapis.com/git-repo-downloads/repo > /usr/loca
 chmod 755 /usr/local/bin/repo
 cd ~/android/havoc
 # repo init -u git://github.com/LineageOS/android.git -b lineage-17.1
+ln -sfn /usr/bin/python3 /usr/bin/python
 repo init -u https://github.com/Havoc-OS/android_manifest.git -b ten
 ```
 
