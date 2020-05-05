@@ -117,7 +117,8 @@ src:	src/busybox src/kernel
 
 /usr/bin/armv7a-hardfloat-linux-gnueabi-gcc:
 	#@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.4.0 --libc 2.28-r5 --kernel 4.20.5 -oO /usr/portage
-	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi --gcc 7.4.0-r2 --libc 2.29-r7 --kernel 4.19.115 -oO /usr/portage
+	#@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi --gcc 7.4.0-r2 --libc 2.29-r7 --kernel 4.19.115 -oO /usr/portage
+	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi --gcc 9.3.0 --libc 2.30-r8 --kernel 4.19.115 -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev

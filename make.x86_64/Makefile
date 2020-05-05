@@ -162,6 +162,7 @@ busyboxconf:	$(BIN_BUSYBOX)/.config
 $(BIN_BUSYBOX)/busybox: $(BIN_BUSYBOX)/.config
 	@sed -i "s:.*CONFIG_PREFIX=.*:CONFIG_PREFIX=\"$(INITRD_DIR)\":" $(BIN_BUSYBOX)/.config
 	@sed -i "s:.*CONFIG_CROSS_COMPILER_PREFIX=.*:CONFIG_CROSS_COMPILER_PREFIX=\"\":" $(BIN_BUSYBOX)/.config
+	#@sed -i "s:.*CONFIG_CROSS_COMPILER_PREFIX=.*:CONFIG_CROSS_COMPILER_PREFIX=\"arm-softfloat-linux-gnueabi-\":" $(BIN_BUSYBOX)/.config
 	@sed -i "s/# CONFIG_STATIC is not set/CONFIG_STATIC=y/g" $(BIN_BUSYBOX)/.config
 	@cd $(BIN_BUSYBOX) \
 	 && make ARCH=$(ARCH)  $(MULTICPU) 
@@ -204,7 +205,7 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
-	qemu-system-x86_64 -m 2048 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -append "init=/init" 
+	qemu-system-x86_64 --enable-kvm -m 4048 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -append "init=/init" 
 	#qemu-system-x86_64 --enable-kvm -m 2048 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -nographic -append "console=ttyS0" -serial stdio
 
 # +------------------------------------------------------------

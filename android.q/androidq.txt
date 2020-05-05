@@ -1,0 +1,166 @@
+# Intro
+
+*Android* to system napisany w Javie z kernelem z Linuxa, każdy program jest
+uzytkownikiem i ma prawa do pewnych grup np. video oraz kernel ma rozbudowaną
+komunikację między programami.
+
+*Stock* to system fabrycznie przygotowany i sprzedawany z telefonem (a także
+kolejne updaty tego systemu).
+
+*Root* to modyfikacja systemu Android "usuwająca" hasło z roota i pozwalająca na
+korzystanie z jego uprawnień aplikacjom czyszczącym cache, poprawiającym
+wydajność lub monitorującym działanie kernela Linuxa.
+
+*AOSP, Lineage* i liczne mutacje typu *ResurrectionRemix, cDroid* to systemy
+powstałe w oparciu o źródła zmodyfikowanego kernela ze stocka oraz najnowszy
+system google dostosowany do urządzeń przez grupy programistów typu *Lineage*, a
+potem zwykłych uzytkowników z forum np. xda.
+
+
+# Kompilacja Androida Q Lineage 17.1 dla LG G3
+##### https://github.com/LineageOS/android - sprawdź czy masz zainstalowane potrzebne programy, biblioteki do kompilacji
+##### https://wiki.lineageos.org/devices/h870/build
+##### https://github.com/LG-G6-DEV/local_manifests
+
+### Inicjuje archiwum Androida Q
+#### Wymagane około **140GB** na pełne archiwum bez opcji --depth=1 
+#### (126GB zajęła jedna kompilacja bez ccache, które zabiera dodatkowe 140GB)
+#### *Kompilacja trwa około 70 min na 4 rdzeniowym i7 z turbo trybem Asus*
+
+#### Zakładamy kontener, który będzie w katalogu /var/lib/lxd
+```
+systemctl start lxd
+lxd init
+# Would you like to use LXD clustering? (yes/no) [default=no]: 
+# Do you want to configure a new storage pool? (yes/no) [default=yes]: 
+# Name of the new storage pool [default=default]: 
+# Name of the storage backend to use (btrfs, dir, lvm) [default=btrfs]: 
+# Would you like to create a new btrfs subvolume under /var/lib/lxd? (yes/no) [default=yes]: 
+# Would you like to connect to a MAAS server? (yes/no) [default=no]: 
+# Would you like to create a new local network bridge? (yes/no) [default=yes]: 
+# What should the new bridge be called? [default=lxdbr0]: 
+# What IPv4 address should be used? (CIDR subnet notation, “auto” or “none”) [default=auto]: 
+# What IPv6 address should be used? (CIDR subnet notation, “auto” or “none”) [default=auto]: none
+# Would you like LXD to be available over the network? (yes/no) [default=no]: yes
+# Address to bind LXD to (not including port) [default=all]: 
+# Port to bind LXD to [default=8443]: 
+# Trust password for new clients: 
+# Again: 
+# Would you like stale cached images to be updated automatically? (yes/no) [default=yes] 
+# Would you like a YAML "lxd init" preseed to be printed? (yes/no) [default=no]: 
+lxc remote add images https://images.linuxcontainers.org
+lxc image list images:
+lxc launch images:ubuntu/18.04 myubuntu
+lxc list
+lxc exec myubuntu /bin/bash
+```
+
+#### Teraz wewnątrz kontenera lxc/lxd uruchamiamy kompilację
+##### https://wiki.lineageos.org/devices/h870/build
+```
+apt update
+apt install -y wget bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
+wget https://dl.google.com/android/repository/platform-tools-latest-linux.zip
+unzip platform-tools-latest-linux.zip -d ~
+# ln -sfn $HOME/platform-tools/adb /usr/local/bin/adb
+cat > ~/.profile << 'EOF'
+# add Android SDK platform tools to path
+if [ -d "$HOME/platform-tools" ] ; then
+    PATH="$HOME/platform-tools:$PATH"
+fi
+EOF
+source ~/.profile
+mkdir -p ~/android/havoc
+curl http://commondatastorage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+chmod 755 /usr/local/bin/repo
+cd ~/android/havoc
+# repo init -u git://github.com/LineageOS/android.git -b lineage-17.1
+repo init -u https://github.com/Havoc-OS/android_manifest.git -b ten
+```
+### Dodaję odpowiednie części firmowe binarne Androida systemu przez np. recovery
+#### np. modem z wersji 21C działa z wszystkimi nie stockowymi systemami
+##### https://forum.xda-developers.com/lg-g3/general/radio-modem-lg-g3-t3110376
+
+### Tworzę local_manifests z dopracowanymi sterownikami konkretnego modelu komórki
+```
+# add this xml config to file ~/android/havoc/.repo/local_manifests/roomservice.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <project name="LG-G6-DEV/android_device_lge_us997" path="device/lge/us997" remote="github" revision="lineage-17.0" />
+  <project name="LG-G6-DEV/android_device_lge_h872" path="device/lge/h872" remote="github" revision="lineage-17.0" />
+  <project name="LG-G6-DEV/android_device_lge_h870" path="device/lge/h870" remote="github" revision="lineage-17.0" />
+  <project name="LG-G6-DEV/android_device_lge_g6-common" path="device/lge/g6-common" remote="github" revision="lineage-17.0" />
+  <project name="LG-G6-DEV/android_device_lge_msm8996-common" path="device/lge/msm8996-common" remote="github" revision="lineage-17.0" />
+  <project name="LG-G6-DEV/lge_msm8996" path="kernel/lge/msm8996" remote="github" revision="LA.UM.7.5.r1-04800-8x96.0" />
+  <project name="LG-G6-DEV/proprietary_vendor_lge" path="vendor/lge" remote="github" revision="lineage-17.0" />
+</manifest>
+```
+
+### Ściągam wskazane w local_manifests dodatkowe sterowniki wraz z całym kodem Androida
+```
+repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+```
+#### Ustawiam najprostsze LC_ALL 
+export LC_ALL=C
+
+#### Gentoo: Ustawiam python2.7 do plik /etc/python-exec/python-exec.conf
+eselect python set python2.7 
+
+#### Gentoo: Instaluję ncurses z ABI 5
+emerge sys-libs/ncurses-compat # np. tak na Gentoo Linux 
+
+#### Generuje OTA z nazwą romu i archiwami, gdzie wrzuca się kopie skompilowanego systemu
+##### https://github.com/ResurrectionRemix/packages_apps_ResurrectionOTA
+
+#### (OPCJONALNIE) Podmieniam gcc na UBER gcc (można podmienić na inny lub nowszy własny skompilowany UBER toolchain zmieniając konfig w *build/envsetup.sh*)
+```
+git clone https://bitbucket.org/UBERTC/arm-linux-androideabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-UB-4.9
+git clone https://bitbucket.org/UBERTC/arm-eabi-4.9.git prebuilts/gcc/linux-x86/arm/arm-linux-eabi-UB-4.9
+#lub kompilujemy własny UBER toolchain
+mkdir UBERTC && cd UBERTC
+repo init -u https://github.com/UBERTC/uber-manifest.git -b master
+repo sync
+cd scripts
+#wybieramy z kilku wersji np.
+./arm-linux-androideabi-4.9
+./arm-eabi-4.9
+#skompilowany toolchain z katalogu UBERTC/out kopiujemy do prebuilts/gcc/linux-x86/arm/ usuwając poprzednie wersje 
+#w pliku: build/envsetup.sh
+#podmieniamy linię z wyrażeniem "toolchaindir=arm" np. na:
+        arm) toolchaindir=arm/arm-linux-androideabi-4.9/bin
+#lub
+        arm) toolchaindir=arm/arm-linux-androideabi-UB-4.9/bin
+#lub
+        arm) toolchaindir=arm/arm-linaro-7.2/bin
+```
+
+### Kompiluję wybraną wersję Androida RR
+```
+. build/envsetup.sh && brunch h870
+cd ./out/target/product/<devicename>/
+```
+
+### W razie porażki usuwam kompilację i robię sync od nowa, jeśli usunąłem katalogi z poprzednimi dodatkowymi sterownikami, czy kernelem z local_manifests
+```
+make clean
+repo sync --no-clone-bundle --no-tags -j$(nproc --all)
+. build/envsetup.sh
+brunch h870
+#lunch lineage_h870-userdebug && time make bacon -j16
+```
+
+# Inne odnośniki
+ - https://github.com/UBERTC/uber-manifest/tree/master
+ - https://forum.xda-developers.com/android/software/toolchain-uber-toolchains-t3527997
+ - https://forum.xda-developers.com/chef-central/android/guide-switching-to-custom-toolchain-t2927662
+ - https://github.com/nathanchance/gcc-prebuilts/
+ - https://github.com/USA-RedDragon
+ - https://forum.xda-developers.com/android/software-hacking/llvm-clang-dragontc-future-t3318386
+ - https://www.codeaurora.org/project/android-for-msm
+ - https://github.com/crdroidandroid/crdroid_build
+ - https://android-review.googlesource.com/
+ - http://gerrit.aospextended.com
+ - https://gerrit.aicp-rom.com
+ - https://review.lineageos.org
+ - https://wiki.lineageos.org/devices/h870/build
+ - https://github.com/LG-G6-DEV/local_manifests
