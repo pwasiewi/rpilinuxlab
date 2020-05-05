@@ -100,14 +100,6 @@ repo init -u https://github.com/Havoc-OS/android_manifest.git -b ten
 ```
 repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 ```
-#### Ustawiam najprostsze LC_ALL 
-export LC_ALL=C
-
-#### Gentoo: Ustawiam python2.7 do plik /etc/python-exec/python-exec.conf
-eselect python set python2.7 
-
-#### Gentoo: Instaluję ncurses z ABI 5
-emerge sys-libs/ncurses-compat # np. tak na Gentoo Linux 
 
 #### Generuje OTA z nazwą romu i archiwami, gdzie wrzuca się kopie skompilowanego systemu
 ##### https://github.com/ResurrectionRemix/packages_apps_ResurrectionOTA
@@ -143,7 +135,7 @@ cd ./out/target/product/<devicename>/
 ### W razie porażki usuwam kompilację i robię sync od nowa, jeśli usunąłem katalogi z poprzednimi dodatkowymi sterownikami, czy kernelem z local_manifests
 ```
 make clean
-repo sync --no-clone-bundle --no-tags -j$(nproc --all)
+repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 . build/envsetup.sh
 brunch h870
 #lunch lineage_h870-userdebug && time make bacon -j16
