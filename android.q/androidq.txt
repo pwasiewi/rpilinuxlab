@@ -126,7 +126,7 @@ cd scripts
         arm) toolchaindir=arm/arm-linaro-7.2/bin
 ```
 
-### Kompiluję wybraną wersję Androida RR
+### Kompiluję wybraną wersję Androida Q
 ```
 . build/envsetup.sh && brunch h870
 cd ./out/target/product/<devicename>/
