@@ -25,8 +25,8 @@ potem zwykłych uzytkowników z forum np. xda.
 ### Inicjuje archiwum Androida Q 
 #### Wymagane około **140GB** na pełne archiwum bez opcji --depth=1 
 #### Wstępnie w 1h pobiera około 40GB kodu jeśli są opcje --no-clone-bundle --no-tags
-#### (126GB zajęła jedna kompilacja bez ccache, które zabiera dodatkowe 140GB)
-#### *Kompilacja trwa około 70-170 min na 4 rdzeniowym i7 z turbo trybem Asus*
+#### (126GB zajęła jedna kompilacja 40GB kodu bez ccache, które zabiera dodatkowe 140GB)
+#### *Kompilacja trwa około 70-160min na 4 rdzeniowym i7 z turbo trybem Asus*
 
 #### Zakładamy kontener, który będzie w katalogu /var/lib/lxd
 ```
@@ -129,11 +129,11 @@ cd scripts
 ```
 
 ### Kompiluję wybraną wersję Androida Q
+#### eventually remove duplicate entries in e.g. vendor/lge/msm8996-common/msm8996-common-vendor.mk
+#### https://stackoverflow.com/questions/59543058/aosp-error-overriding-commands-for-target-previously-defined-at
 ```
 . build/envsetup.sh && brunch h870
 cd ./out/target/product/<devicename>/
-# remove duplicate entries in e.g. vendor/lge/msm8996-common/msm8996-common-vendor.mk
-# https://stackoverflow.com/questions/59543058/aosp-error-overriding-commands-for-target-previously-defined-at
 ```
 
 ### W razie porażki usuwam kompilację i robię sync od nowa, jeśli usunąłem katalogi z poprzednimi dodatkowymi sterownikami, czy kernelem z local_manifests
