@@ -129,11 +129,12 @@ cd scripts
 ```
 
 ### Kompiluję wybraną wersję Androida Q
-#### eventually remove duplicate entries in e.g. vendor/lge/msm8996-common/msm8996-common-vendor.mk
-#### https://stackoverflow.com/questions/59543058/aosp-error-overriding-commands-for-target-previously-defined-at
+
 ```
 . build/envsetup.sh && brunch h870
-cd ./out/target/product/<devicename>/
+# eventually remove duplicate entries in e.g. vendor/lge/msm8996-common/msm8996-common-vendor.mk
+# https://stackoverflow.com/questions/59543058/aosp-error-overriding-commands-for-target-previously-defined-at
+# after compilation you will find the ready product at ./out/target/product/<devicename>/
 ```
 
 ### W razie porażki usuwam kompilację i robię sync od nowa, jeśli usunąłem katalogi z poprzednimi dodatkowymi sterownikami, czy kernelem z local_manifests
