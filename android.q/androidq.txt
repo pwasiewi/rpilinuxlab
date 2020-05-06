@@ -139,9 +139,7 @@ cd scripts
 
 ### W razie porażki usuwam kompilację i robię sync od nowa, jeśli usunąłem katalogi z poprzednimi dodatkowymi sterownikami, czy kernelem z local_manifests
 ```
-make clean
-repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
-. build/envsetup.sh
+make clean && repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags && . build/envsetup.sh
 brunch h870
 #lunch lineage_h870-userdebug && time make bacon -j16
 ```
