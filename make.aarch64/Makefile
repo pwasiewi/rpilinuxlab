@@ -12,11 +12,11 @@ HERE=$(PWD)
 # | Wersje
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.31.1
-BUSYBOX_MD5=70913edaf2263a157393af07565c17f0
+BUSYBOX_VER=1.35.0
+BUSYBOX_MD5=585949b1dd4292b604b7d199866e9913
 
-KERNEL_VER=raspberrypi-kernel_1.20200212-1
-KERNEL_MD5=4a149026232ad34875318f10415a21fc
+KERNEL_VER=raspberrypi-kernel_1.20220830
+KERNEL_MD5=391cf9b2d87ab81bcbd9c326aff054b8
 
 # +------------------------------------------------------------
 # | Architektura

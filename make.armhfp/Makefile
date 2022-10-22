@@ -12,11 +12,14 @@ HERE=$(PWD)
 # | Wersje
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.31.1
-BUSYBOX_MD5=70913edaf2263a157393af07565c17f0
+BUSYBOX_VER=1.35.0
+BUSYBOX_MD5=585949b1dd4292b604b7d199866e9913
 
-KERNEL_VER=raspberrypi-kernel_1.20200212-1
-KERNEL_MD5=4a149026232ad34875318f10415a21fc
+#KERNEL_VER=6.0.3
+#KERNEL_MD5=17b03d3505493cfe966f131c7aacbc4e 
+#KERNEL_VER=raspberrypi-kernel_1.20220830
+KERNEL_VER=1.20220830
+KERNEL_MD5=391cf9b2d87ab81bcbd9c326aff054b8
 
 # +------------------------------------------------------------
 # | Architektura
@@ -118,7 +121,8 @@ src:	src/busybox src/kernel
 /usr/bin/armv7a-hardfloat-linux-gnueabi-gcc:
 	#@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi  --stable  --gcc 7.4.0 --libc 2.28-r5 --kernel 4.20.5 -oO /usr/portage
 	#@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi --gcc 7.4.0-r2 --libc 2.29-r7 --kernel 4.19.115 -oO /usr/portage
-	@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi --gcc 9.3.0 --libc 2.30-r8 --kernel 4.19.115 -oO /usr/portage
+	#@USE="-fortran nossp" crossdev --target armv7a-hardfloat-linux-gnueabi --gcc 11.3.0 --libc 2.35-r8 --kernel 6.0.3 -oO /usr/portage
+	@USE="static-libs" crossdev -S --target arm-hardfloat-linux-gnueabi -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev

@@ -12,11 +12,11 @@ HERE=$(PWD)
 # | Wersje
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.31.1
-BUSYBOX_MD5=70913edaf2263a157393af07565c17f0
+BUSYBOX_VER=1.35.0
+BUSYBOX_MD5=585949b1dd4292b604b7d199866e9913
 
-KERNEL_VER=5.6.6
-KERNEL_MD5=9de47377c6a0323579392a07a8fade43
+KERNEL_VER=6.0.3
+KERNEL_MD5=17b03d3505493cfe966f131c7aacbc4e 
 
 # +------------------------------------------------------------
 # | Architektura
@@ -135,7 +135,7 @@ $(BIN_KERNEL)/Makefile: $(SRC_KERNEL)/Makefile
 	mkdir -p $(BIN_KERNEL)
 	@cd $(SRC_KERNEL) \
 	&& make O=$(BIN_KERNEL) ARCH=$(ARCH)  defconfig \
-	&& make O=$(BIN_KERNEL) ARCH=$(ARCH)  kvmconfig \
+	&& make O=$(BIN_KERNEL) ARCH=$(ARCH)  kvm_guest.config \
 
 $(BIN_BUSYBOX)/Makefile: $(SRC_BUSYBOX)/Makefile
 	@mkdir -p $(BIN_BUSYBOX)
