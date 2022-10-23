@@ -14,7 +14,10 @@ Dodano katalogi z przepisami na kompilacje androida i kerneli.
 
 # Raspberry Pi Lab 
 ## i nie tylko ;) https://wiki.gentoo.org/wiki/Embedded_systems/ARM_hardware_list
-#### Odnośniki https://github.com/pwasiewi/eulinks/tree/master/sw_raspberry
+#### Odnośniki 
+- https://wiki.gentoo.org/wiki/Embedded_Handbook/General/Creating_a_cross-compiler
+- https://wiki.gentoo.org/wiki/User:Jens3/Installing_Gentoo_on_a_Raspberry_Pi_400
+- https://github.com/pwasiewi/eulinks/tree/master/sw_raspberry
 
 1. install Gentoo Linux e.g. from UbuntuLiveDVD https://github.com/pwasiewi/gentools
 2. pull from github: git clone https://github.com/pwasiewi/rpilinuxlab
