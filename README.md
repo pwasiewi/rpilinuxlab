@@ -1,5 +1,5 @@
-# Some laboratory scripts
-For example you can emulate in qemu arm linux and raspberry kernels with busybox as init:
+# Some laboratory scripts to run in Gentoo linux
+For example you can emulate with crossdev and qemu arm linux and raspberry kernels with busybox as init:
 ```
 cd make.armhfp 
 make emulate #raspberry 2b
