@@ -12,11 +12,11 @@ HERE=$(PWD)
 # | Wersje 
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.35.0
-BUSYBOX_MD5=585949b1dd4292b604b7d199866e9913
+BUSYBOX_VER=1.36.1
+BUSYBOX_MD5=0fc591bc9f4e365dfd9ade0014f32561
 
-KERNEL_VER=6.0.3
-KERNEL_MD5=17b03d3505493cfe966f131c7aacbc4e 
+KERNEL_VER=6.6.5
+KERNEL_MD5=528c4c09d2802c2a387b7740550d8a5a
 
 # +------------------------------------------------------------
 # | Architektura
@@ -72,7 +72,7 @@ $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.xz:
 	@echo "$(KERNEL_MD5)  $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.xz" > $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).md5
 	@if ! md5sum -c --quiet $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).md5; then \
 	    echo "Pobieranie linux-$(KERNEL_VER).tar.xz"; \
-	    wget -O $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.xz http://www.kernel.org/pub/linux/kernel/v5.x/linux-$(KERNEL_VER).tar.xz; \
+	    wget -O $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.xz http://www.kernel.org/pub/linux/kernel/v6.x/linux-$(KERNEL_VER).tar.xz; \
 	fi
 	touch $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.xz
 
@@ -204,7 +204,7 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
-	qemu-system-arm -M versatileab -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb bin/kernel/arch/arm/boot/dts/versatile-ab.dtb -append "rdinit=/init" -serial stdio
+	qemu-system-arm -M versatileab -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb bin/kernel/arch/arm/boot/dts/arm/versatile-ab.dtb -append "rdinit=/init" -serial stdio
 
 
 # +------------------------------------------------------------

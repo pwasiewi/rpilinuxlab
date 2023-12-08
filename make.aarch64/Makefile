@@ -12,11 +12,11 @@ HERE=$(PWD)
 # | Wersje
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.35.0
-BUSYBOX_MD5=585949b1dd4292b604b7d199866e9913
+BUSYBOX_VER=1.36.1
+BUSYBOX_MD5=0fc591bc9f4e365dfd9ade0014f32561
 
-KERNEL_VER=raspberrypi-kernel_1.20220830
-KERNEL_MD5=391cf9b2d87ab81bcbd9c326aff054b8
+KERNEL_VER=stable_20231123
+KERNEL_MD5=8b646b69cfe2f5104e19ef25a82908a4
 
 # +------------------------------------------------------------
 # | Architektura
@@ -29,7 +29,7 @@ CROSS_COMPILE=aarch64-unknown-linux-gnu-
 # | Host -j param
 # +------------------------------------------------------------
 
-MULTICPU=-j10
+MULTICPU=-j16
 
 # +------------------------------------------------------------
 # | Katalogi
@@ -73,7 +73,7 @@ $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.gz:
 	@if ! md5sum -c --quiet $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).md5; then \
 	    echo "Pobieranie linux-$(KERNEL_VER).tar.gz"; \
 	    #wget -O $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.gz http://www.kernel.org/pub/linux/kernel/v4.x/linux-$(KERNEL_VER).tar.gz; \
-	    wget -O $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.gz https://github.com/raspberrypi/linux/archive/$(KERNEL_VER).tar.gz; \
+	    wget -O $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.gz https://github.com/raspberrypi/linux/archive/refs/tags/$(KERNEL_VER).tar.gz; \
 	fi
 	touch $(DOWNLOAD_DIR)/linux-$(KERNEL_VER).tar.gz
 
@@ -117,8 +117,8 @@ src:	src/busybox src/kernel
 
 /usr/bin/aarch64-unknown-linux-gnu-gcc:
 	#crossdev -C aarch64-unknown-linux-gnu -f
-	#@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnu --stable --kernel 4.16.12 -oO /usr/portage
-	@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnu --gcc 7.4.0-r2 --libc 2.29-r7 --kernel 4.19.115 -oO /usr/portage
+	#@USE="-fortran nossp" crossdev --target aarch64-unknown-linux-gnu --gcc 7.4.0-r2 --libc 2.29-r7 --kernel 4.19.115 -oO /usr/portage
+	@USE="static-libs" crossdev -S --target aarch64-unknown-linux-gnu -oO /usr/portage
 
 /usr/bin/crossdev:
 	@emerge -av crossdev
@@ -207,8 +207,7 @@ $(EMUL_DIR)/initrd:	$(INITRD_DIR)/bin/busybox $(wildcard $(INITRD_DIR)/bin/*) $(
 # +------------------------------------------------------------
 
 emulate: $(EMUL_DIR)/vmlinuz $(EMUL_DIR)/initrd
-	#qemu-system-aarch64 -M raspi3 -cpu cortex-a53 -m 256 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2710-rpi-3-b.dtb 
-	qemu-system-aarch64 -M raspi3 -cpu cortex-a53 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2710-rpi-3-b.dtb -append "console=ttyAMA0 init=/init" -serial stdio
+	qemu-system-aarch64 -M raspi3b -cpu cortex-a53 -kernel $(EMUL_DIR)/vmlinuz -initrd $(EMUL_DIR)/initrd -dtb ./dtb/bcm2837-rpi-3-b.dtb -append "console=ttyAMA0 init=/init" -serial stdio
 
 # +------------------------------------------------------------
 # | Administracyjne

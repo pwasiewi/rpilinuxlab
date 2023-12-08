@@ -12,11 +12,11 @@ HERE=$(PWD)
 # | Wersje
 # +------------------------------------------------------------
 
-BUSYBOX_VER=1.35.0
-BUSYBOX_MD5=585949b1dd4292b604b7d199866e9913
+BUSYBOX_VER=1.36.1
+BUSYBOX_MD5=0fc591bc9f4e365dfd9ade0014f32561
 
-KERNEL_VER=6.0.3
-KERNEL_MD5=17b03d3505493cfe966f131c7aacbc4e 
+KERNEL_VER=6.6.5
+KERNEL_MD5=528c4c09d2802c2a387b7740550d8a5a
 
 # +------------------------------------------------------------
 # | Architektura
@@ -161,8 +161,8 @@ busyboxconf:	$(BIN_BUSYBOX)/.config
 
 $(BIN_BUSYBOX)/busybox: $(BIN_BUSYBOX)/.config
 	@sed -i "s:.*CONFIG_PREFIX=.*:CONFIG_PREFIX=\"$(INITRD_DIR)\":" $(BIN_BUSYBOX)/.config
+	#@sed -i "s:.*CONFIG_CROSS_COMPILER_PREFIX=.*:CONFIG_CROSS_COMPILER_PREFIX=\"\":" $(BIN_BUSYBOX)/.config
 	@sed -i "s:.*CONFIG_CROSS_COMPILER_PREFIX=.*:CONFIG_CROSS_COMPILER_PREFIX=\"\":" $(BIN_BUSYBOX)/.config
-	#@sed -i "s:.*CONFIG_CROSS_COMPILER_PREFIX=.*:CONFIG_CROSS_COMPILER_PREFIX=\"arm-softfloat-linux-gnueabi-\":" $(BIN_BUSYBOX)/.config
 	@sed -i "s/# CONFIG_STATIC is not set/CONFIG_STATIC=y/g" $(BIN_BUSYBOX)/.config
 	@cd $(BIN_BUSYBOX) \
 	 && make ARCH=$(ARCH)  $(MULTICPU) 
