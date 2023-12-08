@@ -10,6 +10,18 @@ make emulate #raspberry 3b
 cd make.arm
 make emulate #arm linux kernel
 ```
+
+To create cross-compiling env install qemu then:
+```
+crossdev -S --target aarch64-unknown-linux-gnu -oO /usr/portage
+systemctl restart systemd-binfmt
+
+aarch64-unknown-linux-gnu-gcc -static -o test64 test.c
+./test64
+aarch64-unknown-linux-gnu-gcc -o test64dyn test.c
+qemu-aarch64 -L /usr/aarch64-unknown-linux-gnu/ ./test64dyn
+```
+
 # AndroidModLab
 ### Własne kompilacje androida i jego kernela 
 Aby zainstalować skompilowany kernel i system najpierw trzeba umieć zrootować telefon i zainstalować TWRP- uwaga ryzykowna operacja - uzywać metod i plików sprawdzonych najlepiej na forum xda <https://forum.xda-developers.com> lub android polska ma odnośniki do xda i komentarze <https://forum.android.com.pl/>.
