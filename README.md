@@ -18,8 +18,12 @@ systemctl restart systemd-binfmt
 
 aarch64-unknown-linux-gnu-gcc -static -o test64 test.c
 ./test64
+file ./test64
+# ./test64: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, for GNU/Linux 3.7.0, with debug_info, not stripped
 aarch64-unknown-linux-gnu-gcc -o test64dyn test.c
 qemu-aarch64 -L /usr/aarch64-unknown-linux-gnu/ ./test64dyn
+file ./test64dyn
+# ./test64dyn: ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0, not stripped
 ```
 
 # AndroidModLab
