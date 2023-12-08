@@ -1,14 +1,14 @@
 # Some laboratory scripts
-For example you can qemu linux arm and raspberry kernels with busybox (init):
+For example you can emulate in qemu arm linux and raspberry kernels with busybox as init:
 ```
-cd make.armhfp
-make emulate
+cd make.armhfp 
+make emulate #raspberry 2b
 
 cd make.aarch64
-make emulate
+make emulate #raspberry 3b
 
 cd make.arm
-make emulate
+make emulate #arm linux kernel
 ```
 # AndroidModLab
 ### Własne kompilacje androida i jego kernela 
