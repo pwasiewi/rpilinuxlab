@@ -77,9 +77,11 @@ RPI_VER=stable_20231123
 RPI_TAR="linux-${RPI_VER}.tar.gz"
 RPI_MD5=8b646b69cfe2f5104e19ef25a82908a4
 RPI_URL="https://github.com/raspberrypi/linux/archive/refs/tags/${RPI_VER}.tar.gz"
-ML_VER=6.6.5
+# 6.6.y LTS: 6.6.5 breaks with gcc >= 15 (C23 bool/false keywords in x86
+# realmode + EFI libstub own-CFLAGS code); 6.6.147 has the -std=gnu11 backports
+ML_VER=6.6.147
 ML_TAR="linux-${ML_VER}.tar.xz"
-ML_MD5=528c4c09d2802c2a387b7740550d8a5a
+ML_MD5=904330c805ce5f196e1036f73fe3d304
 ML_URL="https://www.kernel.org/pub/linux/kernel/v6.x/${ML_TAR}"
 
 # gentoo target knobs
@@ -121,7 +123,10 @@ load_target() {
         DTB_LEGACY="${HERE}/make.aarch64/dtb/bcm2710-rpi-3-b.dtb"
         QEMU_BIN=qemu-system-aarch64
         QEMU_OPTS=(-M raspi3b -cpu cortex-a53 -serial stdio)
-        QEMU_APPEND="console=ttyAMA0 init=/init"
+        # Pi 3 DTB: serial0 = mini-UART (PL011 serves BT), so the PL011 that
+        # qemu wires to -serial registers as ttyAMA1 — ttyAMA0 doesn't exist
+        # and /init exits consoleless (panic: attempted to kill init)
+        QEMU_APPEND="console=ttyAMA1 init=/init"
         TC_HINT="sudo xarm setup   (or: crossdev -S --target aarch64-unknown-linux-gnu)"
         ;;
     armhfp)
@@ -161,7 +166,9 @@ load_target() {
         KIMAGE=arch/x86/boot/bzImage
         DTB_REL=""; DTB_LEGACY=""
         QEMU_BIN=qemu-system-x86_64
-        QEMU_OPTS=(--enable-kvm -m 4096)
+        # -cpu host: the default qemu64 model lacks the ISA this gcc targets —
+        # a native-built busybox /init dies with SIGILL (kill init, exit 0x4)
+        QEMU_OPTS=(--enable-kvm -cpu host -m 4096)
         QEMU_APPEND="init=/init"
         TC_HINT="native gcc"
         ;;
@@ -322,7 +329,9 @@ cmd_busybox() {
             -e "s:.*CONFIG_PREFIX=.*:CONFIG_PREFIX=\"${INITRD_DIR}\":" \
             -e "s:.*CONFIG_CROSS_COMPILER_PREFIX=.*:CONFIG_CROSS_COMPILER_PREFIX=\"${CROSS}\":" \
             -e "s/# CONFIG_STATIC is not set/CONFIG_STATIC=y/" \
+            -e "s/^CONFIG_TC=y/# CONFIG_TC is not set/" \
             "${BIN_BUSYBOX}/.config"
+        # ^ tc uses CBQ, removed from linux-headers >= 6.8 — build breaks
     fi
     info "Building busybox (-j${JOBS})"
     bmake -j"${JOBS}"
@@ -392,10 +401,39 @@ cmd_stage3() {
     info "stage3 ready: ${DL_DIR}/${tarball}"
 }
 
+img_mount() {
+    mkdir -p "${MNT_DIR}"
+    # mounts under the shared /home tree propagate into sandboxed systemd
+    # services' mount namespaces and can get pinned there: repeated
+    # mount/umount cycles stacked zombie ext4 instances over the image and
+    # corrupted it (2026-07-31) — a private bind underneath stops propagation
+    mount --bind "${MNT_DIR}" "${MNT_DIR}"
+    mount --make-private "${MNT_DIR}"
+    if ! mount -t ext4 -o loop "${IMG}" "${MNT_DIR}"; then
+        umount "${MNT_DIR}"
+        die "Loop mount of ${IMG} failed"
+    fi
+}
+
 img_umount() {
+    # two layers: the loop mount and the private bind under it
     if mountpoint -q "${MNT_DIR}"; then
         umount "${MNT_DIR}" || warn "umount ${MNT_DIR} failed (still busy?)"
     fi
+    if mountpoint -q "${MNT_DIR}"; then
+        umount "${MNT_DIR}" || warn "bind umount ${MNT_DIR} failed"
+    fi
+}
+
+no_stale_loop() {
+    # a zombie loop pinned in another mount namespace = a live ext4 instance
+    # still writing over the image; booting or re-mounting alongside it
+    # corrupts the fs ('(deleted)' entries point at a replaced inode = inert)
+    local l
+    # '|| true': grep exits 1 when only '(deleted)' entries exist — that is
+    # the good case, don't let pipefail+set -e kill the script silently
+    l=$(losetup -j "${IMG}" 2>/dev/null | { grep -v '(deleted)' || true; } | cut -d: -f1 | head -1)
+    [[ -z ${l} ]] || die "Stale loop ${l} still attached to ${IMG} — find the holder (grep -l ${l##*/} /proc/*/mountinfo; nsenter -t PID -m umount -l ${l}) or reboot"
 }
 
 cmd_image() {
@@ -410,12 +448,13 @@ cmd_image() {
         command rm -f "${IMG}"
     fi
 
+    no_stale_loop
     info "Creating ${size} ext4 image"
     truncate -s "${size}" "${IMG}"
     mkfs.ext4 -q -L gentoo "${IMG}"
 
     trap img_umount EXIT INT TERM
-    mount -t ext4 -o loop "${IMG}" "${MNT_DIR}"
+    img_mount
 
     info "Unpacking $(basename "${tarball}")"
     tar xpf "${tarball}" -C "${MNT_DIR}" --xattrs-include='*.*' --numeric-owner
@@ -426,7 +465,10 @@ cmd_image() {
     fi
 
     info "Configuring the guest (LAB: root autologin, empty password)"
-    # serial console login on the -M virt PL011 UART
+    # serial console login on the -M virt PL011 UART; the arm64 stage3 ships
+    # its own getty on ttyAMA0 (f0, 9600 baud) — two agettys on one tty fight
+    # over input and the stock one wins with a password prompt, so disable it
+    sed -i '/--autologin/!s|^[^#].*ttyAMA0|#&|' "${MNT_DIR}/etc/inittab"
     if ! grep -q '^a0:' "${MNT_DIR}/etc/inittab"; then
         echo 'a0:12345:respawn:/sbin/agetty --autologin root --noclear 115200 ttyAMA0 vt100' \
             >> "${MNT_DIR}/etc/inittab"
@@ -443,6 +485,20 @@ cmd_image() {
     else
         warn "stage3 has no dhcpcd — configure guest networking manually"
     fi
+    # qemu-user chroot (gentoo chroot): portage's pid/ipc/network sandboxes
+    # use clone() namespace flags user-mode emulation cannot provide —
+    # emerge dies with 'qemu: qemu_thread_create: Invalid argument'
+    cat >> "${MNT_DIR}/etc/portage/make.conf" <<-'EOF'
+
+	# xlab: namespace sandboxes break under the qemu-user chroot
+	FEATURES="-pid-sandbox -ipc-sandbox -network-sandbox"
+	EOF
+    # the stock gentoobinhost repo ships verify-signature = true, and portage
+    # enables the GPG trust path if ANY binrepo requests it — which then
+    # rejects the unsigned xarm binpkgs ('GnuPG verification failed'); the
+    # warning it prints misleadingly blames FEATURES=binpkg-request-signature
+    sed -i 's/^verify-signature = true/verify-signature = false/' \
+        "${MNT_DIR}/etc/portage/binrepos.conf/"*.conf
     # xarm binhost: 10.0.2.2 is the host as seen from qemu user-mode net;
     # start 'sudo xarm binhost' on the host, then in the guest:
     # emerge --getbinpkg --usepkg <pkg>
@@ -452,7 +508,21 @@ cmd_image() {
 	# host side: sudo xarm binhost   (serves the cross-built sysroot binpkgs)
 	sync-uri = http://10.0.2.2:8686/
 	priority = 10
+	# xarm binpkgs are unsigned
+	verify-signature = false
 	EOF
+
+    # guest emerge needs a gentoo tree — the stage3's make.profile symlink
+    # dangles without one and portage refuses to run; copy the host tree in
+    local grepo
+    grepo=$(portageq get_repo_path / gentoo 2>/dev/null || true)
+    if [[ -n ${grepo} && -d ${grepo} ]]; then
+        info "Copying the gentoo tree into the image ($(du -sh "${grepo}" | cut -f1))"
+        mkdir -p "${MNT_DIR}/var/db/repos/gentoo"
+        rsync -a --delete "${grepo}/" "${MNT_DIR}/var/db/repos/gentoo/"
+    else
+        warn "No host gentoo tree found — guest emerge will need emerge-webrsync first"
+    fi
 
     img_umount
     trap - EXIT INT TERM
@@ -466,16 +536,16 @@ cmd_image() {
 cmd_mount() {
     need_gentoo_target; need_root
     [[ -f ${IMG} ]] || die "No ${IMG} — run: sudo $0 gentoo image"
-    mkdir -p "${MNT_DIR}"
     if mountpoint -q "${MNT_DIR}"; then die "${MNT_DIR} already mounted"; fi
-    mount -t ext4 -o loop "${IMG}" "${MNT_DIR}"
+    no_stale_loop
+    img_mount
     info "Mounted on ${MNT_DIR} — e.g.: XARM_CHROOT_ROOT=${MNT_DIR} sudo xarm chroot"
 }
 
 cmd_umount() {
     need_gentoo_target; need_root
     mountpoint -q "${MNT_DIR}" || die "${MNT_DIR} is not mounted"
-    umount "${MNT_DIR}"
+    img_umount
     info "Unmounted ${MNT_DIR}"
 }
 
@@ -488,8 +558,8 @@ cmd_chroot() {
     local mounted_here=0 bound_pkgs=0
     local binpkgs="/usr/${CROSS%-}/var/cache/binpkgs"
     if ! mountpoint -q "${MNT_DIR}"; then
-        mkdir -p "${MNT_DIR}"
-        mount -t ext4 -o loop "${IMG}" "${MNT_DIR}"
+        no_stale_loop
+        img_mount
         mounted_here=1
     fi
     if [[ -d ${binpkgs} ]]; then
@@ -506,7 +576,7 @@ cmd_chroot() {
         umount "${MNT_DIR}/var/cache/binpkgs" || warn "umount binpkgs bind failed"
     fi
     if [[ ${mounted_here} -eq 1 ]]; then
-        umount "${MNT_DIR}" || warn "umount ${MNT_DIR} failed (still busy?)"
+        img_umount
     fi
     return "${rc}"
 }
@@ -520,6 +590,8 @@ cmd_run() {
     if [[ ${ROOTFS} == stage3 ]]; then
         [[ -f ${VMLINUZ} ]] || die "No ${VMLINUZ} — run: $0 gentoo kernel"
         [[ -f ${IMG} ]]     || die "No ${IMG} — run: sudo $0 gentoo image"
+        mountpoint -q "${MNT_DIR}" && die "${MNT_DIR} is mounted — run: sudo $0 gentoo umount"
+        no_stale_loop
         info "Booting (-M virt, ${SMP} vcpus, ${MEM} MiB; serial on stdio, ssh -> localhost:2222)"
         info "Root autologin; shut down with: poweroff  (or quit qemu: Ctrl-A X)"
         exec "${QEMU_BIN}" -M virt -cpu cortex-a72 -smp "${SMP}" -m "${MEM}" \
