@@ -191,29 +191,36 @@ file ./test64dyn
 # ./test64dyn: ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0, not stripped
 ```
 
+# OpenWrt lab (Cudy TR3000 v1)
+
+OpenWrt 25.12 sysupgrade images for the Cudy TR3000 v1 travel router
+(MT7981/Filogic): recipe in [openwrt/](openwrt/readme.md), scripted by
+`xowrt` (ImageBuilder route + optional full-source build, data on
+`/mnt/db5/openwrt`). Successor-in-spirit to `legacy/make.tomato/`.
+
 # Legacy AndroidModLab
-### Własne kompilacje androida i jego kernela 
-Aby zainstalować skompilowany kernel i system najpierw trzeba umieć zrootować telefon i zainstalować TWRP- uwaga ryzykowna operacja - uzywać metod i plików sprawdzonych najlepiej na forum xda <https://forum.xda-developers.com> lub android polska ma odnośniki do xda i komentarze <https://forum.android.com.pl/>.
+### Homemade Android and Android-kernel builds
+To install a self-compiled kernel and system you first need to know how to root the phone and install a custom recovery (TWRP back then, Lineage recovery today) — a risky operation: use only methods and files proven on the XDA forum <https://forum.xda-developers.com>; the Polish Android forum links to XDA with commentary <https://forum.android.com.pl/>.
 
 **2026 refresh:** current recipe for the latest Android (16 "Baklava") on a modern
 phone (Pixel 9a `tegu`: LineageOS 23.2 / AxionOS / CalyxOS) lives in
 [`android.baklava/`](android.baklava/readme.md).
 
-Dodano katalogi z przepisami na kompilacje androida i kerneli.
+Directories with recipes for building Android and its kernels:
  - [android.baklava](android.baklava/) — 2026, LineageOS 23.2 / Android 16, Pixel 9a
  - [legacy/android.q](legacy/android.q/) — LineageOS 17.1, LG G6
  - [legacy/android.oreo](legacy/android.oreo/) — ResurrectionRemix, LG G3
  - [legacy/android.nougat](legacy/android.nougat/) — CM-14.1
  - [legacy/android.kernel](legacy/android.kernel/) — kernel-only builds
 
-### Inne tutoriale
+### Other tutorials
  - https://forum.xda-developers.com/android/general/guide-how-to-build-custom-roms-kernel-t3814251
  - https://thealaskalinuxuser.wordpress.com/2018/08/03/video-tutorial-for-android-building-advanced-topics/
 
 
 # Legacy Raspberry Pi Lab 
-## i nie tylko ;) https://wiki.gentoo.org/wiki/Embedded_systems/ARM_hardware_list
-#### Odnośniki 
+## and not only ;) https://wiki.gentoo.org/wiki/Embedded_systems/ARM_hardware_list
+#### Links
 - https://wiki.gentoo.org/wiki/Embedded_Handbook/General/Creating_a_cross-compiler
 - https://wiki.gentoo.org/wiki/User:Jens3/Installing_Gentoo_on_a_Raspberry_Pi_400
 - https://github.com/pwasiewi/eulinks/tree/master/sw_raspberry
@@ -222,10 +229,10 @@ Dodano katalogi z przepisami na kompilacje androida i kerneli.
 2. pull from github: git clone https://github.com/pwasiewi/rpilinuxlab
 3. cd rpilinuxlab
 4. mkdir dl
-5. cd legacy/make... np. legacy/make.armhfp jest dla raspberrypi2/3 32bit
+5. cd legacy/make... e.g. legacy/make.armhfp is for the 32-bit Raspberry Pi 2/3
 6. make emulate
 
-Raspberry Pi Lab przygotowane na podstawie 
+The Raspberry Pi Lab was prepared based on 
 1) https://wiki.gentoo.org/wiki/Cross_build_environment
 2) http://mgalgs.github.io/2015/05/16/how-to-build-a-custom-linux-kernel-for-qemu-2015-edition.html
-3) środowiska Pawła Kraszewskiego z fragmentami z jego README
+3) Paweł Kraszewski's environment, with fragments of its README

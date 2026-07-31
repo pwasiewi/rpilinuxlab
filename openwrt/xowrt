@@ -1,0 +1,252 @@
+#!/bin/bash
+# xowrt — OpenWrt sysupgrade image builder for the Cudy TR3000 v1 (and any
+# other profile of a chosen target), xarm/xlab/xandroid style.
+#
+# Default route is the official ImageBuilder (prebuilt toolchain + packages,
+# an image in ~1 min, no compilation) with an optional full-source buildroot
+# flow. Everything heavy lives on the data volume (/mnt/db5/openwrt).
+# Recipe/background: ~/Claude/rpilinuxlab/openwrt/readme.md
+#
+# Usage: xowrt <subcommand> [args]
+#
+# Subcommands (ImageBuilder route):
+#   status           what is downloaded / built / configured
+#   fetch            download + sha256-verify + unpack the ImageBuilder
+#   info             show the device profile section of 'make info'
+#   build [PKG...]   make image PROFILE=... [extra packages] [FILES=files/]
+#   files            create the files/ overlay dir (configs baked into image)
+#   out              list built images
+#   flash [-n] [IMG] scp newest sysupgrade.bin to the router + sysupgrade
+#                    (-n = do NOT keep current config)              [confirm]
+#   clean            remove the ImageBuilder work dir               [confirm]
+# Subcommands (full-source route, only when IB is not enough):
+#   src-init         git clone openwrt.git tag v<release> + feeds + defconfig
+#   src-build        make -j (first build downloads + compiles the toolchain)
+#   src-menuconfig   make menuconfig in the source tree
+#
+# Env overrides:
+#   XOWRT_DIR       data dir            (default /mnt/db5/openwrt)
+#   XOWRT_RELEASE   OpenWrt release     (default 25.12.5)
+#   XOWRT_TARGET    target/subtarget    (default mediatek/filogic)
+#   XOWRT_PROFILE   device profile      (default cudy_tr3000-v1; also
+#                   cudy_tr3000-256mb-v1, cudy_tr3000-v1-ubootmod)
+#   XOWRT_ROUTER    ssh target          (default root@192.168.1.1)
+#   XOWRT_PACKAGES  extra packages always added to build (default "luci" —
+#                   IB profile defaults lack it; set empty to opt out)
+#   XOWRT_JOBS      make -j for src-build (default nproc)
+#
+# Typical flow:
+#   xowrt fetch && xowrt build luci-app-sqm ip-full tcpdump
+#   xowrt flash                       # router reachable over ssh
+#
+# First-ever OpenWrt install on a stock TR3000 goes through Cudy's signed
+# "intermediate firmware" (see readme) — xowrt flash only works on a router
+# already running OpenWrt.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+XDIR="${XOWRT_DIR:-/mnt/db5/openwrt}"
+RELEASE="${XOWRT_RELEASE:-25.12.5}"
+TARGET="${XOWRT_TARGET:-mediatek/filogic}"
+PROFILE="${XOWRT_PROFILE:-cudy_tr3000-v1}"
+ROUTER="${XOWRT_ROUTER:-root@192.168.1.1}"
+# IB profile defaults do NOT include LuCI (release images add it on top) —
+# default it in so xowrt images match the official ones; XOWRT_PACKAGES="" opts out
+EXTRA_PKGS="${XOWRT_PACKAGES-luci}"
+JOBS="${XOWRT_JOBS:-$(nproc)}"
+
+BASE_URL="https://downloads.openwrt.org/releases/${RELEASE}/targets/${TARGET}"
+IB_TAR="openwrt-imagebuilder-${RELEASE}-${TARGET//\//-}.Linux-x86_64.tar.zst"
+IB_DIR="${XDIR}/${IB_TAR%.tar.zst}"
+FILES_DIR="${XDIR}/files"
+BIN_DIR="${IB_DIR}/bin/targets/${TARGET}"
+SRC_DIR="${XDIR}/source"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+die()     { echo "❌  $*" >&2; exit 1; }
+info()    { echo ">>>  $*"; }
+warn()    { echo "⚠️   $*" >&2; }
+confirm() { read -r -p "$1 [yes/NO]: " ans; [[ "$ans" == "yes" ]] || die "Aborted."; }
+help()    { sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \?//'; }
+
+need_tools() {
+    local t
+    for t in "$@"; do
+        command -v "${t}" >/dev/null || die "Missing host tool: ${t}"
+    done
+}
+
+need_ib() { [[ -f ${IB_DIR}/Makefile ]] || die "No ImageBuilder in ${IB_DIR} — run: $0 fetch"; }
+
+newest_sysupgrade() {
+    ls -1t "${BIN_DIR}"/*"${PROFILE}"*sysupgrade* 2>/dev/null | head -1 || true
+}
+
+# ---------------------------------------------------------------------------
+# ImageBuilder route
+# ---------------------------------------------------------------------------
+cmd_fetch() {
+    need_tools wget zstd tar sha256sum python3 make
+    mkdir -p "${XDIR}" 2>/dev/null ||
+        die "Cannot create ${XDIR} — as root: mkdir -p ${XDIR} && chown ${USER}: ${XDIR}"
+    [[ -w ${XDIR} ]] || die "${XDIR} not writable — as root: chown ${USER}: ${XDIR}"
+    if [[ ! -f ${XDIR}/${IB_TAR} ]]; then
+        info "Downloading ${IB_TAR}"
+        wget -O "${XDIR}/${IB_TAR}" "${BASE_URL}/${IB_TAR}" ||
+            { command rm -f "${XDIR}/${IB_TAR}"; die "Download failed: ${BASE_URL}/${IB_TAR}"; }
+    fi
+    info "Verifying sha256"
+    wget -qO "${XDIR}/sha256sums-${RELEASE}" "${BASE_URL}/sha256sums" ||
+        die "Could not fetch ${BASE_URL}/sha256sums"
+    (cd "${XDIR}" && grep -E "  ?\*?${IB_TAR}\$" "sha256sums-${RELEASE}" | sha256sum -c --quiet) ||
+        die "SHA256 mismatch on ${IB_TAR} — delete it from ${XDIR} and retry"
+    if [[ ! -f ${IB_DIR}/Makefile ]]; then
+        info "Unpacking (needs ~3 GB)"
+        tar --zstd -xf "${XDIR}/${IB_TAR}" -C "${XDIR}"
+    fi
+    mkdir -p "${IB_DIR}/tmp"
+    # plain grep (not -q) so make's stdout is fully consumed — grep -q exits
+    # early, make dies on SIGPIPE and pipefail turns a found profile into a fail
+    make -C "${IB_DIR}" info 2>/dev/null | grep "^${PROFILE}:" >/dev/null ||
+        warn "Profile ${PROFILE} not found in this ImageBuilder — check: $0 info"
+    info "ImageBuilder ready: ${IB_DIR}"
+}
+
+cmd_info() {
+    need_ib
+    # awk exits at the next profile header — make's SIGPIPE is expected
+    make -C "${IB_DIR}" info 2>/dev/null | awk -v p="${PROFILE}:" '
+        $0 ~ "^"p {show=1} show && $0 ~ /^[a-z0-9_-]+:/ && $0 !~ "^"p {exit} show' || true
+}
+
+cmd_files() {
+    mkdir -p "${FILES_DIR}/etc/uci-defaults"
+    info "Overlay dir: ${FILES_DIR} — files land 1:1 in the image rootfs"
+    info "e.g. ${FILES_DIR}/etc/uci-defaults/99-custom (uci-defaults run once on first boot)"
+}
+
+cmd_build() {
+    need_ib
+    local pkgs="${EXTRA_PKGS} $*"
+    local args=(PROFILE="${PROFILE}")
+    # shellcheck disable=SC2086 — package list is intentionally word-split
+    if [[ -n ${pkgs// /} ]]; then args+=(PACKAGES="${pkgs}"); fi
+    if [[ -d ${FILES_DIR} ]]; then args+=(FILES="${FILES_DIR}"); fi
+    info "make image ${args[*]}"
+    make -C "${IB_DIR}" image "${args[@]}"
+    cmd_out
+}
+
+cmd_out() {
+    [[ -d ${BIN_DIR} ]] || die "No ${BIN_DIR} yet — run: $0 build"
+    info "Images in ${BIN_DIR}:"
+    ls -lh "${BIN_DIR}"/*"${PROFILE}"* 2>/dev/null ||
+        warn "No images for profile ${PROFILE} yet"
+}
+
+# ---------------------------------------------------------------------------
+# flash — router must already run OpenWrt and be reachable over ssh
+# ---------------------------------------------------------------------------
+cmd_flash() {
+    need_tools ssh scp
+    local keep=-k sysupgrade_opts=""
+    if [[ "${1:-}" == "-n" ]]; then keep=""; sysupgrade_opts="-n"; shift; fi
+    local img="${1:-}"
+    if [[ -z ${img} ]]; then img=$(newest_sysupgrade); fi
+    [[ -n ${img} && -f ${img} ]] || die "No sysupgrade image — run: $0 build (or pass a path)"
+    info "Image:  ${img} ($(du -h "${img}" | cut -f1))"
+    info "Router: ${ROUTER}   (config $( [[ -n ${keep} ]] && echo KEPT || echo WIPED ))"
+    ssh -o ConnectTimeout=5 "${ROUTER}" 'cat /etc/openwrt_release 2>/dev/null | head -2' ||
+        die "Router unreachable over ssh: ${ROUTER}"
+    confirm "Flash this sysupgrade image to ${ROUTER}?"
+    scp "${img}" "${ROUTER}:/tmp/sysupgrade.bin"
+    # sysupgrade reboots the router mid-command — ssh exiting non-zero is expected
+    ssh "${ROUTER}" "sysupgrade -v ${sysupgrade_opts} /tmp/sysupgrade.bin" || true
+    info "Router is flashing + rebooting — give it ~3 min, then: ssh ${ROUTER}"
+}
+
+# ---------------------------------------------------------------------------
+# full-source route
+# ---------------------------------------------------------------------------
+cmd_src_init() {
+    need_tools git make gcc g++ python3 rsync wget file
+    mkdir -p "${XDIR}"
+    if [[ ! -d ${SRC_DIR}/.git ]]; then
+        info "Cloning openwrt.git tag v${RELEASE} (~15 min with history)"
+        git clone -b "v${RELEASE}" https://git.openwrt.org/openwrt/openwrt.git "${SRC_DIR}"
+    fi
+    cd "${SRC_DIR}"
+    ./scripts/feeds update -a && ./scripts/feeds install -a
+    # seed the device selection, let defconfig resolve the rest
+    local t="${TARGET%%/*}" st="${TARGET##*/}"
+    {
+        echo "CONFIG_TARGET_${t}=y"
+        echo "CONFIG_TARGET_${t}_${st}=y"
+        echo "CONFIG_TARGET_${t}_${st}_DEVICE_${PROFILE//-/_}=y"
+    } > .config
+    make defconfig
+    info "Source tree ready: ${SRC_DIR} — next: $0 src-build (or src-menuconfig)"
+}
+
+cmd_src_build() {
+    [[ -f ${SRC_DIR}/.config ]] || die "No ${SRC_DIR}/.config — run: $0 src-init"
+    info "Building from source (-j${JOBS}; first run compiles the toolchain, ~1-2 h)"
+    make -C "${SRC_DIR}" -j"${JOBS}" || {
+        warn "Parallel build failed — rerunning single-job verbose for a readable error";
+        make -C "${SRC_DIR}" -j1 V=s; }
+    info "Images in ${SRC_DIR}/bin/targets/${TARGET}/"
+}
+
+cmd_src_menuconfig() {
+    [[ -f ${SRC_DIR}/.config ]] || die "No ${SRC_DIR}/.config — run: $0 src-init"
+    make -C "${SRC_DIR}" menuconfig
+}
+
+# ---------------------------------------------------------------------------
+# status / clean
+# ---------------------------------------------------------------------------
+cmd_status() {
+    echo "release: ${RELEASE}   target: ${TARGET}   profile: ${PROFILE}"
+    echo "router:  ${ROUTER}"
+    echo "ib:      $( [[ -f ${IB_DIR}/Makefile ]] && echo "ready (${IB_DIR})" || echo "not fetched" )"
+    echo "files:   $( [[ -d ${FILES_DIR} ]] && find "${FILES_DIR}" -type f | wc -l || echo 0 ) overlay file(s)"
+    echo "source:  $( [[ -d ${SRC_DIR}/.git ]] && echo "cloned" || echo - )"
+    local img
+    img=$(newest_sysupgrade)
+    echo "image:   ${img:-none yet}"
+    echo "free:    $(df -h --output=avail "${XDIR}" 2>/dev/null | tail -1 | tr -d ' ' || echo '?') on ${XDIR}"
+}
+
+cmd_clean() {
+    [[ -d ${IB_DIR} ]] || die "Nothing to clean (${IB_DIR} absent)"
+    confirm "Remove ${IB_DIR} (downloads and files/ overlay are kept)?"
+    command rm -rf "${IB_DIR}"
+    info "Cleaned."
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+[[ $# -ge 1 ]] || { help; exit 0; }
+CMD="$1"; shift
+
+case "${CMD}" in
+    -h|--help|help) help ;;
+    status)         cmd_status "$@" ;;
+    fetch)          cmd_fetch "$@" ;;
+    info)           cmd_info "$@" ;;
+    files)          cmd_files "$@" ;;
+    build)          cmd_build "$@" ;;
+    out)            cmd_out "$@" ;;
+    flash)          cmd_flash "$@" ;;
+    src-init)       cmd_src_init "$@" ;;
+    src-build)      cmd_src_build "$@" ;;
+    src-menuconfig) cmd_src_menuconfig "$@" ;;
+    clean)          cmd_clean "$@" ;;
+    *)              die "Unknown subcommand: ${CMD} (see: $0 --help)" ;;
+esac
