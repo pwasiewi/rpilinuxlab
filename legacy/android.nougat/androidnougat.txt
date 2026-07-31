@@ -1,3 +1,5 @@
+> **2026 note:** historical recipe (2017–2020 era device). Current guide for the latest Android (16 "Baklava", Pixel 9a / LineageOS 23.2 / AxionOS / CalyxOS): [`../android.baklava/`](../../android.baklava/readme.md)
+
 # Intro
 
 *Android* to system napisany w Javie z kernelem z Linuxa, każdy program jest

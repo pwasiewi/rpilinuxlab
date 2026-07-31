@@ -2,7 +2,7 @@
 
 Experiments run 2026-07-30 on the gen2db host (AMD Ryzen AI, 64 GB RAM, Gentoo
 ~amd64, Portage 3.0.81.2, gcc-15) using `~/Claude/bin/xarm` (mirrored to
-`/usr/local/bin/xarm`; a snapshot ships in this repo as `./xarm`).
+`/usr/local/bin/xarm`; a snapshot ships in this repo as `../xarm`).
 Lab artifacts live in `crosscompile/` (this directory);
 heavy artifacts (stage3 chroot) on `/mnt/db1/rpilinuxlab/`.
 
@@ -15,8 +15,8 @@ durable x86_64 + arm64 coexistence layout.
 
 ```
 ~/Claude/rpilinuxlab/
-├── crosscompile_README.md      ← this file
 └── crosscompile/
+    ├── README.md               ← this file
     ├── manual-setup.md         # copy-paste command sequence — full setup WITHOUT xarm
     ├── xarm-setup.md           # the same via xarm (6 commands) + step↔gotcha mapping
     ├── optimizations.md        # compile-speed levers: ccache (done), distcc (planned), ranked
@@ -42,7 +42,7 @@ durable x86_64 + arm64 coexistence layout.
 ### 1. `xarm setup` — crossdev toolchain ✓ (~20 min, unattended)
 
 `sudo xarm setup` ran end-to-end with **zero manual intervention**
-(log: `crosscompile/logs/01-xarm-setup.log`):
+(log: `logs/01-xarm-setup.log`):
 
 - crossdev overlay created via eselect-repo → registered in
   `/etc/portage/repos.conf/eselect-repo.conf` as `[crossdev]` at
@@ -75,7 +75,7 @@ automatically; `${SYSROOT}/etc/portage/make.profile` is a relative symlink into 
 
 ### 2. C test programs under qemu-user ✓
 
-`crosscompile/tests/` (log: `logs/05-c-tests.log`):
+`tests/` (log: `logs/05-c-tests.log`):
 
 | Test | Build | Run | Result |
 |---|---|---|---|
@@ -185,7 +185,7 @@ provider of **libgomp** by `USE=openmp` packages (libb2, portage-utils). Sideste
   appended: `MAKEOPTS="-j8"`, `FEATURES="-pid-sandbox -ipc-sandbox
   -network-sandbox -news"`, `ACCEPT_LICENSE="*"` (sandbox namespaces do not work
   under qemu-user).
-- Entry helper: `crosscompile/arm64-chroot.sh` (same trap-umount pattern as
+- Entry helper: `arm64-chroot.sh` (same trap-umount pattern as
   `xarm chroot`; copies static qemu-aarch64 inside because Gentoo's binfmt uses
   OC flags; ad-hoc binfmt registration if systemd-binfmt hasn't run).
 - **Smoke test ✓** (`logs/02-chroot-smoke.log`): `uname -m` = aarch64, native
@@ -313,7 +313,7 @@ migration. Stage3 remains stable — hence the version-pin drop in the fallback.
 
 **Census:** target packages from `-e @world` + `dev-lang/perl` added
 explicitly (it is not in the target @world closure — was built --oneshot).
-Driver: `crosscompile/census-driver.sh` (phases: stage3 update → ccache
+Driver: `census-driver.sh` (phases: stage3 update → ccache
 cold/warm nano bench → census → summary), logs 22–25.
 
 **RESULTS (2026-07-31 01:26, log 25):**
@@ -329,7 +329,7 @@ cold/warm nano bench → census → summary), logs 22–25.
   chroot is finally self-hosting for compile fallbacks.
 - Phase timings: stage3 update (8 pkgs) 1 h 24 min under qemu; ccache bench
   9m06s cold / **6m35s warm** (vs 8m04s no-ccache — see
-  `crosscompile/optimizations.md`); census 1 h 10 min.
+  `optimizations.md`); census 1 h 10 min.
 - Host ARM ccache after the run: 39 K cacheable calls, 9% hits already
   (within-run duplicates); the cache is now seeded for future reruns.
 - Consequence for the pipeline: the qemu chroot is demoted from "required for
@@ -339,7 +339,7 @@ cold/warm nano bench → census → summary), logs 22–25.
 
 ### 9. distcc from the chroot — host cross-gcc as compile backend (2026-07-31)
 
-Goal: quantify the last unimplemented lever from `crosscompile/optimizations.md`
+Goal: quantify the last unimplemented lever from `optimizations.md`
 §2 — the emulated chroot offloading compile jobs to the host's `distccd`
 running the crossdev toolchain natively. Setup automated as **`xarm distcc
 start|stop|status|chroot-setup`**; details + gotchas in log 26, benchmarks in
@@ -434,7 +434,7 @@ except crossdev's clearly-named additive files:
    ~~Hard limit: target `sys-devel/gcc` cannot be cross-emerged~~ — held only
    for gcc-15.3.0; gcc-15.3.1_p20260717 cross-emerges and works (experiment 8).
 2. **QEMU chroot** — two flavors, both working: the standalone stage3 on
-   `/mnt/db1` (`crosscompile/arm64-chroot.sh`; self-contained, good for
+   `/mnt/db1` (`arm64-chroot.sh`; self-contained, good for
    config experiments and packages that must run their own binaries) and
    `xarm chroot` into the sysroot (functional once bash is cross-merged;
    this is `1by1`'s fallback arm). Measured cost: **19× wall / 28× CPU** vs
@@ -443,7 +443,7 @@ except crossdev's clearly-named additive files:
 Next steps when a Pi 400 actually appears: `xarm 1by1 @system`, overnight; gcc
 via chroot or natively on the Pi; deliver everything else with `xarm binhost`.
 
-## Log index (`crosscompile/logs/`)
+## Log index (`logs/`)
 
 | Log | Contents |
 |---|---|

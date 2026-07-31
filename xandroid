@@ -1,0 +1,372 @@
+#!/bin/bash
+# xandroid — Android (LineageOS 23.x / AxionOS) build lab in a docker container
+#
+# Companion to xarm/xlab: builds the latest Android (16 "Baklava") for a real
+# phone — default Google Pixel 9a (tegu) — inside an Ubuntu 24.04 container,
+# with the source tree, ccache and artifacts on a big data volume.
+# Recipe/background: ~/Claude/rpilinuxlab/android.baklava/readme.md
+#
+# Usage: xandroid <subcommand> [args]
+#
+# Subcommands:
+#   status          container / tree / artifact / disk overview
+#   setup           create dirs on the data volume, pull ubuntu:24.04, create
+#                   the container, install build deps + repo + platform-tools
+#   init [BRANCH]   repo init the ROM manifest (default branch lineage-23.2)
+#   sync            repo sync (first run downloads ~150 GB)
+#   shell [CMD]     shell (or one command) inside the container, in the tree
+#   build [DEV]     source build/envsetup.sh && brunch DEV   (default tegu)
+#   blobs DIR|ZIP   run device tree extract-files.py against an extracted
+#                   official build (see wiki: extracting_blobs_from_zips)
+#   out [DEV]       list build artifacts (out/target/product/DEV)
+#   flash [DEV]     fastboot-flash boot/dtbo/vendor_kernel_boot/vendor_boot
+#                   from the artifacts to a USB-connected phone [confirm]
+#   sideload [DEV]  adb sideload the newest ROM zip (phone in Lineage recovery)
+#   clean           remove out/ of the current ROM tree            [confirm]
+#   distclean       remove the whole ROM source tree               [confirm]
+#   destroy         remove the container (data volume is kept)     [confirm]
+#
+# Env overrides:
+#   XANDROID_DIR        data volume dir       (default /mnt/db5/android)
+#   XANDROID_ROM        lineage | axion       (default lineage; separate trees)
+#   XANDROID_BRANCH     manifest branch       (default lineage-23.2)
+#   XANDROID_DEVICE     device codename       (default tegu = Pixel 9a)
+#   XANDROID_VENDOR     blobs vendor org      (default google; TheMuppets/
+#                       proprietary_vendor_VENDOR_DEVICE added at init)
+#   XANDROID_CONTAINER  container name        (default xandroid)
+#   XANDROID_CCACHE     ccache size           (default 50G)
+#
+# Typical flow (Pixel 9a):
+#   xandroid setup && xandroid init && xandroid sync
+#   xandroid build                      # -> lineage-23.2-*-UNOFFICIAL-tegu.zip
+#   xandroid flash && xandroid sideload
+#
+# Prerequisites on the phone: bootloader unlocked (fastboot flashing unlock —
+# WIPES the device) and stock Android 16 firmware installed beforehand.
+# AxionOS note: tegu has no official Axion device tree — building it means
+# adding the LineageOS tegu trees via .repo/local_manifests (see readme).
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+XDIR="${XANDROID_DIR:-/mnt/db5/android}"
+ROM="${XANDROID_ROM:-lineage}"
+BRANCH="${XANDROID_BRANCH:-lineage-23.2}"
+DEVICE="${XANDROID_DEVICE:-tegu}"
+VENDOR="${XANDROID_VENDOR:-google}"
+CONT="${XANDROID_CONTAINER:-xandroid}"
+CCACHE_SIZE="${XANDROID_CCACHE:-50G}"
+IMAGE=ubuntu:24.04
+
+case "${ROM}" in
+    lineage) MANIFEST=https://github.com/LineageOS/android.git ;;
+    axion)   MANIFEST=https://github.com/AxionAOSP/android.git ;;
+    *)       echo "❌  XANDROID_ROM must be 'lineage' or 'axion', not '${ROM}'" >&2; exit 1 ;;
+esac
+
+HOST_TREE="${XDIR}/${ROM}"
+TREE="/android/${ROM}"                       # same tree as seen in-container
+HOST_OUT="${HOST_TREE}/out/target/product"
+# login-shell env for every in-container command
+ENVSTR='export LANG=C.UTF-8 USE_CCACHE=1 CCACHE_EXEC=/usr/bin/ccache CCACHE_DIR=/android/ccache PATH=/root/platform-tools:$PATH'
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+die()     { echo "❌  $*" >&2; exit 1; }
+info()    { echo ">>>  $*"; }
+warn()    { echo "⚠️   $*" >&2; }
+confirm() { read -r -p "$1 [yes/NO]: " ans; [[ "$ans" == "yes" ]] || die "Aborted."; }
+help()    { sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \?//'; }
+
+docker_ok()    { docker info >/dev/null 2>&1 || die "Docker daemon not reachable (group 'docker'? service running?)"; }
+cont_exists()  { docker inspect "${CONT}" >/dev/null 2>&1; }
+cont_running() { [[ "$(docker inspect -f '{{.State.Running}}' "${CONT}" 2>/dev/null)" == true ]]; }
+
+ensure_cont() {
+    docker_ok
+    cont_exists || die "No container '${CONT}' — run: $0 setup"
+    if ! cont_running; then
+        docker start "${CONT}" >/dev/null || die "Could not start container '${CONT}'"
+    fi
+}
+
+# crun "cmd..."  — run one shell command inside the container (tty if we have one)
+crun() {
+    local tty=()
+    if [[ -t 0 && -t 1 ]]; then tty=(-it); fi
+    ensure_cont
+    docker exec "${tty[@]}" "${CONT}" bash -c "${ENVSTR}; $*"
+}
+
+need_tree() {
+    [[ -d ${HOST_TREE}/.repo ]] || die "No ${ROM} tree in ${HOST_TREE} — run: $0 init && $0 sync"
+}
+
+ram_check() {
+    local avail_kb
+    avail_kb=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+    if (( avail_kb < 24*1024*1024 )); then
+        warn "Only $((avail_kb/1024/1024)) GiB RAM available — soong link steps may OOM; close big consumers (aillama, VMs) first"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# setup
+# ---------------------------------------------------------------------------
+cmd_setup() {
+    docker_ok
+    # the data volume must actually be mounted — otherwise we would fill the
+    # root fs through an empty mountpoint directory
+    local mnt
+    mnt=$(df --output=target "${XDIR%/*}" 2>/dev/null | tail -1 || true)
+    [[ -n ${mnt} && ${mnt} != "/" ]] || warn "${XDIR} resolves to the root filesystem — is the data volume mounted?"
+    local free_gb
+    free_gb=$(df --output=avail -BG "${XDIR%/*}" 2>/dev/null | tail -1 | tr -dc 0-9 || true)
+    [[ -n ${free_gb} ]] || die "Cannot stat ${XDIR%/*}"
+    if (( free_gb < 400 )); then
+        warn "Only ${free_gb} GB free — a full source + build needs ~400 GB"
+    fi
+
+    if [[ ! -d ${XDIR} ]]; then
+        mkdir -p "${XDIR}" 2>/dev/null ||
+            die "Cannot create ${XDIR} — as root: mkdir -p ${XDIR} && chown ${USER}: ${XDIR}"
+    fi
+    [[ -w ${XDIR} ]] || die "${XDIR} not writable — as root: chown ${USER}: ${XDIR}"
+    mkdir -p "${XDIR}/ccache"
+
+    if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+        info "Pulling ${IMAGE}"
+        docker pull "${IMAGE}"
+    fi
+    if ! cont_exists; then
+        info "Creating container '${CONT}' (${XDIR} -> /android)"
+        docker run -d --name "${CONT}" \
+            -v "${XDIR}:/android" -w /android \
+            "${IMAGE}" sleep infinity >/dev/null
+    fi
+    ensure_cont
+
+    info "Installing build packages (Ubuntu 24.04, LineageOS wiki list)"
+    crun "apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -yq \
+        bc bison build-essential ccache curl flex g++-multilib gcc-multilib git \
+        git-lfs gnupg gperf imagemagick protobuf-compiler python3-protobuf \
+        python-is-python3 lib32readline-dev lib32z1-dev libdw-dev libelf-dev \
+        libgnutls28-dev lz4 libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop \
+        pngcrush rsync schedtool squashfs-tools xsltproc xxd zip zlib1g-dev \
+        unzip wget openjdk-17-jdk-headless"
+
+    info "Installing repo + platform-tools"
+    crun "curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo \
+            > /usr/local/bin/repo && chmod a+x /usr/local/bin/repo &&
+        if [[ ! -x /root/platform-tools/adb ]]; then
+            wget -q https://dl.google.com/android/repository/platform-tools-latest-linux.zip -O /tmp/pt.zip &&
+            unzip -oq /tmp/pt.zip -d /root && rm -f /tmp/pt.zip
+        fi"
+
+    # reuse the host git identity so repo does not refuse to sync
+    local gname gmail
+    gname=$(git config --global user.name 2>/dev/null || true)
+    gmail=$(git config --global user.email 2>/dev/null || true)
+    crun "git config --global user.name '${gname:-xandroid builder}' &&
+        git config --global user.email '${gmail:-xandroid@localhost}' &&
+        git config --global trailer.changeid.key Change-Id &&
+        git config --global --add safe.directory '*' &&
+        git lfs install &&
+        ccache -M ${CCACHE_SIZE} && ccache -o compression=true"
+    info "Setup done. Next: $0 init && $0 sync"
+}
+
+# ---------------------------------------------------------------------------
+# source tree
+# ---------------------------------------------------------------------------
+cmd_init() {
+    local branch="${1:-${BRANCH}}"
+    info "repo init ${ROM} (${MANIFEST}, branch ${branch})"
+    crun "mkdir -p ${TREE} && cd ${TREE} &&
+        repo init -u ${MANIFEST} -b ${branch} --git-lfs --no-clone-bundle"
+    # proprietary blobs from TheMuppets — device trees come via breakfast's
+    # roomservice, but vendor blobs never do; without this brunch dies on
+    # missing vendor makefiles
+    local muppets="TheMuppets/proprietary_vendor_${VENDOR}_${DEVICE}"
+    info "Adding local manifest: ${muppets} (${branch})"
+    ensure_cont
+    docker exec -i "${CONT}" bash -c \
+        "mkdir -p ${TREE}/.repo/local_manifests && cat > ${TREE}/.repo/local_manifests/xandroid_${DEVICE}.xml" <<-EOF
+	<?xml version="1.0" encoding="UTF-8"?>
+	<manifest>
+	  <project name="${muppets}" path="vendor/${VENDOR}/${DEVICE}" remote="github" revision="${branch}" />
+	</manifest>
+	EOF
+    info "Initialized. Next: $0 sync   (first sync downloads ~150 GB)"
+}
+
+cmd_sync() {
+    need_tree
+    info "repo sync ${ROM} — this can take hours on the first run"
+    crun "cd ${TREE} && repo sync"
+}
+
+cmd_shell() {
+    ensure_cont
+    if [[ $# -gt 0 ]]; then
+        crun "cd ${TREE} 2>/dev/null || cd /android; $*"
+    else
+        docker exec -it "${CONT}" bash -c "${ENVSTR}; cd ${TREE} 2>/dev/null || cd /android; exec bash"
+    fi
+}
+
+cmd_blobs() {
+    [[ $# -ge 1 ]] || die "Usage: $0 blobs <extracted-dir-or-zip-under-${XDIR}>
+Get an official build zip and extract it first — see:
+https://wiki.lineageos.org/extracting_blobs_from_zips"
+    need_tree
+    local src="$1"
+    # the path must be visible in-container, i.e. live under ${XDIR}
+    [[ ${src} == "${XDIR}"/* ]] || die "'${src}' is outside ${XDIR} — move it there so the container sees it"
+    local csrc="/android${src#"${XDIR}"}"
+    info "Extracting proprietary blobs for ${DEVICE} from ${src}"
+    crun "cd ${TREE}/device/google/${DEVICE} 2>/dev/null || cd ${TREE}/device/*/${DEVICE} || exit 1
+        if [[ -x ./extract-files.py ]]; then ./extract-files.py ${csrc}
+        else ./extract-files.sh ${csrc}; fi"
+}
+
+# ---------------------------------------------------------------------------
+# build
+# ---------------------------------------------------------------------------
+cmd_build() {
+    local dev="${1:-${DEVICE}}"
+    need_tree
+    ram_check
+    info "Building ${ROM} ${BRANCH} for ${dev} (brunch; output in out/target/product/${dev})"
+    crun "cd ${TREE} && source build/envsetup.sh && brunch ${dev}"
+    cmd_out "${dev}"
+}
+
+cmd_out() {
+    local dev="${1:-${DEVICE}}"
+    local d="${HOST_OUT}/${dev}"
+    [[ -d ${d} ]] || die "No artifacts in ${d} — run: $0 build ${dev}"
+    info "Artifacts in ${d}:"
+    ls -lh "${d}"/*.zip "${d}"/{boot,dtbo,vendor_kernel_boot,vendor_boot}.img 2>/dev/null ||
+        warn "No zip/img artifacts yet (build incomplete?)"
+}
+
+# ---------------------------------------------------------------------------
+# device: flash / sideload (run on the HOST — needs USB access to the phone)
+# ---------------------------------------------------------------------------
+need_fastboot() {
+    command -v fastboot >/dev/null || die "No fastboot on the host — emerge dev-util/android-tools"
+    command -v adb >/dev/null      || die "No adb on the host — emerge dev-util/android-tools"
+}
+
+cmd_flash() {
+    local dev="${1:-${DEVICE}}"
+    local d="${HOST_OUT}/${dev}"
+    need_fastboot
+    local img
+    for img in boot dtbo vendor_kernel_boot vendor_boot; do
+        [[ -f ${d}/${img}.img ]] || die "Missing ${d}/${img}.img — run: $0 build ${dev}"
+    done
+    info "Phone must be in fastboot mode (adb reboot bootloader / VolDown+Power),"
+    info "bootloader unlocked, stock Android 16 firmware installed."
+    fastboot devices | grep -q . || die "No device in fastboot mode"
+    confirm "Flash boot/dtbo/vendor_kernel_boot/vendor_boot to the connected ${dev}?"
+    fastboot flash boot "${d}/boot.img"
+    fastboot flash dtbo "${d}/dtbo.img"
+    fastboot flash vendor_kernel_boot "${d}/vendor_kernel_boot.img"
+    fastboot reboot bootloader
+    sleep 5
+    fastboot flash vendor_boot "${d}/vendor_boot.img"
+    info "Done. On the phone select 'Recovery Mode' (Lineage recovery),"
+    info "then: Factory reset -> Apply update -> Apply from ADB, and run: $0 sideload ${dev}"
+}
+
+cmd_sideload() {
+    local dev="${1:-${DEVICE}}"
+    local d="${HOST_OUT}/${dev}"
+    need_fastboot
+    local zip
+    zip=$(ls -1t "${d}"/*-"${dev}".zip 2>/dev/null | head -1 || true)
+    [[ -n ${zip} ]] || die "No ROM zip in ${d} — run: $0 build ${dev}"
+    info "Sideloading $(basename "${zip}") (phone must be in recovery -> Apply from ADB)"
+    adb -d sideload "${zip}"
+    info "Reboot the phone into the new system from the recovery menu."
+}
+
+# ---------------------------------------------------------------------------
+# status / cleanup
+# ---------------------------------------------------------------------------
+cmd_status() {
+    docker_ok
+    local cstate=absent tree=- ccache=- free=-
+    if cont_exists; then
+        cstate=$(docker inspect -f '{{.State.Status}}' "${CONT}")
+    fi
+    if [[ -d ${HOST_TREE}/.repo ]]; then
+        tree="$(du -sh "${HOST_TREE}" 2>/dev/null | cut -f1 || echo '?') (${BRANCH})"
+    fi
+    if [[ -d ${XDIR}/ccache ]]; then
+        ccache=$(du -sh "${XDIR}/ccache" 2>/dev/null | cut -f1 || echo '?')
+    fi
+    local fdir="${XDIR}"
+    [[ -d ${fdir} ]] || fdir="${XDIR%/*}"
+    free=$(df -h --output=avail "${fdir}" 2>/dev/null | tail -1 | tr -d ' ' || echo '?')
+    echo "container: ${CONT} (${cstate})   rom: ${ROM}   device: ${DEVICE}"
+    echo "tree:      ${HOST_TREE} = ${tree}"
+    echo "ccache:    ${ccache}   free on volume: ${free}"
+    local d="${HOST_OUT}/${DEVICE}"
+    if [[ -d ${d} ]]; then
+        local zip
+        zip=$(ls -1t "${d}"/*.zip 2>/dev/null | head -1 || true)
+        echo "artifact:  ${zip:-none yet}"
+    fi
+}
+
+cmd_clean() {
+    need_tree
+    confirm "Remove ${HOST_TREE}/out (built objects + artifacts)?"
+    crun "rm -rf ${TREE}/out"
+    info "Cleaned out/."
+}
+
+cmd_distclean() {
+    [[ -d ${HOST_TREE} ]] || die "No ${HOST_TREE}"
+    confirm "Remove the ENTIRE ${ROM} source tree ${HOST_TREE} (~150+ GB re-download)?"
+    crun "rm -rf ${TREE}"
+    info "Removed ${HOST_TREE}."
+}
+
+cmd_destroy() {
+    docker_ok
+    cont_exists || die "No container '${CONT}'"
+    confirm "Remove container '${CONT}' (data in ${XDIR} is kept)?"
+    docker rm -f "${CONT}" >/dev/null
+    info "Container removed. Re-create with: $0 setup"
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+[[ $# -ge 1 ]] || { help; exit 0; }
+CMD="$1"; shift
+
+case "${CMD}" in
+    -h|--help|help) help ;;
+    status)     cmd_status "$@" ;;
+    setup)      cmd_setup "$@" ;;
+    init)       cmd_init "$@" ;;
+    sync)       cmd_sync "$@" ;;
+    shell)      cmd_shell "$@" ;;
+    blobs)      cmd_blobs "$@" ;;
+    build)      cmd_build "$@" ;;
+    out)        cmd_out "$@" ;;
+    flash)      cmd_flash "$@" ;;
+    sideload)   cmd_sideload "$@" ;;
+    clean)      cmd_clean "$@" ;;
+    distclean)  cmd_distclean "$@" ;;
+    destroy)    cmd_destroy "$@" ;;
+    *)          die "Unknown subcommand: ${CMD} (see: $0 --help)" ;;
+esac

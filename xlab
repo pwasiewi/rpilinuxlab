@@ -1,8 +1,9 @@
 #!/bin/bash
 # xlab — unified QEMU kernel lab for rpilinuxlab
 #
-# One data-driven script replacing the per-directory make.* Makefiles (their
-# recipes were ~95% identical) and the earlier make.aarch64_gentoo/xgentoo:
+# One data-driven script replacing the per-directory make.* Makefiles (now in
+# legacy/; their recipes were ~95% identical) and the earlier
+# make.aarch64_gentoo/xgentoo:
 # cross-compile a kernel, pair it with a static busybox initrd (or a Gentoo
 # arm64 stage3 on a virtio disk) and boot it in qemu.
 #
@@ -52,7 +53,7 @@
 #   # or from the RUNNING VM: sudo xarm binhost  on the host, then in the
 #   # guest: emerge --getbinpkg --usepkg <pkg>  (binrepos.conf is preinstalled)
 #
-# Layout: dl/ and src/ are shared caches (legacy make.*/dl tarballs are
+# Layout: dl/ and src/ are shared caches (legacy/make.*/dl tarballs are
 # reused via symlinks); everything target-specific lives in build/<target>/.
 # The gentoo image is a LAB config: root autologin + empty password.
 
@@ -120,7 +121,7 @@ load_target() {
         KMAKE_TARGETS=(Image dtbs)
         KIMAGE=arch/arm64/boot/Image
         DTB_REL=arch/arm64/boot/dts/broadcom/bcm2710-rpi-3-b.dtb
-        DTB_LEGACY="${HERE}/make.aarch64/dtb/bcm2710-rpi-3-b.dtb"
+        DTB_LEGACY="${HERE}/legacy/make.aarch64/dtb/bcm2710-rpi-3-b.dtb"
         QEMU_BIN=qemu-system-aarch64
         QEMU_OPTS=(-M raspi3b -cpu cortex-a53 -serial stdio)
         # Pi 3 DTB: serial0 = mini-UART (PL011 serves BT), so the PL011 that
@@ -137,7 +138,7 @@ load_target() {
         KMAKE_TARGETS=(zImage dtbs)
         KIMAGE=arch/arm/boot/zImage
         DTB_REL=arch/arm/boot/dts/bcm2709-rpi-2-b.dtb
-        DTB_LEGACY="${HERE}/make.armhfp/dtb/bcm2709-rpi-2-b.dtb"
+        DTB_LEGACY="${HERE}/legacy/make.armhfp/dtb/bcm2709-rpi-2-b.dtb"
         QEMU_BIN=qemu-system-arm
         QEMU_OPTS=(-M raspi2b -cpu cortex-a7 -serial stdio)
         QEMU_APPEND="console=ttyAMA0 init=/init"
@@ -215,13 +216,13 @@ kmake() {  # kernel make in the out-of-tree build dir
 }
 
 # ---------------------------------------------------------------------------
-# Downloads — shared dl/, reuse legacy make.*/dl tarballs via symlink
+# Downloads — shared dl/, reuse legacy/make.*/dl tarballs via symlink
 # ---------------------------------------------------------------------------
 fetch() {  # fetch <filename> <url> [md5]
     local f="$1" url="$2" md5="${3:-}" d
     mkdir -p "${DL_DIR}"
     if [[ ! -f ${DL_DIR}/${f} ]]; then
-        for d in "${HERE}"/make.*/dl; do
+        for d in "${HERE}"/legacy/make.*/dl; do
             if [[ -f ${d}/${f} ]]; then
                 info "Reusing ${f} from ${d#"${HERE}"/}"
                 ln -s "${d}/${f}" "${DL_DIR}/${f}"

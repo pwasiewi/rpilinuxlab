@@ -1,0 +1,183 @@
+# Building the latest Android (16 "Baklava") for a modern phone — 2026 refresh
+
+This is the 2026 successor to the `android.nougat` / `android.oreo` / `android.q`
+recipes. Target device used as the example: **Google Pixel 9a** (codename
+**`tegu`**). The same flow works for any device with an official LineageOS 23.x
+device tree — swap the codename.
+
+## The 2026 custom-ROM landscape (verified 2026-07)
+
+| ROM | Base | Pixel 9a (`tegu`) | Notes |
+|---|---|---|---|
+| **LineageOS 23.2** | Android 16 (June 2025 stable; QPR1 sources not yet released by Google) | **official** — build + nightly | The reference. Google no longer publishes Pixel device trees/HALs, so Pixels lost "day-one" status; trees are community-maintained (with CalyxOS help). |
+| **AxionOS (AxionAOSP)** | LineageOS 23.2 | no official build — unofficial on top of the Lineage `tegu` tree | Performance/customization fork; branch `lineage-23.2` in `AxionAOSP/android`. Official Pixels stop at 9-flagship/8-series (`tegu` absent from `official_devices`). |
+| **CalyxOS 7.2.2** | Android 16 | **official** — prebuilt images | Privacy-focused. Resumed full maintenance in July 2026 after the 2025 hiatus (new HSM-based signing infra, FOSDEM 2026 talk). Easiest route: web installer / device-flasher, no compilation. |
+| **GrapheneOS** | Android 16 | official | Hardened alternative, own build system (not repo-compatible with Lineage trees). Mentioned for completeness. |
+
+Sources: <https://wiki.lineageos.org/devices/tegu/>, <https://github.com/AxionAOSP/android>,
+<https://calyxos.org/news/>, <https://calyxos.org/install/>, <https://forum.xda-developers.com>.
+
+## Hardware requirements (they grew a lot since Q)
+
+- x86_64 build host; **64 GB RAM** for lineage-21+ (32 GB minimum, slower),
+- **~400 GB free SSD** for source + one build; ccache adds 25–50 GB,
+- reference build OS: Ubuntu 20.04+ (use a container on Gentoo, below),
+- full `repo sync` downloads ~150 GB; a full clean build takes a few hours on a
+  modern 8–16 core CPU (ccache cuts rebuilds to ~1/3).
+
+## Build container (replaces the old LXD/Ubuntu 18.04 recipe)
+
+Any Ubuntu 24.04 container works; docker example:
+
+```
+docker run -it --name lineage \
+  -v /mnt/db1/android:/root/android \
+  ubuntu:24.04 /bin/bash
+
+# inside the container:
+apt update && apt install -y bc bison build-essential ccache curl flex \
+  g++-multilib gcc-multilib git git-lfs gnupg gperf imagemagick \
+  protobuf-compiler python3-protobuf python-is-python3 lib32readline-dev \
+  lib32z1-dev libdw-dev libelf-dev libgnutls28-dev lz4 libsdl1.2-dev \
+  libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool \
+  squashfs-tools xsltproc xxd zip zlib1g-dev unzip wget
+```
+
+Platform tools (adb/fastboot) + `repo`:
+
+```
+wget https://dl.google.com/android/repository/platform-tools-latest-linux.zip
+unzip platform-tools-latest-linux.zip -d ~
+mkdir -p ~/bin
+curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+chmod a+x ~/bin/repo
+export PATH="$HOME/bin:$HOME/platform-tools:$PATH"   # also add to ~/.profile
+git config --global user.email "you@example.com"
+git config --global user.name "Your Name"
+git lfs install
+git config --global trailer.changeid.key "Change-Id"
+export USE_CCACHE=1 CCACHE_EXEC=/usr/bin/ccache
+ccache -M 50G && ccache -o compression=true
+```
+
+## Automation: `xandroid`
+
+The whole flow below is scripted in `~/Claude/bin/xandroid` (snapshot copy next
+to `xarm` in this repo), in the `xarm`/`xlab` style — docker Ubuntu 24.04
+container, tree + ccache + artifacts on `/mnt/db5/android`:
+
+```
+xandroid setup && xandroid init && xandroid sync   # container, manifest, ~150 GB
+xandroid build                                     # brunch tegu
+xandroid flash && xandroid sideload                # fastboot + adb, [confirm]
+```
+
+`init` also drops a `local_manifests` entry for
+`TheMuppets/proprietary_vendor_google_tegu` (branch `lineage-23.2`), so the
+proprietary blobs sync in with the source — no donor device or zip extraction
+needed. Env knobs: `XANDROID_DIR/ROM/BRANCH/DEVICE/VENDOR/CONTAINER/CCACHE`.
+The manual steps below are what the script runs under the hood.
+
+## LineageOS 23.2 for Pixel 9a (`tegu`)
+
+Reference: <https://wiki.lineageos.org/devices/tegu/build/>
+
+```
+mkdir -p ~/android/lineage && cd ~/android/lineage
+repo init -u https://github.com/LineageOS/android.git -b lineage-23.2 \
+  --git-lfs --no-clone-bundle
+repo sync          # no extra flags — the manifest defaults (-j4 -c) are tuned
+```
+
+Device-specific code + proprietary blobs:
+
+```
+source build/envsetup.sh
+breakfast tegu     # pulls device/google/tegu + kernel
+# blobs, variant A: from a phone already running LineageOS 23.x (adb root on):
+cd device/google/tegu && ./extract-files.py
+# blobs, variant B: from the installable zip (no donor device needed):
+# https://wiki.lineageos.org/extracting_blobs_from_zips
+```
+
+No more roomservice.xml hand-editing or UBER-gcc swaps — `breakfast` resolves
+the trees and the toolchain is a bundled clang.
+
+Build:
+
+```
+croot
+brunch tegu
+# output in $OUT = out/target/product/tegu/:
+#   lineage-23.2-YYYYMMDD-UNOFFICIAL-tegu.zip   <- the ROM
+#   vendor_boot.img                             <- Lineage recovery
+```
+
+## AxionOS variant (unofficial for tegu)
+
+AxionOS builds on LineageOS trees, same environment, different manifest:
+
+```
+repo init -u https://github.com/AxionAOSP/android.git -b lineage-23.2 --git-lfs
+repo sync
+```
+
+`tegu` is not in `AxionAOSP/official_devices`, so clone the Lineage
+`android_device_google_tegu` (+ kernel/vendor) trees via a
+`.repo/local_manifests/` entry and add to the device makefile:
+
+```
+TARGET_DISABLE_EPPE := true
+$(call inherit-product, vendor/lineage/config/common_full_phone.mk)
+```
+
+Then `source build/envsetup.sh && brunch tegu` as above. Device-support wikis:
+<https://axpos.org/devices/>, <https://github.com/AxionAOSP/official_devices>.
+
+## Installing on the Pixel 9a
+
+Reference: <https://wiki.lineageos.org/devices/tegu/install/>. **Prerequisite:
+stock Android 16 firmware must be installed before flashing** (LineageOS
+requires the matching vendor firmware level; "16 < 23.2" is not an error).
+Unlocking wipes the device.
+
+```
+# 1. Developer options -> enable OEM unlocking + USB debugging
+adb -d reboot bootloader
+fastboot flashing unlock            # confirm on the phone screen
+
+# 2. additional partitions (files from the tegu install page / your $OUT):
+fastboot flash boot boot.img
+fastboot flash dtbo dtbo.img
+fastboot flash vendor_kernel_boot vendor_kernel_boot.img
+fastboot reboot bootloader
+
+# 3. Lineage recovery:
+fastboot flash vendor_boot vendor_boot.img
+# reboot into Recovery via the bootloader menu (Volume keys + Power)
+
+# 4. in recovery: Factory reset -> Apply update -> Apply from ADB:
+adb sideload lineage-23.2-*-tegu.zip
+# optionally sideload Google apps (MindTheGapps) before first boot
+```
+
+TWRP is dead on modern Pixels — Lineage recovery (`vendor_boot.img`) is the
+supported path; A/B slots and dynamic partitions are handled by the installer.
+
+## CalyxOS: the no-compile route
+
+If the goal is just a current, signed, auto-updating de-Googled Android on the
+9a, CalyxOS 7.2.2 (Android 16) ships prebuilt images:
+
+- web installer (Chromium-based browser, WebUSB): <https://calyxos.org/install/>
+- or the `device-flasher` CLI tool (Linux/Windows),
+- building from source is documented at <https://calyxos.org/docs/> (Lineage-style
+  repo workflow, ~same hardware requirements as above).
+
+## Other links
+
+- XDA Pixel 9a forum: <https://forum.xda-developers.com/c/google-pixel-9a.12867/>
+- LineageOS 23 announcement: <https://lineageos.org/>
+- crDroid / Evolution X — the other two ROMs with tegu support in 2026
+- Old recipes for historic devices: `../legacy/android.nougat/`, `../legacy/android.oreo/`,
+  `../legacy/android.q/`, kernel-only: `../legacy/android.kernel/`

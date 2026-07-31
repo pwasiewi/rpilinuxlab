@@ -2,15 +2,15 @@
 /build/
 /src/
 
-# download caches — xlab shared dl/ and all legacy make.*/dl/
+# download caches — xlab shared dl/ and all legacy/make.*/dl/
 /dl/
-make.*/dl/
+legacy/make.*/dl/
 
 # legacy per-directory Makefile build products
-make.*/bin/
-make.*/src/
-make.*/emu/
-make.*/initrd/
+legacy/make.*/bin/
+legacy/make.*/src/
+legacy/make.*/emu/
+legacy/make.*/initrd/
 
 # lab logs and outputs
 *.log

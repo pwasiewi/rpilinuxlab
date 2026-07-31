@@ -51,7 +51,7 @@ sudo xarm binhost             # serve binpkgs over HTTP for the Pi / xlab VM
 xarm status
 ```
 
-Full lab results and rationale: **[crosscompile_README.md](crosscompile_README.md)**
+Full lab results and rationale: **[crosscompile/README.md](crosscompile/README.md)**
 — 2026-07 census: **190/190 packages cross-compile natively** (incl.
 gcc/glibc/perl), 0 chroot fallbacks, 69 min for @world; chroot is ~19×
 slower and warm ccache cuts another ~27%. Details of the setup steps,
@@ -164,15 +164,15 @@ sudo ./xlab gentoo image
 
 ## Legacy per-directory Makefiles
 
-The original labs still work standalone:
+The original labs (moved to `legacy/`) still work standalone:
 ```
-cd make.armhfp 
+cd legacy/make.armhfp 
 make emulate #raspberry 2b
 
-cd make.aarch64
+cd legacy/make.aarch64
 make emulate #raspberry 3b
 
-cd make.arm
+cd legacy/make.arm
 make emulate #arm linux kernel
 ```
 
@@ -195,10 +195,16 @@ file ./test64dyn
 ### Własne kompilacje androida i jego kernela 
 Aby zainstalować skompilowany kernel i system najpierw trzeba umieć zrootować telefon i zainstalować TWRP- uwaga ryzykowna operacja - uzywać metod i plików sprawdzonych najlepiej na forum xda <https://forum.xda-developers.com> lub android polska ma odnośniki do xda i komentarze <https://forum.android.com.pl/>.
 
+**2026 refresh:** current recipe for the latest Android (16 "Baklava") on a modern
+phone (Pixel 9a `tegu`: LineageOS 23.2 / AxionOS / CalyxOS) lives in
+[`android.baklava/`](android.baklava/readme.md).
+
 Dodano katalogi z przepisami na kompilacje androida i kerneli.
- - https://github.com/pwasiewi/rpilinuxlab/tree/master/androidoreo
- - https://github.com/pwasiewi/rpilinuxlab/tree/master/androidnougat
- - https://github.com/pwasiewi/rpilinuxlab/tree/master/androidkernel
+ - [android.baklava](android.baklava/) — 2026, LineageOS 23.2 / Android 16, Pixel 9a
+ - [legacy/android.q](legacy/android.q/) — LineageOS 17.1, LG G6
+ - [legacy/android.oreo](legacy/android.oreo/) — ResurrectionRemix, LG G3
+ - [legacy/android.nougat](legacy/android.nougat/) — CM-14.1
+ - [legacy/android.kernel](legacy/android.kernel/) — kernel-only builds
 
 ### Inne tutoriale
  - https://forum.xda-developers.com/android/general/guide-how-to-build-custom-roms-kernel-t3814251
@@ -216,7 +222,7 @@ Dodano katalogi z przepisami na kompilacje androida i kerneli.
 2. pull from github: git clone https://github.com/pwasiewi/rpilinuxlab
 3. cd rpilinuxlab
 4. mkdir dl
-5. cd make... np. make.armhfp jest dla raspberrypi2/3 32bit
+5. cd legacy/make... np. legacy/make.armhfp jest dla raspberrypi2/3 32bit
 6. make emulate
 
 Raspberry Pi Lab przygotowane na podstawie 
