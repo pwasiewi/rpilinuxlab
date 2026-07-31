@@ -1,4 +1,13 @@
 bits 32
+
+; multiboot spec — own section so the linker script can force it to the very
+; start of the image (it must sit in the first 8 KiB of the file)
+section .multiboot
+    align   4
+    dd      0x1badb002
+    dd      0x0
+    dd      -(0x1badb002 + 0x0)
+
 section .text
 
 global start
@@ -9,12 +18,6 @@ start:
 .halt:
     hlt
     jmp     .halt
-
-    ; multiboot spec
-    align   4
-    dd      0x1badb002
-    dd      0x0
-    dd      -(0x1badb002 + 0x0)
 
 global x86_load_gdt_set_selectors
 x86_load_gdt_set_selectors:
@@ -129,3 +132,6 @@ saved_regs:
     resb    32
     resb    8192
 stack:
+
+; mark objects as not needing an executable stack (binutils >= 2.39 warns)
+section .note.GNU-stack noalloc noexec nowrite progbits

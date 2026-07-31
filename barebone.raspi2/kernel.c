@@ -32,7 +32,10 @@ size_t strlen(const char* str)
 enum
 {
     // The GPIO registers base address.
-    GPIO_BASE = 0x20200000,
+    // BCM2836 (Raspberry Pi 2) peripheral base is 0x3F000000;
+    // the old 0x20000000 base is BCM2835 (Pi 1/Zero) and produces
+    // NO output on raspi2 hardware or qemu -M raspi2b.
+    GPIO_BASE = 0x3F200000,
  
     // The offsets for reach register.
  
@@ -43,7 +46,7 @@ enum
     GPPUDCLK0 = (GPIO_BASE + 0x98),
  
     // The base address for UART.
-    UART0_BASE = 0x20201000,
+    UART0_BASE = 0x3F201000,
  
     // The offsets for reach register for the UART.
     UART0_DR     = (UART0_BASE + 0x00),

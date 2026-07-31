@@ -1,0 +1,27 @@
+# xlab generated trees (shared caches + per-target builds)
+/build/
+/src/
+
+# download caches — xlab shared dl/ and all legacy make.*/dl/
+/dl/
+make.*/dl/
+
+# legacy per-directory Makefile build products
+make.*/bin/
+make.*/src/
+make.*/emu/
+make.*/initrd/
+
+# lab logs and outputs
+*.log
+*.out
+crosscompile/logs/
+crosscompile/tests/*
+!crosscompile/tests/*.c
+
+# barebone/bareminios build products
+bareminios.x86/build/
+*.iso
+*.o
+myos.elf
+myos.bin

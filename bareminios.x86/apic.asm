@@ -16,17 +16,24 @@ section .data
 
 section .text
 bits 32
+; ISRs must preserve ALL registers of the interrupted code — screen_printf
+; (cdecl) clobbers eax/ecx/edx, so wrap the calls in pushad/popad or every
+; interrupt silently corrupts whatever main() was doing.
 apic_default_isr:
+    pushad
     push    msg_default_isr
     call    screen_printf
     add     esp, 4
     mov     dword [LOCAL_APIC_BASE + 0xb0], 0x00
+    popad
     iret
 
 apic_spurious_isr:
+    pushad
     push    msg_spurious_isr
     call    screen_printf
     add     esp, 4
+    popad
     iret
 
 apic_tick_isr:
@@ -39,3 +46,6 @@ apic_tick_isr:
 apic_sw_int:
     int     0x21
     ret
+
+; mark objects as not needing an executable stack (binutils >= 2.39 warns)
+section .note.GNU-stack noalloc noexec nowrite progbits

@@ -1,0 +1,569 @@
+#!/bin/bash
+# xarm — aarch64 (Raspberry Pi 400/4, Cortex-A72) cross-compile manager for Gentoo
+#
+# Modernizes bin/old/armv7a-* scripts: crossdev sysroot + cross-emerge +
+# QEMU user-mode chroot fallback + package-by-package build loop + binhost.
+#
+# Subcommands:
+#   setup            create crossdev overlay, build aarch64 toolchain (-S stable),
+#                    usr-merge sysroot, pin gentoo repos.conf, set arm64 profile,
+#                    tune sysroot make.conf (stable keywords, -openmp), register binfmt
+#   status           toolchain / profile / binfmt / qemu / sysroot summary
+#   emerge ARGS      cross-emerge into sysroot (emerge-aarch64-unknown-linux-gnu)
+#   chroot [CMD]     QEMU user chroot into sysroot (mounts + trap umount)
+#   1by1 [--fresh] ARGS  resolve deps (any emerge args, e.g. -e @world), build each
+#                    package --nodeps: cross first, fall back to qemu chroot;
+#                    logs in /var/tmp/xarm/ (done.log: atom<TAB>mode<TAB>secs);
+#                    --fresh rotates previous logs first
+#   binhost [PORT]   serve sysroot binpkgs over HTTP for the Pi (default 8686)
+#   distcc start|stop|status  host distccd on loopback (compile offload for the
+#                    qemu chroot: compiles escape emulation, run on the cross gcc)
+#   distcc chroot-setup [ROOT] [PORT]  masquerade wrapper + hosts file in a stage3
+#   distcc-wrapper   print client-side (Pi) distcc masquerade wrapper + setup hints
+#   clean            remove toolchain + optionally sysroot (confirm)
+#
+# Env overrides:
+#   XARM_TARGET   CHOST tuple           (default aarch64-unknown-linux-gnu)
+#   XARM_PROFILE  target profile        (default default/linux/arm64/23.0)
+#   XARM_CPU      -mcpu/-mtune value    (default cortex-a72 = Pi 400/4)
+#   XARM_CHROOT_ROOT  alternate root for 'chroot' (e.g. an aarch64 stage3)
+#   XARM_STAGE3   stage3 path used as the 1by1 fallback chroot — the sysroot has
+#                 no native gcc, so compile fallbacks need a stage3 with one
+#
+# Usage:
+#   sudo xarm setup
+#   sudo xarm emerge -av app-editors/nano
+#   sudo xarm 1by1 @system
+#   sudo xarm chroot                       # interactive shell
+#   sudo xarm chroot "emerge -1 dev-lang/perl"
+#   xarm status
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+TARGET="${XARM_TARGET:-aarch64-unknown-linux-gnu}"
+PROFILE="${XARM_PROFILE:-default/linux/arm64/23.0}"
+CPU="${XARM_CPU:-cortex-a72}"
+SYSROOT="/usr/${TARGET}"
+XEMERGE="emerge-${TARGET}"
+LOGDIR="/var/tmp/xarm"
+QEMU_BIN="/usr/bin/qemu-aarch64"
+BINFMT_NAME="qemu-aarch64"
+BINHOST_PORT_DEFAULT=8686
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+die()     { echo "❌  $*" >&2; exit 1; }
+info()    { echo ">>>  $*"; }
+warn()    { echo "⚠️   $*" >&2; }
+confirm() { read -r -p "$1 [yes/NO]: " ans; [[ "$ans" == "yes" ]] || die "Aborted."; }
+help()   { sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \?//'; }
+
+need_root() { [[ $EUID -eq 0 ]] || die "Root required: sudo $0 $CMD"; }
+
+need_toolchain() {
+    command -v "${TARGET}-gcc" >/dev/null 2>&1 ||
+        die "No ${TARGET}-gcc — run: sudo xarm setup"
+    command -v "${XEMERGE}" >/dev/null 2>&1 ||
+        die "No ${XEMERGE} wrapper — crossdev install incomplete; rerun: sudo xarm setup"
+}
+
+# ---------------------------------------------------------------------------
+# binfmt — ensure qemu-aarch64 handler is registered (systemd host)
+# ---------------------------------------------------------------------------
+binfmt_active() { [[ -f "/proc/sys/fs/binfmt_misc/${BINFMT_NAME}" ]]; }
+
+binfmt_register() {
+    if [[ -f /usr/share/qemu/binfmt.d/qemu.conf ]]; then
+        # persistent path: systemd-binfmt reads /etc/binfmt.d/
+        if [[ ! -e /etc/binfmt.d/qemu.conf ]]; then
+            # an earlier ad-hoc registration must go first, or systemd-binfmt
+            # fails re-registering the same name (and we'd stay non-persistent)
+            binfmt_active && echo -1 > "/proc/sys/fs/binfmt_misc/${BINFMT_NAME}"
+            ln -s /usr/share/qemu/binfmt.d/qemu.conf /etc/binfmt.d/qemu.conf
+        elif binfmt_active; then
+            info "binfmt ${BINFMT_NAME} already registered (persistent)"
+            return 0
+        fi
+        systemctl restart systemd-binfmt ||
+            die "systemd-binfmt failed — check: systemctl status systemd-binfmt"
+    elif binfmt_active; then
+        info "binfmt ${BINFMT_NAME} already registered (ad-hoc; no qemu.conf for persistence)"
+        return 0
+    else
+        # ad-hoc registration (lost on reboot); OC flags match Gentoo's qemu.conf
+        echo ':qemu-aarch64:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:'"${QEMU_BIN}"':OC' \
+            > /proc/sys/fs/binfmt_misc/register ||
+            die "binfmt_misc registration failed"
+    fi
+    binfmt_active || die "binfmt ${BINFMT_NAME} still not active after registration"
+    info "binfmt ${BINFMT_NAME} registered"
+}
+
+# ---------------------------------------------------------------------------
+# setup
+# ---------------------------------------------------------------------------
+cmd_setup() {
+    need_root
+    command -v crossdev >/dev/null || die "Install first: emerge sys-devel/crossdev"
+    [[ -x ${QEMU_BIN} ]] || die "No static ${QEMU_BIN} — emerge qemu with USE=static-user QEMU_USER_TARGETS=aarch64"
+    file "${QEMU_BIN}" | grep -q "statically linked" ||
+        warn "${QEMU_BIN} is NOT static — chroot will fail; rebuild qemu with USE=static-user"
+
+    # 1. crossdev overlay
+    if ! portageq get_repo_path / crossdev >/dev/null 2>&1; then
+        info "Creating crossdev overlay"
+        if command -v eselect >/dev/null && eselect repository help >/dev/null 2>&1; then
+            eselect repository create crossdev
+        else
+            mkdir -p /var/db/repos/crossdev/{profiles,metadata}
+            echo 'crossdev' > /var/db/repos/crossdev/profiles/repo_name
+            echo 'masters = gentoo' > /var/db/repos/crossdev/metadata/layout.conf
+            chown -R portage:portage /var/db/repos/crossdev
+            cat > /etc/portage/repos.conf/crossdev.conf <<-EOF
+		[crossdev]
+		location = /var/db/repos/crossdev
+		priority = 10
+		masters = gentoo
+		auto-sync = no
+		EOF
+        fi
+    fi
+
+    # 2. toolchain (idempotent: skip if gcc already present)
+    if command -v "${TARGET}-gcc" >/dev/null 2>&1; then
+        info "Toolchain ${TARGET} already present: $(${TARGET}-gcc -dumpversion)"
+    else
+        info "Building toolchain ${TARGET} (stable, ~15-30 min)"
+        crossdev --stable --target "${TARGET}" ||
+            die "crossdev failed — full log: /var/log/portage/cross-${TARGET}-*.log"
+    fi
+
+    # 2b. usr-merge the sysroot — crossdev creates split-usr dirs, but 23.0
+    # profiles are merged-usr: profile.bashrc hard-fails every setup phase once
+    # baselayout is in ("merged-usr profile, but disk is split-usr")
+    if [[ -d ${SYSROOT}/bin && ! -L ${SYSROOT}/bin ]]; then
+        info "usr-merging sysroot (23.0 profiles are merged-usr)"
+        if grep -q " ${SYSROOT}/" /proc/mounts; then
+            die "Mounts active under ${SYSROOT} — umount before usr-merge"
+        fi
+        (
+            set -e; cd "${SYSROOT}"
+            cp -a bin/.  usr/bin/;  rm -rf bin;  ln -s usr/bin  bin
+            cp -a sbin/. usr/bin/;  rm -rf sbin; ln -s usr/bin  sbin
+            cp -a lib/.  usr/lib/;  rm -rf lib;  ln -s usr/lib  lib
+            if [[ -d lib64 && ! -L lib64 ]]; then
+                cp -a lib64/. usr/lib64/; rm -rf lib64; ln -s usr/lib64 lib64
+            fi
+            if [[ -d usr/sbin && ! -L usr/sbin ]]; then
+                cp -a usr/sbin/. usr/bin/; rm -rf usr/sbin; ln -s bin usr/sbin
+            fi
+        ) || die "sysroot usr-merge failed"
+    fi
+
+    # 2c. pin the gentoo repo path in the sysroot config — on hosts where the
+    # tree is not at /var/db/repos/gentoo the chroot's default repos.conf
+    # points at a nonexistent dir and emerge refuses to run
+    local grepo; grepo=$(portageq get_repo_path / gentoo)
+    mkdir -p "${SYSROOT}/etc/portage/repos.conf"
+    if [[ ! -f ${SYSROOT}/etc/portage/repos.conf/gentoo.conf ]]; then
+        cat > "${SYSROOT}/etc/portage/repos.conf/gentoo.conf" <<-EOF
+	[DEFAULT]
+	main-repo = gentoo
+
+	[gentoo]
+	location = ${grepo}
+	EOF
+    fi
+
+    # 3. target profile
+    local prof_link="${SYSROOT}/etc/portage/make.profile"
+    mkdir -p "${SYSROOT}/etc/portage"
+    if [[ ! -e ${prof_link} ]] || ! PORTAGE_CONFIGROOT="${SYSROOT}" eselect profile show 2>/dev/null | grep -q arm64; then
+        info "Setting profile ${PROFILE}"
+        PORTAGE_CONFIGROOT="${SYSROOT}" eselect profile set "${PROFILE}" ||
+            die "Profile ${PROFILE} not found — list: PORTAGE_CONFIGROOT=${SYSROOT} eselect profile list"
+    fi
+
+    # 4. sysroot make.conf — append tuned block once (crossdev wrote the base file)
+    local mc="${SYSROOT}/etc/portage/make.conf"
+    if ! grep -q "^# xarm settings" "${mc}" 2>/dev/null; then
+        info "Tuning ${mc} for ${CPU}"
+        cat >> "${mc}" <<-EOF
+
+	# xarm settings — Raspberry Pi 400/4 (${CPU})
+	COMMON_FLAGS="-mcpu=${CPU} -mtune=${CPU} -O2 -pipe"
+	CFLAGS="\${COMMON_FLAGS}"
+	CXXFLAGS="\${COMMON_FLAGS}"
+	FCFLAGS="\${COMMON_FLAGS}"
+	FFLAGS="\${COMMON_FLAGS}"
+	MAKEOPTS="-j$(nproc) -l$(nproc)"
+	# binpkgi dla Pi: ROOT-relative, serwowane przez 'xarm binhost'
+	PKGDIR="\${ROOT}var/cache/binpkgs"
+	FEATURES="buildpkg -news"
+	# qemu-user chroot nie znosi sandboxa przestrzeni nazw (patrz Embedded Handbook)
+	FEATURES="\${FEATURES} -pid-sandbox -ipc-sandbox -network-sandbox"
+	ACCEPT_LICENSE="*"
+	# stable only — crossdev defaults to "arch ~arch"; ~arch pulled gcc-16 whose
+	# libatomic configure probes -fno-link-libatomic and dies under a gcc-15
+	# cross toolchain (keep target gcc major == cross gcc major)
+	ACCEPT_KEYWORDS="\${ARCH}"
+	# openmp needs target libgomp = sys-devel/gcc in ROOT; keep off for the
+	# early bootstrap, re-enable once gcc is merged into the sysroot
+	# (gcc >= 15.3.1_p20260717 cross-emerges fine; 15.3.0 died on
+	# generated headers — see the lab README, experiment 8)
+	USE="\${USE} -openmp"
+	# ccache for CROSS builds: host-native ccache, but a DEDICATED aarch64 cache —
+	# never the host's /var/cache/ccache (x86 objects; do not mix architectures)
+	FEATURES="\${FEATURES} ccache"
+	CCACHE_DIR="/var/cache/ccache-xarm"
+	EOF
+    fi
+
+    # 4b. host-side ARM ccache dir (separate from the host's own x86 cache)
+    if command -v ccache >/dev/null 2>&1; then
+        if [[ ! -d /var/cache/ccache-xarm ]]; then
+            mkdir -p /var/cache/ccache-xarm
+            chown portage:portage /var/cache/ccache-xarm
+            chmod 2775 /var/cache/ccache-xarm
+            CCACHE_DIR=/var/cache/ccache-xarm ccache -M 10G >/dev/null
+            info "Created /var/cache/ccache-xarm (aarch64 objects only, 10G cap)"
+        fi
+    else
+        warn "No host ccache — FEATURES=ccache in sysroot make.conf will fail; emerge dev-util/ccache"
+    fi
+
+    # 5. dirs shared with chroot builds
+    mkdir -p "${SYSROOT}/var/cache/binpkgs" "${SYSROOT}/var/cache/distfiles" "${LOGDIR}"
+
+    # 6. binfmt for qemu chroot fallback
+    binfmt_register
+
+    info "Done. Next: sudo xarm emerge -av1 @system   (or: sudo xarm 1by1 @system)"
+}
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+cmd_status() {
+    echo "Target:    ${TARGET}"
+    echo "Sysroot:   ${SYSROOT} $([[ -d ${SYSROOT} ]] && du -sh "${SYSROOT}" 2>/dev/null | cut -f1 || echo '(missing)')"
+    if command -v "${TARGET}-gcc" >/dev/null 2>&1; then
+        echo "Toolchain: gcc $(${TARGET}-gcc -dumpversion), binutils $(${TARGET}-ld --version | head -1 | grep -oE '[0-9.]+$' || true)"
+    else
+        echo "Toolchain: NOT INSTALLED (sudo xarm setup)"
+    fi
+    echo "Profile:   $(PORTAGE_CONFIGROOT=${SYSROOT} eselect profile show 2>/dev/null | tail -1 | tr -d ' ' || echo '?')"
+    echo "qemu:      $([[ -x ${QEMU_BIN} ]] && file -b "${QEMU_BIN}" | grep -o 'statically linked' || echo 'MISSING')"
+    echo "binfmt:    $(binfmt_active && echo active || echo 'NOT REGISTERED')"
+    if [[ -d ${SYSROOT}/var/db/pkg ]]; then
+        echo "Packages:  $(find "${SYSROOT}/var/db/pkg" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l) installed in sysroot"
+    fi
+    if [[ -d ${LOGDIR} ]]; then
+        for f in done failed via-chroot; do
+            [[ -f ${LOGDIR}/${f}.log ]] && echo "1by1 ${f}: $(wc -l < "${LOGDIR}/${f}.log")"
+        done
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# emerge — cross-emerge passthrough
+# ---------------------------------------------------------------------------
+cmd_emerge() {
+    need_root; need_toolchain
+    exec "${XEMERGE}" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# chroot — QEMU user-mode chroot into sysroot
+# ---------------------------------------------------------------------------
+MOUNTED=()
+CHROOT_BASE=""
+chroot_umount() {
+    local m
+    for (( m=${#MOUNTED[@]}-1; m>=0; m-- )); do
+        umount -R "${MOUNTED[m]}" 2>/dev/null || warn "umount ${MOUNTED[m]} failed (still busy?)"
+    done
+    MOUNTED=()
+}
+
+chroot_mount() {
+    local tgt="${CHROOT_BASE}$2"
+    mkdir -p "${tgt}"
+    case "$1" in
+        proc)  mountpoint -q "${tgt}" || mount -t proc proc "${tgt}" ;;
+        rbind) mountpoint -q "${tgt}" || { mount --rbind "$3" "${tgt}"; mount --make-rslave "${tgt}"; } ;;
+        bind)  mountpoint -q "${tgt}" || mount --bind "$3" "${tgt}" ;;
+    esac
+    MOUNTED+=("${tgt}")
+}
+
+cmd_chroot() {
+    need_root
+    # XARM_CHROOT_ROOT: alternate root (e.g. a stage3 with a native toolchain —
+    # the sysroot has no target gcc, so real fallback builds need the stage3)
+    CHROOT_BASE="${XARM_CHROOT_ROOT:-${SYSROOT}}"
+    [[ -d ${CHROOT_BASE} ]] || die "No chroot root ${CHROOT_BASE} — run: sudo xarm setup"
+    binfmt_register
+    # OC-flagged binfmt resolves interpreter inside the chroot → static qemu must be there
+    install -m755 "${QEMU_BIN}" "${CHROOT_BASE}/usr/bin/" || die "Cannot copy ${QEMU_BIN} into chroot"
+    cp -L /etc/resolv.conf "${CHROOT_BASE}/etc/resolv.conf" || die "resolv.conf copy failed"
+
+    # resolve real host paths: the gentoo tree may live outside /var/db/repos
+    # and DISTDIR outside /var/cache/distfiles; the sysroot's make.profile
+    # symlink + repos.conf reference the tree by its HOST path, so mirror it
+    local grepo ddir
+    grepo=$(portageq get_repo_path / gentoo)
+    ddir=$(portageq distdir)
+
+    trap chroot_umount EXIT INT TERM
+    chroot_mount proc  /proc
+    chroot_mount rbind /dev /dev
+    chroot_mount rbind /sys /sys
+    chroot_mount bind  /tmp /tmp
+    if [[ ${CHROOT_BASE} == "${SYSROOT}" ]]; then
+        chroot_mount bind /var/db/repos /var/db/repos       # host overlays
+        [[ ${grepo} == /var/db/repos/* ]] || chroot_mount bind "${grepo}" "${grepo}"
+    else
+        # stage3-style root: its default repos.conf + make.profile symlink expect
+        # the tree at /var/db/repos/gentoo — bind the host tree there
+        chroot_mount bind /var/db/repos/gentoo "${grepo}"
+    fi
+    chroot_mount bind  /var/cache/distfiles "${ddir}"
+
+    local rc=0
+    if [[ $# -eq 0 ]]; then
+        info "Entering ${TARGET} chroot at ${CHROOT_BASE} (qemu user-mode) — exit to leave"
+        chroot "${CHROOT_BASE}" /bin/bash --login || rc=$?
+    else
+        chroot "${CHROOT_BASE}" /bin/bash -lc "$*" || rc=$?
+    fi
+    chroot_umount
+    trap - EXIT INT TERM
+    return "${rc}"
+}
+
+# ---------------------------------------------------------------------------
+# 1by1 — resolve deps, then build each package --nodeps with chroot fallback
+# ---------------------------------------------------------------------------
+cmd_1by1() {
+    need_root; need_toolchain
+    local fresh=0
+    [[ ${1:-} == --fresh ]] && { fresh=1; shift; }
+    [[ $# -gt 0 ]] || die "Usage: xarm 1by1 [--fresh] <emerge-args|@set> (e.g. @system, -e @world)"
+    mkdir -p "${LOGDIR}"
+    local done_log="${LOGDIR}/done.log" failed_log="${LOGDIR}/failed.log" chroot_log="${LOGDIR}/via-chroot.log"
+    if [[ ${fresh} -eq 1 ]]; then
+        local stamp f; stamp=$(date +%Y%m%d-%H%M%S)
+        for f in "${done_log}" "${failed_log}" "${chroot_log}"; do
+            [[ -s ${f} ]] && mv "${f}" "${f%.log}.${stamp}.log"
+        done
+        info "Previous logs rotated to *.${stamp}.log"
+    fi
+    touch "${done_log}" "${failed_log}" "${chroot_log}"
+
+    # fallback chroot: XARM_STAGE3 (native toolchain) if set, else the sysroot
+    local fb_root="${XARM_STAGE3:-}"
+    [[ -z ${fb_root} || -d ${fb_root} ]] || die "XARM_STAGE3=${fb_root} does not exist"
+
+    info "Resolving dependency list for: $*"
+    local atoms
+    # keep only target-ROOT merges ("to ${SYSROOT}/") — with -e the pretend also
+    # lists the host-side BDEPEND closure, which must not be rebuilt here
+    mapfile -t atoms < <("${XEMERGE}" --pretend --quiet --color=n "$@" 2>/dev/null \
+        | sed -nE "s|^\[ebuild[^]]*\] ([A-Za-z0-9_.+-]+/[A-Za-z0-9_.+-]+).* to ${SYSROOT}/.*|=\1|p")
+    [[ ${#atoms[@]} -gt 0 ]] || die "Nothing to build (emerge -p returned no [ebuild] lines)"
+    info "${#atoms[@]} packages in build order"
+
+    local atom pkg n=0 ok=0 fell=0 bad=0 t0 dt
+    for atom in "${atoms[@]}"; do
+        n=$((n+1))
+        if cut -f1 "${done_log}" | grep -qxF "${atom}"; then
+            info "[${n}/${#atoms[@]}] ${atom} — already done, skipping"
+            continue
+        fi
+        info "[${n}/${#atoms[@]}] cross: ${atom}"
+        t0=${SECONDS}
+        if "${XEMERGE}" --oneshot --nodeps "${atom}"; then
+            dt=$((SECONDS-t0))
+            printf '%s\tcross\t%ss\n' "${atom}" "${dt}" >> "${done_log}"; ok=$((ok+1))
+        else
+            warn "cross failed → qemu chroot: ${atom}"
+            # stage3 keywords may lag the sysroot's → drop the =version pin there
+            # and let its own resolver pick; also keep deps on (stage3 ≠ sysroot vdb)
+            pkg="${atom#=}"; pkg=$(echo "${pkg}" | sed -E 's/-[0-9][0-9a-z._]*(-r[0-9]+)?$//')
+            t0=${SECONDS}
+            if XARM_CHROOT_ROOT="${fb_root:-${SYSROOT}}" cmd_chroot \
+                "emerge --oneshot $([[ -n ${fb_root} ]] && echo "${pkg}" || echo "--nodeps ${atom}")"; then
+                dt=$((SECONDS-t0))
+                printf '%s\tchroot\t%ss\n' "${atom}" "${dt}" >> "${done_log}"
+                echo "${atom}" >> "${chroot_log}"; fell=$((fell+1))
+            else
+                echo "${atom}" >> "${failed_log}"; bad=$((bad+1))
+                warn "FAILED both ways: ${atom} (logged, continuing)"
+            fi
+        fi
+    done
+    info "Summary: ${ok} cross, ${fell} via chroot, ${bad} failed — logs in ${LOGDIR}/"
+    [[ ${bad} -eq 0 ]] || return 1
+}
+
+# ---------------------------------------------------------------------------
+# binhost — serve sysroot binpkgs over HTTP for the Pi
+# ---------------------------------------------------------------------------
+cmd_binhost() {
+    local port="${1:-${BINHOST_PORT_DEFAULT}}"
+    local pkgdir="${SYSROOT}/var/cache/binpkgs"
+    [[ -d ${pkgdir} ]] || die "No ${pkgdir} — build something first (FEATURES=buildpkg)"
+    local ip; ip=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || echo "HOST_IP")
+    info "Serving ${pkgdir} on http://${ip}:${port}/"
+    echo
+    echo "On the Pi — /etc/portage/binrepos.conf/xarm.conf:"
+    echo "  [xarm-binhost]"
+    echo "  sync-uri = http://${ip}:${port}/"
+    echo "  priority = 10"
+    echo
+    echo "Then: emerge --getbinpkg --usepkg <pkg>    (Ctrl-C here to stop serving)"
+    exec python3 -m http.server --directory "${pkgdir}" "${port}"
+}
+
+# ---------------------------------------------------------------------------
+# distcc — host distccd on loopback + chroot client setup
+# ---------------------------------------------------------------------------
+DISTCCD_PORT_DEFAULT=3632
+DISTCCD_LOG="${LOGDIR}/distccd.log"
+
+cmd_distcc() {
+    local sub="${1:-status}"; shift || true
+    case "${sub}" in
+    start)
+        need_root; need_toolchain
+        local port="${1:-${DISTCCD_PORT_DEFAULT}}"
+        pgrep -x distccd >/dev/null && { info "distccd already running"; return 0; }
+        command -v distccd >/dev/null || die "No distccd — emerge sys-devel/distcc"
+        mkdir -p "${LOGDIR}"
+        touch "${DISTCCD_LOG}"; chown distcc "${DISTCCD_LOG}" 2>/dev/null || true
+        # loopback only: the qemu chroot shares the host network stack, so
+        # 127.0.0.1 reaches distccd; nothing is exposed to the LAN
+        distccd --daemon --user distcc --allow 127.0.0.1/32 --listen 127.0.0.1 \
+            --port "${port}" --jobs "$(nproc)" \
+            --log-file "${DISTCCD_LOG}" --log-level info ||
+            die "distccd failed to start — see ${DISTCCD_LOG}"
+        info "distccd on 127.0.0.1:${port}, $(nproc) jobs, log ${DISTCCD_LOG}"
+        ;;
+    stop)
+        need_root
+        if pkill -x distccd 2>/dev/null; then info "distccd stopped"; else info "distccd not running"; fi
+        ;;
+    status)
+        if pgrep -x distccd >/dev/null; then
+            echo "distccd: running ($(pgrep -cx distccd) procs, port $(ss -tlnp 2>/dev/null | grep -oP '127\.0\.0\.1:\K[0-9]+(?=.*distccd)' | head -1))"
+            [[ -f ${DISTCCD_LOG} ]] && echo "jobs completed OK: $(grep -c COMPILE_OK "${DISTCCD_LOG}" 2>/dev/null || echo 0)"
+        else
+            echo "distccd: not running"
+        fi
+        ;;
+    chroot-setup)
+        need_root; need_toolchain
+        local root="${1:-${XARM_STAGE3:-}}" port="${2:-${DISTCCD_PORT_DEFAULT}}"
+        [[ -n ${root} && -d ${root} ]] || die "Usage: xarm distcc chroot-setup /path/to/stage3 (or set XARM_STAGE3)"
+        local mdir="${root}/usr/lib/distcc"
+        [[ -d ${mdir} ]] || die "No ${mdir} — install distcc in the chroot first (cross-build the binpkg: xarm emerge --oneshot distcc; then usepkg it in the chroot)"
+        # gcc major version must match the host cross-gcc — mismatch = ICE or
+        # silent miscompilation
+        local hostv targetv
+        hostv=$("${TARGET}-gcc" -dumpversion | cut -d. -f1)
+        targetv=$(chroot "${root}" /usr/bin/gcc -dumpversion 2>/dev/null | cut -d. -f1 || true)
+        [[ -z ${targetv} || ${hostv} == "${targetv}" ]] ||
+            die "gcc major mismatch: cross ${hostv} vs chroot ${targetv}"
+        # masquerade fix: plain cc/gcc/g++/c++ must travel as ${TARGET}-* names,
+        # or the host distccd would run its native x86_64 gcc (wrong objects)
+        cat > "${mdir}/${TARGET}-wrapper" <<-WRAP
+	#!/bin/bash
+	exec /usr/lib/distcc/${TARGET}-g\${0: -2} "\$@"
+	WRAP
+        chmod 0755 "${mdir}/${TARGET}-wrapper"
+        local t
+        for t in cc gcc g++ c++; do
+            ln -sf "${TARGET}-wrapper" "${mdir}/${t}"
+        done
+        mkdir -p "${root}/etc/distcc"
+        echo "127.0.0.1:${port}/$(nproc),lzo" > "${root}/etc/distcc/hosts"
+        info "Masquerade wrapper + /etc/distcc/hosts written in ${root}"
+        echo "Per-run:    FEATURES=\"distcc\" emerge ...      (FEATURES=\"-ccache distcc\" to isolate)"
+        echo "With ccache: FEATURES=\"ccache distcc\" CCACHE_PREFIX=distcc emerge ..."
+        echo "Permanent:  FEATURES=\"\${FEATURES} distcc\" (+ CCACHE_PREFIX) in ${root}/etc/portage/make.conf"
+        ;;
+    *)  die "Usage: xarm distcc {start [PORT]|stop|status|chroot-setup [ROOT] [PORT]}" ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# distcc-wrapper — print client-side (Pi) masquerade wrapper
+# ---------------------------------------------------------------------------
+cmd_distcc_wrapper() {
+    cat <<EOF
+# ===== Run ON THE PI (client). Host side needs only: distccd + this toolchain =====
+# Uwaga (wiki): binhost ('xarm binhost') jest zwykle szybszy i mniej kruchy niż distcc.
+#
+# 1. Pi: emerge distcc; /etc/distcc/hosts →  <host-ip>/$(nproc)
+# 2. Pi: napraw masquerade dir żeby 'gcc' szedł jako ${TARGET}-gcc:
+cd /usr/lib/distcc/bin || exit 1
+rm -f c++ g++ gcc cc
+cat > ${TARGET}-wrapper <<'WRAP'
+#!/bin/bash
+exec /usr/lib/distcc/bin/${TARGET}-g\${0:\$[-2]} "\$@"
+WRAP
+chmod a+x ${TARGET}-wrapper
+ln -s ${TARGET}-wrapper cc
+ln -s ${TARGET}-wrapper gcc
+ln -s ${TARGET}-wrapper g++
+ln -s ${TARGET}-wrapper c++
+# 3. Pi make.conf: FEATURES="distcc"; MAKEOPTS="-jN" (N = suma rdzeni hosta)
+# 4. Host: emerge distcc; /etc/conf.d/distccd → --allow <siec-pi>/24; rc/systemctl start distccd
+#    GCC hosta (cross) i Pi musi być TA SAMA wersja major — inaczej ICE/miscompile.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# clean
+# ---------------------------------------------------------------------------
+cmd_clean() {
+    need_root
+    confirm "Remove ${TARGET} toolchain (crossdev --clean)?"
+    crossdev --clean --target "${TARGET}"
+    if [[ -d ${SYSROOT} ]]; then
+        echo "Sysroot ${SYSROOT} ($(du -sh "${SYSROOT}" 2>/dev/null | cut -f1)) left in place."
+        confirm "ALSO delete sysroot ${SYSROOT} with all built packages?"
+        # refuse if anything is still mounted under sysroot
+        if grep -q " ${SYSROOT}/" /proc/mounts; then
+            die "Mounts active under ${SYSROOT} — umount first (was 'xarm chroot' interrupted?)"
+        fi
+        rm -rf "${SYSROOT}"
+        info "Sysroot removed."
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+CMD="${1:-}"
+[[ -n ${CMD} ]] || { help; exit 0; }
+shift
+
+case "${CMD}" in
+    setup)          cmd_setup "$@" ;;
+    status)         cmd_status "$@" ;;
+    emerge)         cmd_emerge "$@" ;;
+    chroot)         cmd_chroot "$@" ;;
+    1by1)           cmd_1by1 "$@" ;;
+    binhost)        cmd_binhost "$@" ;;
+    distcc)         cmd_distcc "$@" ;;
+    distcc-wrapper) cmd_distcc_wrapper "$@" ;;
+    clean)          cmd_clean "$@" ;;
+    -h|--help|help) help ;;
+    *)              die "Unknown subcommand: ${CMD} (see: xarm --help)" ;;
+esac

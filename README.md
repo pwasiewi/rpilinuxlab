@@ -1,5 +1,66 @@
 # Some laboratory scripts to run in Gentoo linux
-For example you can emulate with crossdev and qemu arm linux and raspberry kernels with busybox as init:
+
+## xlab — unified QEMU kernel lab
+
+`./xlab` is a single data-driven script that supersedes the per-directory
+`make.*` Makefiles (whose recipes were ~95% identical): it cross-compiles a
+kernel, pairs it with a static busybox initrd — or, for the `gentoo` target,
+with a real arm64 Gentoo stage3 on an ext4 virtio disk — and boots it in
+qemu. Downloads are cached in shared `dl/` (legacy `make.*/dl` tarballs are
+reused via symlinks), sources unpack once into shared `src/`, and each
+target builds in `build/<target>/`.
+
+```
+./xlab targets                # aarch64 (RPi3) | armhfp (RPi2) | arm | x86_64 | gentoo
+./xlab status                 # toolchain / kernel / rootfs per target
+./xlab aarch64 run            # builds kernel+busybox+initrd if missing, boots raspi3b
+./xlab gentoo kernel          # rpi kernel, arm64 defconfig + virtio built-in
+./xlab gentoo stage3          # latest arm64 stage3 + sha256 verify
+sudo ./xlab gentoo image      # 8G ext4 image: stage3, modules, serial autologin
+./xlab gentoo run             # -M virt, serial on stdio, ssh -> localhost:2222
+sudo ./xlab gentoo mount      # image on build/gentoo/mnt (manual tweaks)
+sudo ./xlab gentoo chroot     # qemu-user chroot via xarm, binpkgs bound inside
+```
+
+xarm cooperation — cross-compile on the host, install into the image:
+```
+sudo xarm emerge -av app-editors/nano                            # binpkg in sysroot
+sudo ./xlab gentoo chroot "emerge -av --usepkg app-editors/nano" # offline install
+# or into the RUNNING VM: 'sudo xarm binhost' on the host, then in the guest
+# 'emerge --getbinpkg --usepkg nano' (binrepos.conf -> 10.0.2.2:8686 preinstalled)
+```
+
+The gentoo image is a lab config (root autologin, empty password) — keep it
+on qemu user-mode networking. Cross toolchains come from crossdev;
+`./xlab <target> kernel` prints the exact `crossdev` command when one is
+missing, and for aarch64 the whole setup is `sudo xarm setup` (below).
+
+## xarm — aarch64 cross-compile manager
+
+`./xarm` is a snapshot of the canonical copy in `~/Claude/bin/xarm`
+(mirrored to `/usr/local/bin/xarm`): crossdev toolchain + sysroot
+cross-emerge + QEMU user-mode chroot fallback + package-by-package build
+loop + binhost + distcc offload, targeting the Raspberry Pi 400/4
+(cortex-a72).
+
+```
+sudo xarm setup               # crossdev toolchain, sysroot, profile, binfmt
+sudo xarm emerge -av nano     # cross-emerge into the sysroot (builds binpkgs)
+sudo xarm 1by1 -e @world      # per-package loop: cross first, qemu chroot fallback
+sudo xarm binhost             # serve binpkgs over HTTP for the Pi / xlab VM
+xarm status
+```
+
+Full lab results and rationale: **[crosscompile_README.md](crosscompile_README.md)**
+— 2026-07 census: **190/190 packages cross-compile natively** (incl.
+gcc/glibc/perl), 0 chroot fallbacks, 69 min for @world; chroot is ~19×
+slower and warm ccache cuts another ~27%. Details of the setup steps,
+gotchas and speed levers live in [`crosscompile/`](crosscompile/)
+(`manual-setup.md`, `xarm-setup.md`, `optimizations.md`).
+
+## Legacy per-directory Makefiles
+
+The original labs still work standalone:
 ```
 cd make.armhfp 
 make emulate #raspberry 2b
@@ -26,7 +87,7 @@ file ./test64dyn
 # ./test64dyn: ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0, not stripped
 ```
 
-# AndroidModLab
+# Legacy AndroidModLab
 ### Własne kompilacje androida i jego kernela 
 Aby zainstalować skompilowany kernel i system najpierw trzeba umieć zrootować telefon i zainstalować TWRP- uwaga ryzykowna operacja - uzywać metod i plików sprawdzonych najlepiej na forum xda <https://forum.xda-developers.com> lub android polska ma odnośniki do xda i komentarze <https://forum.android.com.pl/>.
 
@@ -40,7 +101,7 @@ Dodano katalogi z przepisami na kompilacje androida i kerneli.
  - https://thealaskalinuxuser.wordpress.com/2018/08/03/video-tutorial-for-android-building-advanced-topics/
 
 
-# Raspberry Pi Lab 
+# Legacy Raspberry Pi Lab 
 ## i nie tylko ;) https://wiki.gentoo.org/wiki/Embedded_systems/ARM_hardware_list
 #### Odnośniki 
 - https://wiki.gentoo.org/wiki/Embedded_Handbook/General/Creating_a_cross-compiler
@@ -58,141 +119,3 @@ Raspberry Pi Lab przygotowane na podstawie
 1) https://wiki.gentoo.org/wiki/Cross_build_environment
 2) http://mgalgs.github.io/2015/05/16/how-to-build-a-custom-linux-kernel-for-qemu-2015-edition.html
 3) środowiska Pawła Kraszewskiego z fragmentami z jego README
-
-Przygotowanie środowiska programistycznego do procesorów ARM po system Gentoo
-"na piechotę":
-
-Ścieżki w plikach .config przeznaczone są dla tego opisu poniżej. Dla przepisu
-w "Makefile" trzeba je poprawić.
-
-1. Instalacja pakietu CROSSDEV
-
-----------------------------------------------------------------------------
-```
-emerge -av crossdev
-```
-----------------------------------------------------------------------------
-
-2. Generacja narzędzi dla platformy ARM
-```
-crossdev --target arm-softfloat-linux-gnueabi --stable  --gcc 7.3.0-r1 --libc 2.25-r11 --kernel 4.16.9 -oO /usr/portage
-```
-----------------------------------------------------------------------------
-
-3. Skrypt "armmake" wywołuje "make" z ustawieniem parametrów do kross-kompilacji
-   narzędziami z p. 2
-
-----------------------------------------------------------------------------
-```
-#!/bin/bash
-export ARCH=arm
-export CROSS_COMPILE=arm-softfloat-linux-gnueabi-
-make $@
-```
-----------------------------------------------------------------------------
-
-4. Ściągamy i rozpakowujemy źródła kernela i busybox do podkatalogu src
-
-----------------------------------------------------------------------------
-```
-mkdir -p src bin.kernel bin.busybox out.initrd emulacja
-wget http://www.kernel.org/pub/linux/kernel/v4.0/linux-4.16.7.tar.xz
-wget http://busybox.net/downloads/busybox-1.28.3.tar.bz2
-tar xjf linux-4.16.7.tar.xz -C src
-tar xjf busybox-1.28.3.tar.bz2 -C src
-```
-----------------------------------------------------------------------------
-
-5. Konfigurujemy kernel
-
-----------------------------------------------------------------------------
-```
-cd src/linux-4.16.7
-../../armmake O=../../bin.kernel menuconfig
-cd ../..
-```
-----------------------------------------------------------------------------
-
-6. Kompilujemy kernel
-
-----------------------------------------------------------------------------
-```
-cd bin.kernel
-../armmake all
-cd ..
-```
-----------------------------------------------------------------------------
-
-6. Konfigurujemy busybox
-
-----------------------------------------------------------------------------
-```
-cd src/busybox-1.28.3
-../../armmake O=../../bin.busybox menuconfig
-cd ../..
-```
-----------------------------------------------------------------------------
-
-7. Kompilujemy busybox
-
-----------------------------------------------------------------------------
-```
-cd bin.busybox
-../armmake
-../armmake install
-cd ..
-```
-----------------------------------------------------------------------------
-
-8. Dopieszczamy INITRD
-
-9. Generujemy obraz INITRD
-
-----------------------------------------------------------------------------
-```
-cd out.initrd
-find . | cpio --quiet -H newc -o --owner=0.0 > ../emulacja/initrd
-cd ..
-```
-----------------------------------------------------------------------------
-
-10. Linkujemy obraz jądra
-
-----------------------------------------------------------------------------
-```
-ln -s ../bin.kernel/arch/arm/boot/zImage emulacja/vmlinuz
-```
-----------------------------------------------------------------------------
-
-11. Odpalamy emulator
-
-----------------------------------------------------------------------------
-```
-qemu-system-arm -M versatilepb -m 256 -kernel emulacja/vmlinuz -initrd emulacja/initrd -append "init=/init" -serial=stdio
-```
-----------------------------------------------------------------------------
-
-12. Najlepiej jednak skorzystać z załączonych Makefile'ów dla x86_64, armsoft i raspberry2 armvh7
-```
-make emulate
-```
-i to by było na tyle!
-
-# Inne crossdev generowane crosscompilatory
-## https://wiki.gentoo.org/wiki/Embedded_systems/ARM_hardware_list
-
-The BeagleBone Black was needed:
-```
-    crossdev -v -S -t armv7-none-linux-gnueabi --env
-    'EXTRA_ECONF="--with-arch=armv7-a
-    --with-fpu=vfpv3-d16
-    --with-float-abi=hard
-    libc_cv_forced_unwind=yes
-    libc_cv_ctors_header=yes
-    libc_cv_c_cleanup=yes"'
-```
-For musl rpi3 (do not work!):
-```
-    crossdev --target armv7a-hardfloat-linux-musleabi  --stable  --gcc 7.3.0-r3  --kernel 4.16.12 -oO /usr/portage --env 'EXTRA_ECONF="--with-arch=armv7-a --with-fpu=neon-vfpv4 --with-float-abi=hard"'
-```
-

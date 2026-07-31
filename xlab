@@ -1,0 +1,629 @@
+#!/bin/bash
+# xlab — unified QEMU kernel lab for rpilinuxlab
+#
+# One data-driven script replacing the per-directory make.* Makefiles (their
+# recipes were ~95% identical) and the earlier make.aarch64_gentoo/xgentoo:
+# cross-compile a kernel, pair it with a static busybox initrd (or a Gentoo
+# arm64 stage3 on a virtio disk) and boot it in qemu.
+#
+# Usage: xlab <target> <subcommand> [args]
+#        xlab targets | status | clean
+#
+# Targets:
+#   aarch64    RPi 3  — rpi kernel bcmrpi3_defconfig,  -M raspi3b,  busybox initrd
+#   armhfp     RPi 2  — rpi kernel bcm2709_defconfig,  -M raspi2b,  busybox initrd
+#   arm        ARM926 — mainline, versatile_defconfig, -M versatileab, busybox initrd
+#   x86_64     native — mainline defconfig, KVM,                     busybox initrd
+#   gentoo     arm64 Gentoo stage3 on an ext4 virtio disk, -M virt (no initrd)
+#
+# Subcommands (all targets):
+#   status         what is downloaded / built / ready
+#   kernel         fetch + unpack + configure + cross-compile the kernel
+#   kernconf       kernel menuconfig
+#   run            boot in qemu (builds missing initrd-pipeline pieces first)
+#   clean          remove build/<target> (confirm; shared dl/ and src/ kept)
+# Subcommands (initrd targets):
+#   busybox        build static busybox;  busyboxconf = menuconfig
+#   initrd         assemble the busybox initrd (embedded /init, cpio newc)
+# Subcommands (gentoo target):
+#   stage3         download + sha256-verify the latest arm64 stage3
+#   image [SIZE]   ext4 image (default 8G): unpack stage3, modules_install,
+#                  serial autologin, fstab, dhcpcd, xarm binrepos.conf  [root]
+#   mount|umount   loop-mount the image on build/gentoo/mnt for tweaks [root]
+#   chroot [CMD]   qemu-user chroot into the image via xarm: auto-mounts it,
+#                  binds the xarm sysroot binpkgs to /var/cache/binpkgs, so
+#                  'emerge --usepkg' installs xarm cross-built packages [root]
+#
+# Env overrides:
+#   XLAB_JOBS         make -j                (default nproc)
+#   XLAB_MIRROR       gentoo mirror          (default https://distfiles.gentoo.org)
+#   XLAB_STAGE3_FLAVOR stage3 flavour        (default openrc)
+#   XLAB_SIZE         gentoo disk image size (default 8G)
+#   XLAB_MEM/XLAB_SMP gentoo guest RAM MiB / vcpus (default 4096 / 4)
+#
+# Typical flows:
+#   ./xlab aarch64 run                        # kernel+busybox+initrd+qemu
+#   ./xlab gentoo kernel && ./xlab gentoo stage3
+#   sudo ./xlab gentoo image && ./xlab gentoo run
+#
+# xarm cooperation (cross-compile on host, install in the image/VM):
+#   sudo xarm emerge -av app-editors/nano     # builds binpkg in the sysroot
+#   sudo ./xlab gentoo chroot "emerge -av --usepkg app-editors/nano"
+#   # or from the RUNNING VM: sudo xarm binhost  on the host, then in the
+#   # guest: emerge --getbinpkg --usepkg <pkg>  (binrepos.conf is preinstalled)
+#
+# Layout: dl/ and src/ are shared caches (legacy make.*/dl tarballs are
+# reused via symlinks); everything target-specific lives in build/<target>/.
+# The gentoo image is a LAB config: root autologin + empty password.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+HERE="$(cd "$(dirname "$0")" && pwd)"
+JOBS="${XLAB_JOBS:-$(nproc)}"
+
+DL_DIR="${HERE}/dl"
+SRC_DIR="${HERE}/src"
+
+BUSYBOX_VER=1.36.1
+BUSYBOX_MD5=0fc591bc9f4e365dfd9ade0014f32561
+BUSYBOX_TAR="busybox-${BUSYBOX_VER}.tar.bz2"
+BUSYBOX_URL="https://busybox.net/downloads/${BUSYBOX_TAR}"
+
+# kernel sources (shared between targets)
+RPI_VER=stable_20231123
+RPI_TAR="linux-${RPI_VER}.tar.gz"
+RPI_MD5=8b646b69cfe2f5104e19ef25a82908a4
+RPI_URL="https://github.com/raspberrypi/linux/archive/refs/tags/${RPI_VER}.tar.gz"
+ML_VER=6.6.5
+ML_TAR="linux-${ML_VER}.tar.xz"
+ML_MD5=528c4c09d2802c2a387b7740550d8a5a
+ML_URL="https://www.kernel.org/pub/linux/kernel/v6.x/${ML_TAR}"
+
+# gentoo target knobs
+MIRROR="${XLAB_MIRROR:-https://distfiles.gentoo.org}"
+STAGE3_FLAVOR="${XLAB_STAGE3_FLAVOR:-openrc}"
+AUTOBUILDS="${MIRROR}/releases/arm64/autobuilds"
+IMG_SIZE="${XLAB_SIZE:-8G}"
+MEM="${XLAB_MEM:-4096}"
+SMP="${XLAB_SMP:-4}"
+
+ALL_TARGETS=(aarch64 armhfp arm x86_64 gentoo)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+die()     { echo "❌  $*" >&2; exit 1; }
+info()    { echo ">>>  $*"; }
+warn()    { echo "⚠️   $*" >&2; }
+confirm() { read -r -p "$1 [yes/NO]: " ans; [[ "$ans" == "yes" ]] || die "Aborted."; }
+help()    { sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \?//'; }
+
+need_root() { [[ $EUID -eq 0 ]] || die "Root required: sudo $0 ${TGT:-} ${CMD:-}"; }
+
+# ---------------------------------------------------------------------------
+# Target table — everything the pipelines differ in
+# ---------------------------------------------------------------------------
+load_target() {
+    TGT="$1"
+    ROOTFS=initrd            # initrd | stage3
+    case "${TGT}" in
+    aarch64)
+        ARCH=arm64; CROSS=aarch64-unknown-linux-gnu-
+        KERNEL_TAR="${RPI_TAR}"; KERNEL_MD5="${RPI_MD5}"; KERNEL_URL="${RPI_URL}"
+        KERNEL_SRC="${SRC_DIR}/linux-${RPI_VER}"
+        KDEFCONFIG=bcmrpi3_defconfig
+        KMAKE_TARGETS=(Image dtbs)
+        KIMAGE=arch/arm64/boot/Image
+        DTB_REL=arch/arm64/boot/dts/broadcom/bcm2710-rpi-3-b.dtb
+        DTB_LEGACY="${HERE}/make.aarch64/dtb/bcm2710-rpi-3-b.dtb"
+        QEMU_BIN=qemu-system-aarch64
+        QEMU_OPTS=(-M raspi3b -cpu cortex-a53 -serial stdio)
+        QEMU_APPEND="console=ttyAMA0 init=/init"
+        TC_HINT="sudo xarm setup   (or: crossdev -S --target aarch64-unknown-linux-gnu)"
+        ;;
+    armhfp)
+        ARCH=arm; CROSS=armv7a-hardfloat-linux-gnueabi-
+        KERNEL_TAR="${RPI_TAR}"; KERNEL_MD5="${RPI_MD5}"; KERNEL_URL="${RPI_URL}"
+        KERNEL_SRC="${SRC_DIR}/linux-${RPI_VER}"
+        KDEFCONFIG=bcm2709_defconfig
+        KMAKE_TARGETS=(zImage dtbs)
+        KIMAGE=arch/arm/boot/zImage
+        DTB_REL=arch/arm/boot/dts/bcm2709-rpi-2-b.dtb
+        DTB_LEGACY="${HERE}/make.armhfp/dtb/bcm2709-rpi-2-b.dtb"
+        QEMU_BIN=qemu-system-arm
+        QEMU_OPTS=(-M raspi2b -cpu cortex-a7 -serial stdio)
+        QEMU_APPEND="console=ttyAMA0 init=/init"
+        TC_HINT="crossdev -S --target armv7a-hardfloat-linux-gnueabi"
+        ;;
+    arm)
+        ARCH=arm; CROSS=arm-softfloat-linux-gnueabi-
+        KERNEL_TAR="${ML_TAR}"; KERNEL_MD5="${ML_MD5}"; KERNEL_URL="${ML_URL}"
+        KERNEL_SRC="${SRC_DIR}/linux-${ML_VER}"
+        KDEFCONFIG=versatile_defconfig
+        KMAKE_TARGETS=(zImage dtbs)
+        KIMAGE=arch/arm/boot/zImage
+        DTB_REL=arch/arm/boot/dts/arm/versatile-ab.dtb
+        DTB_LEGACY=""
+        QEMU_BIN=qemu-system-arm
+        QEMU_OPTS=(-M versatileab -m 256 -serial stdio)
+        QEMU_APPEND="rdinit=/init"
+        TC_HINT="crossdev -S --target arm-softfloat-linux-gnueabi"
+        ;;
+    x86_64)
+        ARCH=x86_64; CROSS=""
+        KERNEL_TAR="${ML_TAR}"; KERNEL_MD5="${ML_MD5}"; KERNEL_URL="${ML_URL}"
+        KERNEL_SRC="${SRC_DIR}/linux-${ML_VER}"
+        KDEFCONFIG=defconfig
+        KMAKE_TARGETS=(bzImage)
+        KIMAGE=arch/x86/boot/bzImage
+        DTB_REL=""; DTB_LEGACY=""
+        QEMU_BIN=qemu-system-x86_64
+        QEMU_OPTS=(--enable-kvm -m 4096)
+        QEMU_APPEND="init=/init"
+        TC_HINT="native gcc"
+        ;;
+    gentoo)
+        ARCH=arm64; CROSS=aarch64-unknown-linux-gnu-
+        KERNEL_TAR="${RPI_TAR}"; KERNEL_MD5="${RPI_MD5}"; KERNEL_URL="${RPI_URL}"
+        KERNEL_SRC="${SRC_DIR}/linux-${RPI_VER}"
+        KDEFCONFIG=defconfig             # upstream arm64 defconfig + virt fragment
+        KMAKE_TARGETS=(Image modules)
+        KIMAGE=arch/arm64/boot/Image
+        DTB_REL=""; DTB_LEGACY=""        # -M virt generates its own DTB
+        QEMU_BIN=qemu-system-aarch64
+        QEMU_OPTS=()                     # assembled in cmd_run
+        QEMU_APPEND="root=/dev/vda rw console=ttyAMA0"
+        TC_HINT="sudo xarm setup   (or: crossdev -S --target aarch64-unknown-linux-gnu)"
+        ROOTFS=stage3
+        ;;
+    *)  case "${TGT}" in
+            mount|umount|chroot|stage3|image)
+                die "'${TGT}' is a gentoo subcommand — use: $0 gentoo ${TGT}" ;;
+        esac
+        die "Unknown target: ${TGT} (see: $0 targets)" ;;
+    esac
+    BLD="${HERE}/build/${TGT}"
+    BIN_KERNEL="${BLD}/kernel"
+    BIN_BUSYBOX="${BLD}/busybox"
+    INITRD_DIR="${BLD}/initrd"
+    EMUL_DIR="${BLD}/emu"
+    MNT_DIR="${BLD}/mnt"
+    VMLINUZ="${EMUL_DIR}/vmlinuz"
+    IMG="${EMUL_DIR}/gentoo.img"
+}
+
+need_toolchain() {
+    if [[ -z ${CROSS} ]]; then return 0; fi
+    command -v "${CROSS}gcc" >/dev/null 2>&1 ||
+        die "No ${CROSS}gcc — install: ${TC_HINT}"
+}
+
+kmake() {  # kernel make in the out-of-tree build dir
+    local cc=()
+    if [[ -n ${CROSS} ]]; then cc=(CROSS_COMPILE="${CROSS}"); fi
+    make -C "${KERNEL_SRC}" O="${BIN_KERNEL}" ARCH="${ARCH}" "${cc[@]}" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Downloads — shared dl/, reuse legacy make.*/dl tarballs via symlink
+# ---------------------------------------------------------------------------
+fetch() {  # fetch <filename> <url> [md5]
+    local f="$1" url="$2" md5="${3:-}" d
+    mkdir -p "${DL_DIR}"
+    if [[ ! -f ${DL_DIR}/${f} ]]; then
+        for d in "${HERE}"/make.*/dl; do
+            if [[ -f ${d}/${f} ]]; then
+                info "Reusing ${f} from ${d#"${HERE}"/}"
+                ln -s "${d}/${f}" "${DL_DIR}/${f}"
+                break
+            fi
+        done
+    fi
+    if [[ ! -f ${DL_DIR}/${f} ]]; then
+        info "Downloading ${f}"
+        wget -O "${DL_DIR}/${f}" "${url}" ||
+            { command rm -f "${DL_DIR}/${f}"; die "Download failed: ${url}"; }
+    fi
+    if [[ -n ${md5} ]]; then
+        echo "${md5}  ${DL_DIR}/${f}" | md5sum -c --quiet ||
+            die "MD5 mismatch on ${DL_DIR}/${f} — delete it and retry"
+    fi
+}
+
+unpack_kernel() {
+    if [[ ! -f ${KERNEL_SRC}/Makefile ]]; then
+        fetch "${KERNEL_TAR}" "${KERNEL_URL}" "${KERNEL_MD5}"
+        info "Unpacking ${KERNEL_TAR}"
+        mkdir -p "${SRC_DIR}"
+        tar xf "${DL_DIR}/${KERNEL_TAR}" -C "${SRC_DIR}"
+    fi
+}
+
+unpack_busybox() {
+    local sb="${SRC_DIR}/busybox-${BUSYBOX_VER}"
+    if [[ ! -f ${sb}/Makefile ]]; then
+        fetch "${BUSYBOX_TAR}" "${BUSYBOX_URL}" "${BUSYBOX_MD5}"
+        info "Unpacking ${BUSYBOX_TAR}"
+        mkdir -p "${SRC_DIR}"
+        tar xjf "${DL_DIR}/${BUSYBOX_TAR}" -C "${SRC_DIR}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# kernel
+# ---------------------------------------------------------------------------
+cmd_kernel() {
+    need_toolchain
+    unpack_kernel
+    mkdir -p "${BIN_KERNEL}" "${EMUL_DIR}"
+    if [[ ! -f ${BIN_KERNEL}/.config ]]; then
+        info "Configuring: ${KDEFCONFIG}"
+        kmake "${KDEFCONFIG}"
+        if [[ ${TGT} == gentoo ]]; then
+            # everything the -M virt boot path needs must be built-in (no initrd)
+            "${KERNEL_SRC}/scripts/config" --file "${BIN_KERNEL}/.config" \
+                -e DEVTMPFS -e DEVTMPFS_MOUNT \
+                -e PCI -e PCI_HOST_GENERIC \
+                -e VIRTIO_MENU -e VIRTIO_PCI -e VIRTIO_MMIO \
+                -e VIRTIO_BLK -e VIRTIO_NET \
+                -e SERIAL_AMBA_PL011 -e SERIAL_AMBA_PL011_CONSOLE \
+                -e RTC_CLASS -e RTC_DRV_PL031 \
+                -e EXT4_FS -e TMPFS -e CGROUPS
+            kmake olddefconfig
+        fi
+    fi
+    info "Building kernel ${TGT}: ${KMAKE_TARGETS[*]} (-j${JOBS})"
+    kmake -j"${JOBS}" "${KMAKE_TARGETS[@]}"
+    command cp -f "${BIN_KERNEL}/${KIMAGE}" "${VMLINUZ}"
+    if [[ -n ${DTB_REL} ]]; then
+        if [[ -f ${BIN_KERNEL}/${DTB_REL} ]]; then
+            command cp -f "${BIN_KERNEL}/${DTB_REL}" "${EMUL_DIR}/dtb"
+        elif [[ -n ${DTB_LEGACY} && -f ${DTB_LEGACY} ]]; then
+            warn "Built DTB missing — using legacy ${DTB_LEGACY}"
+            command cp -f "${DTB_LEGACY}" "${EMUL_DIR}/dtb"
+        else
+            die "No DTB: neither ${BIN_KERNEL}/${DTB_REL} nor a legacy copy"
+        fi
+    fi
+    info "Kernel ready: ${VMLINUZ}"
+}
+
+cmd_kernconf() {
+    need_toolchain
+    [[ -f ${BIN_KERNEL}/.config ]] || die "No .config yet — run: $0 ${TGT} kernel"
+    kmake menuconfig
+}
+
+# ---------------------------------------------------------------------------
+# busybox + initrd (initrd targets)
+# ---------------------------------------------------------------------------
+need_initrd_target() {
+    [[ ${ROOTFS} == initrd ]] || die "'${CMD}' applies to initrd targets, not '${TGT}'"
+}
+
+bmake() {
+    local cc=()
+    if [[ -n ${CROSS} ]]; then cc=(CROSS_COMPILE="${CROSS}"); fi
+    make -C "${SRC_DIR}/busybox-${BUSYBOX_VER}" O="${BIN_BUSYBOX}" \
+        ARCH="${ARCH}" "${cc[@]}" "$@"
+}
+
+cmd_busybox() {
+    need_initrd_target; need_toolchain
+    unpack_busybox
+    mkdir -p "${BIN_BUSYBOX}"
+    if [[ ! -f ${BIN_BUSYBOX}/.config ]]; then
+        info "Configuring busybox (static, cross=${CROSS:-native})"
+        bmake defconfig
+        sed -i \
+            -e "s:.*CONFIG_PREFIX=.*:CONFIG_PREFIX=\"${INITRD_DIR}\":" \
+            -e "s:.*CONFIG_CROSS_COMPILER_PREFIX=.*:CONFIG_CROSS_COMPILER_PREFIX=\"${CROSS}\":" \
+            -e "s/# CONFIG_STATIC is not set/CONFIG_STATIC=y/" \
+            "${BIN_BUSYBOX}/.config"
+    fi
+    info "Building busybox (-j${JOBS})"
+    bmake -j"${JOBS}"
+}
+
+cmd_busyboxconf() {
+    need_initrd_target; need_toolchain
+    [[ -f ${BIN_BUSYBOX}/.config ]] || die "No .config yet — run: $0 ${TGT} busybox"
+    bmake menuconfig
+}
+
+cmd_initrd() {
+    need_initrd_target
+    [[ -f ${BIN_BUSYBOX}/busybox ]] || die "No busybox — run: $0 ${TGT} busybox"
+    mkdir -p "${INITRD_DIR}"/{bin,sbin,etc,proc,sys,usr/bin,usr/sbin} "${EMUL_DIR}"
+    bmake PREFIX="${INITRD_DIR}" install >/dev/null
+    cat > "${INITRD_DIR}/init" <<-'EOF'
+	#!/bin/sh
+
+	mount -t proc none /proc
+	mount -t sysfs none /sys
+
+	echo -e "\nBoot took $(cut -d' ' -f1 /proc/uptime) seconds\n"
+
+	exec /bin/sh
+	EOF
+    chmod +x "${INITRD_DIR}/init"
+    (cd "${INITRD_DIR}" && find . | cpio --quiet -H newc -o --owner=0.0) \
+        > "${EMUL_DIR}/initrd"
+    info "initrd ready: ${EMUL_DIR}/initrd ($(du -h "${EMUL_DIR}/initrd" | cut -f1))"
+}
+
+# ---------------------------------------------------------------------------
+# gentoo: stage3 / image / mount / umount
+# ---------------------------------------------------------------------------
+need_gentoo_target() {
+    [[ ${ROOTFS} == stage3 ]] || die "'${CMD}' applies to the gentoo target only"
+}
+
+stage3_tarball() {
+    ls -1t "${DL_DIR}"/stage3-arm64-"${STAGE3_FLAVOR}"-*.tar.xz 2>/dev/null | head -1 || true
+}
+
+cmd_stage3() {
+    need_gentoo_target
+    mkdir -p "${DL_DIR}"
+    local latest_txt="latest-stage3-arm64-${STAGE3_FLAVOR}.txt"
+    info "Resolving latest stage3 (${STAGE3_FLAVOR}) from ${AUTOBUILDS}"
+    local relpath
+    relpath=$(curl -fsSL "${AUTOBUILDS}/${latest_txt}" \
+        | awk '/^[0-9]{8}T[0-9]{6}Z\// {print $1; exit}')
+    [[ -n ${relpath} ]] || die "Could not parse ${latest_txt}"
+    local tarball; tarball=$(basename "${relpath}")
+
+    if [[ -f ${DL_DIR}/${tarball} && -f ${DL_DIR}/${tarball}.sha256 ]]; then
+        info "${tarball} already downloaded"
+    else
+        info "Downloading ${tarball} (~350 MB)"
+        wget -O "${DL_DIR}/${tarball}" "${AUTOBUILDS}/${relpath}" ||
+            { command rm -f "${DL_DIR}/${tarball}"; die "stage3 download failed"; }
+        wget -qO "${DL_DIR}/${tarball}.sha256" "${AUTOBUILDS}/${relpath}.sha256" ||
+            { command rm -f "${DL_DIR}/${tarball}.sha256"; die "sha256 download failed"; }
+    fi
+    info "Verifying sha256"
+    (cd "${DL_DIR}" && grep -E "\s${tarball}\$" "${tarball}.sha256" | sha256sum -c --quiet) ||
+        die "SHA256 mismatch on ${tarball} — delete it from dl/ and retry"
+    info "stage3 ready: ${DL_DIR}/${tarball}"
+}
+
+img_umount() {
+    if mountpoint -q "${MNT_DIR}"; then
+        umount "${MNT_DIR}" || warn "umount ${MNT_DIR} failed (still busy?)"
+    fi
+}
+
+cmd_image() {
+    need_gentoo_target; need_root
+    local size="${1:-${IMG_SIZE}}"
+    local tarball; tarball=$(stage3_tarball)
+    [[ -n ${tarball} ]] || die "No stage3 in ${DL_DIR} — run: $0 gentoo stage3"
+    [[ -f ${VMLINUZ} ]] || warn "No kernel yet — modules will not be installed (run '$0 gentoo kernel' first for a complete image)"
+    mkdir -p "${EMUL_DIR}" "${MNT_DIR}"
+    if [[ -f ${IMG} ]]; then
+        confirm "Overwrite existing ${IMG}?"
+        command rm -f "${IMG}"
+    fi
+
+    info "Creating ${size} ext4 image"
+    truncate -s "${size}" "${IMG}"
+    mkfs.ext4 -q -L gentoo "${IMG}"
+
+    trap img_umount EXIT INT TERM
+    mount -t ext4 -o loop "${IMG}" "${MNT_DIR}"
+
+    info "Unpacking $(basename "${tarball}")"
+    tar xpf "${tarball}" -C "${MNT_DIR}" --xattrs-include='*.*' --numeric-owner
+
+    if [[ -f ${BIN_KERNEL}/.config && -f ${VMLINUZ} ]]; then
+        info "Installing kernel modules into the image"
+        kmake INSTALL_MOD_PATH="${MNT_DIR}" -j"${JOBS}" modules_install >/dev/null
+    fi
+
+    info "Configuring the guest (LAB: root autologin, empty password)"
+    # serial console login on the -M virt PL011 UART
+    if ! grep -q '^a0:' "${MNT_DIR}/etc/inittab"; then
+        echo 'a0:12345:respawn:/sbin/agetty --autologin root --noclear 115200 ttyAMA0 vt100' \
+            >> "${MNT_DIR}/etc/inittab"
+    fi
+    if [[ -f ${MNT_DIR}/etc/securetty ]] && ! grep -qx ttyAMA0 "${MNT_DIR}/etc/securetty"; then
+        echo ttyAMA0 >> "${MNT_DIR}/etc/securetty"
+    fi
+    sed -i 's|^root:[^:]*:|root::|' "${MNT_DIR}/etc/shadow"
+    echo '/dev/vda  /  ext4  noatime  0 1' >> "${MNT_DIR}/etc/fstab"
+    echo 'hostname="xlab-gentoo"' > "${MNT_DIR}/etc/conf.d/hostname"
+    # user-mode net: dhcpcd picks up 10.0.2.15 + DNS from qemu
+    if [[ -e ${MNT_DIR}/etc/init.d/dhcpcd ]]; then
+        ln -sf /etc/init.d/dhcpcd "${MNT_DIR}/etc/runlevels/default/dhcpcd"
+    else
+        warn "stage3 has no dhcpcd — configure guest networking manually"
+    fi
+    # xarm binhost: 10.0.2.2 is the host as seen from qemu user-mode net;
+    # start 'sudo xarm binhost' on the host, then in the guest:
+    # emerge --getbinpkg --usepkg <pkg>
+    mkdir -p "${MNT_DIR}/etc/portage/binrepos.conf"
+    cat > "${MNT_DIR}/etc/portage/binrepos.conf/xarm.conf" <<-'EOF'
+	[xarm-binhost]
+	# host side: sudo xarm binhost   (serves the cross-built sysroot binpkgs)
+	sync-uri = http://10.0.2.2:8686/
+	priority = 10
+	EOF
+
+    img_umount
+    trap - EXIT INT TERM
+    # give the image back to the invoking user so 'run' works without sudo
+    if [[ -n ${SUDO_UID:-} ]]; then
+        chown "${SUDO_UID}:${SUDO_GID}" "${IMG}"
+    fi
+    info "Image ready: ${IMG} (${size})"
+}
+
+cmd_mount() {
+    need_gentoo_target; need_root
+    [[ -f ${IMG} ]] || die "No ${IMG} — run: sudo $0 gentoo image"
+    mkdir -p "${MNT_DIR}"
+    if mountpoint -q "${MNT_DIR}"; then die "${MNT_DIR} already mounted"; fi
+    mount -t ext4 -o loop "${IMG}" "${MNT_DIR}"
+    info "Mounted on ${MNT_DIR} — e.g.: XARM_CHROOT_ROOT=${MNT_DIR} sudo xarm chroot"
+}
+
+cmd_umount() {
+    need_gentoo_target; need_root
+    mountpoint -q "${MNT_DIR}" || die "${MNT_DIR} is not mounted"
+    umount "${MNT_DIR}"
+    info "Unmounted ${MNT_DIR}"
+}
+
+# chroot — enter the image through xarm's qemu-user chroot, with the xarm
+# sysroot binpkgs bound inside so cross-built packages install via --usepkg
+cmd_chroot() {
+    need_gentoo_target; need_root
+    command -v xarm >/dev/null || die "No xarm in PATH — expected in ~/Claude/bin"
+    [[ -f ${IMG} ]] || die "No ${IMG} — run: sudo $0 gentoo image"
+    local mounted_here=0 bound_pkgs=0
+    local binpkgs="/usr/${CROSS%-}/var/cache/binpkgs"
+    if ! mountpoint -q "${MNT_DIR}"; then
+        mkdir -p "${MNT_DIR}"
+        mount -t ext4 -o loop "${IMG}" "${MNT_DIR}"
+        mounted_here=1
+    fi
+    if [[ -d ${binpkgs} ]]; then
+        mkdir -p "${MNT_DIR}/var/cache/binpkgs"
+        mount --bind "${binpkgs}" "${MNT_DIR}/var/cache/binpkgs"
+        bound_pkgs=1
+        info "xarm binpkgs bound at /var/cache/binpkgs (emerge --usepkg <pkg>)"
+    else
+        warn "No xarm sysroot binpkgs at ${binpkgs} — build some first: sudo xarm emerge <pkg>"
+    fi
+    local rc=0
+    XARM_CHROOT_ROOT="${MNT_DIR}" xarm chroot "$@" || rc=$?
+    if [[ ${bound_pkgs} -eq 1 ]]; then
+        umount "${MNT_DIR}/var/cache/binpkgs" || warn "umount binpkgs bind failed"
+    fi
+    if [[ ${mounted_here} -eq 1 ]]; then
+        umount "${MNT_DIR}" || warn "umount ${MNT_DIR} failed (still busy?)"
+    fi
+    return "${rc}"
+}
+
+# ---------------------------------------------------------------------------
+# run
+# ---------------------------------------------------------------------------
+cmd_run() {
+    command -v "${QEMU_BIN}" >/dev/null ||
+        die "No ${QEMU_BIN} — emerge qemu with the matching QEMU_SOFTMMU_TARGETS"
+    if [[ ${ROOTFS} == stage3 ]]; then
+        [[ -f ${VMLINUZ} ]] || die "No ${VMLINUZ} — run: $0 gentoo kernel"
+        [[ -f ${IMG} ]]     || die "No ${IMG} — run: sudo $0 gentoo image"
+        info "Booting (-M virt, ${SMP} vcpus, ${MEM} MiB; serial on stdio, ssh -> localhost:2222)"
+        info "Root autologin; shut down with: poweroff  (or quit qemu: Ctrl-A X)"
+        exec "${QEMU_BIN}" -M virt -cpu cortex-a72 -smp "${SMP}" -m "${MEM}" \
+            -kernel "${VMLINUZ}" -append "${QEMU_APPEND}" \
+            -drive if=none,file="${IMG}",format=raw,id=hd0 \
+            -device virtio-blk-pci,drive=hd0 \
+            -netdev user,id=n0,hostfwd=tcp::2222-:22 \
+            -device virtio-net-pci,netdev=n0 \
+            -nographic
+    fi
+    # initrd pipeline — build whatever is missing, then boot
+    [[ -f ${VMLINUZ} ]]           || cmd_kernel
+    [[ -f ${BIN_BUSYBOX}/busybox ]] || cmd_busybox
+    [[ -f ${EMUL_DIR}/initrd ]]   || cmd_initrd
+    local args=("${QEMU_OPTS[@]}" -kernel "${VMLINUZ}" -initrd "${EMUL_DIR}/initrd")
+    if [[ -f ${EMUL_DIR}/dtb ]]; then
+        args+=(-dtb "${EMUL_DIR}/dtb")
+    fi
+    args+=(-append "${QEMU_APPEND}")
+    info "Booting ${TGT}: ${QEMU_BIN} ${args[*]}"
+    exec "${QEMU_BIN}" "${args[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# status / clean
+# ---------------------------------------------------------------------------
+target_status() {
+    load_target "$1"
+    local tc=ok kern=- rootfs=-
+    if [[ -n ${CROSS} ]] && ! command -v "${CROSS}gcc" >/dev/null 2>&1; then
+        tc=MISSING
+    fi
+    if [[ -f ${VMLINUZ} ]]; then kern=$(du -h "${VMLINUZ}" | cut -f1); fi
+    if [[ ${ROOTFS} == stage3 && -f ${IMG} ]]; then
+        rootfs="image $(du -h --apparent-size "${IMG}" | cut -f1)"
+    elif [[ ${ROOTFS} == initrd && -f ${EMUL_DIR}/initrd ]]; then
+        rootfs="initrd $(du -h "${EMUL_DIR}/initrd" | cut -f1)"
+    fi
+    printf '%-9s %-9s kernel:%-7s rootfs:%s\n' "${TGT}" "tc:${tc}" "${kern}" "${rootfs}"
+}
+
+cmd_status_all() {
+    local t
+    for t in "${ALL_TARGETS[@]}"; do
+        target_status "${t}"
+    done
+    echo "dl cache:  $(du -sh "${DL_DIR}" 2>/dev/null | cut -f1 || echo '-')  src: $(du -sh "${SRC_DIR}" 2>/dev/null | cut -f1 || echo '-')"
+}
+
+cmd_clean() {
+    if mountpoint -q "${MNT_DIR}" 2>/dev/null; then
+        die "${MNT_DIR} is mounted — run: sudo $0 gentoo umount"
+    fi
+    confirm "Remove ${BLD} (shared dl/ and src/ are kept)?"
+    command rm -rf "${BLD}"
+    info "Cleaned ${TGT}."
+}
+
+cmd_clean_all() {
+    local t
+    for t in "${ALL_TARGETS[@]}"; do
+        load_target "${t}"
+        if mountpoint -q "${MNT_DIR}" 2>/dev/null; then
+            die "${MNT_DIR} is mounted — run: sudo $0 gentoo umount"
+        fi
+    done
+    confirm "Remove build/ AND src/ for all targets (dl/ downloads are kept)?"
+    command rm -rf "${HERE}/build" "${SRC_DIR}"
+    info "Cleaned all targets."
+}
+
+cmd_targets() {
+    sed -n '/^# Targets:/,/^#$/p' "$0" | sed 's/^# \?//'
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+[[ $# -ge 1 ]] || { help; exit 0; }
+
+case "$1" in
+    -h|--help|help) help; exit 0 ;;
+    targets)        cmd_targets; exit 0 ;;
+    status)         cmd_status_all; exit 0 ;;
+    clean)          cmd_clean_all; exit 0 ;;
+esac
+
+TGT="$1"; shift
+CMD="${1:-status}"; shift || true
+load_target "${TGT}"
+
+case "${CMD}" in
+    status)      target_status "${TGT}" ;;
+    kernel)      cmd_kernel "$@" ;;
+    kernconf)    cmd_kernconf "$@" ;;
+    busybox)     cmd_busybox "$@" ;;
+    busyboxconf) cmd_busyboxconf "$@" ;;
+    initrd)      cmd_initrd "$@" ;;
+    stage3)      cmd_stage3 "$@" ;;
+    image)       cmd_image "$@" ;;
+    mount)       cmd_mount "$@" ;;
+    umount)      cmd_umount "$@" ;;
+    chroot)      cmd_chroot "$@" ;;
+    run)         cmd_run "$@" ;;
+    clean)       cmd_clean "$@" ;;
+    *)           die "Unknown subcommand: ${CMD} (see: $0 --help)" ;;
+esac

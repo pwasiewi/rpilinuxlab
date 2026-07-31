@@ -22,7 +22,14 @@ LDFLAGS         :=  -m elf_i386 -T $(LDS)
 AS              :=  nasm
 SFLAGS          :=  -f elf32
 CC              :=  gcc
-CFLAGS          :=  $(INCLUDE_DIR) -c -m32 -fno-stack-protector
+# modern (PIE/SSP-by-default) host gcc needs the freestanding opt-outs spelled
+# out: -fno-pie (fixed-address kernel), -fno-asynchronous-unwind-tables (no
+# .eh_frame), -fcf-protection=none (no .note.gnu.property),
+# -mgeneral-regs-only (gcc 15 auto-vectorizes into SSE, which #UDs before the
+# kernel enables it in CR0/CR4)
+CFLAGS          :=  $(INCLUDE_DIR) -c -m32 -ffreestanding -fno-pie \
+                    -fno-stack-protector -fno-asynchronous-unwind-tables \
+                    -fcf-protection=none -mgeneral-regs-only -Wall
 
 .PHONY: clean
 

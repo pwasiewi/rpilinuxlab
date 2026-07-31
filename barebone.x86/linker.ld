@@ -38,6 +38,10 @@ SECTIONS
 		*(.bss)
 	}
 
+	/* Modern gcc emits these; useless in a freestanding kernel, and orphan
+	   .note sections can land in front of the multiboot header. */
+	/DISCARD/ : { *(.eh_frame) *(.note*) *(.comment) }
+
 	/* The compiler may produce other sections, by default it will put them in
 	   a segment with the same name. Simply add stuff here as needed. */
 }

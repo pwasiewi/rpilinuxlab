@@ -11,6 +11,14 @@
 // r2 -> 0x00000100 - start of ATAGS
 // preserve these registers as argument for kernel_main
 _start:
+	// The Pi 2 (and qemu -M raspi2b) starts all 4 cores here —
+	// park everything but core 0, or four cores run kernel_main
+	// at once and garble the UART.
+	mrc p15, #0, r1, c0, c0, #5
+	and r1, r1, #3
+	cmp r1, #0
+	bne halt
+
 	// Setup the stack.
 	mov sp, #0x8000
  

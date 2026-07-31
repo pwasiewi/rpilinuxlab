@@ -89,3 +89,6 @@ _start:
 # Set the size of the _start symbol to the current location '.' minus its start.
 # This is useful when debugging or when you implement call tracing.
 .size _start, . - _start
+
+# mark the object as not needing an executable stack (binutils >= 2.39 warns)
+.section .note.GNU-stack,"",@progbits
