@@ -23,6 +23,9 @@
 #   pkgs            cross-emerge $PROF_PKGS into the profile rootfs    [root]
 #   seed snapshot spec stage1 stage2 stage3 all verify crossstage
 #                   the xstage stage-building pipeline                 [root]
+#   log [emerge]    follow the running catalyst build: newest package
+#                   log, or the run chroot's emerge.log                [root]
+#   qlop [ARGS]     merge times from the run chroot's emerge.log       [root]
 #   build           make the rootfs: 'arm64 unpack' (stage3 method) or
 #                   'tiny build' (rootfs method)                       [root]
 #   rpi             Pi boot payload into the rootfs                    [root]
@@ -84,7 +87,7 @@ case "$1" in
 esac
 
 # a profile file named like a verb would shadow it — refuse such confs
-RESERVED=" status setup enter emerge 1by1 pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage build rpi image gate run kernel sd binhost distcc xarm xstage xlab profiles help "
+RESERVED=" status setup enter emerge 1by1 pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel sd binhost distcc xarm xstage xlab profiles help "
 
 PROF=""
 if [[ -f ${PROFDIR}/$1.conf ]]; then
@@ -160,7 +163,8 @@ pkgs)
     exec "${PROF_TUPLE}-emerge" --root="${root}" --root-deps=rdeps \
         --usepkg --buildpkg --oneshot -q ${PROF_PKGS}
     ;;
-seed|snapshot|spec|stage1|stage2|stage3|all|verify)
+seed|snapshot|spec|stage1|stage2|stage3|all|verify|log|qlop|qlog)
+    [[ ${VERB} == qlog ]] && VERB=qlop   # common slip of the finger
     exec "${XSTAGE}" "${T}" "${VERB}" "$@"
     ;;
 crossstage)

@@ -38,6 +38,11 @@
 #   stage3           catalyst -f stage3.spec  (emerge -e @system)      [root]
 #   all              seed + snapshot + spec + stage1 + stage3           [root]
 #   verify           unpack the newest built stage3, chroot smoke test  [root]
+#   log [emerge]     follow the newest package build log of the running
+#                    catalyst (or the chroot's emerge.log); warns when a
+#                    duplicate catalyst sits queued on the run lock      [root]
+#   qlop [ARGS]      qlop over the run's chroot emerge.log (default -tv:
+#                    merge times); 'qlop -r' = current merge + elapsed   [root]
 #   clean            rm catalyst tmp/ ('clean all': + built stages,
 #                    snapshots and state; seeds and git repos kept)  [confirm]
 #
@@ -101,6 +106,7 @@
 #   all              seed + snapshot + spec + stage1 + stage3           [root]
 #   verify           unpack the newest built stage3, qemu-chroot smoke
 #                    test (lends the chroot our static qemu-aarch64)    [root]
+#   log|qlop         same build-watching helpers as amd64               [root]
 #   crossstage       fast path, no catalyst: cross-emerge @system into a
 #                    ROOT at native speed and tar it as a lab-grade
 #                    stage3 (feed it back via XSTAGE_ARM64_TARBALL)     [root]
@@ -517,6 +523,62 @@ run_catalyst() {  # run_catalyst <stage1|stage2|stage3>
 cmd_stage1() { run_catalyst stage1; }
 cmd_stage2() { run_catalyst stage2; }
 cmd_stage3() { run_catalyst stage3; }
+
+# ---------------------------------------------------------------------------
+# Watching a running catalyst build — the console stays quiet by design:
+# per-package output goes to port_logdir/<rel_type>/<run>/, the package
+# counter to the run chroot's /var/log/emerge.log.
+# ---------------------------------------------------------------------------
+newest_run() { ls -1t "${LOGDIR}/${REL_TYPE}" 2>/dev/null | head -1 || true; }
+
+run_summary() {  # <run> — running instances + "(N of M) pkg" from emerge.log
+    local run="$1" elog="${STOREDIR}/tmp/${REL_TYPE}/$1/var/log/emerge.log"
+    local pids n
+    pids=$(pgrep -f "catalyst -c ${CONF}" | tr '\n' ' ' || true)
+    n=$(wc -w <<<"${pids}")
+    if [[ ${n} -eq 0 ]]; then
+        warn "No catalyst running on $(basename "${CONF}") — showing the last run"
+    elif [[ ${n} -gt 1 ]]; then
+        warn "${n} catalyst instances on $(basename "${CONF}") (pids: ${pids}) —"
+        warn "the one started last is queued on the run lock and, once it frees,"
+        warn "will CLEAR AUTORESUME and rebuild from scratch. Kill it."
+    fi
+    if [[ -r ${elog} ]]; then
+        local cur
+        cur=$(grep -F '>>> emerge (' "${elog}" | tail -1 |
+              sed 's/^[0-9]*: *>>> emerge //; s| to /.*||')
+        if [[ -n ${cur} ]]; then info "${run}: last started ${cur}"; fi
+    fi
+}
+
+cmd_log() {  # [emerge] — follow the newest package log / the emerge.log
+    need_root
+    local run; run=$(newest_run)
+    [[ -n ${run} ]] || die "No runs under ${LOGDIR}/${REL_TYPE} — nothing built yet"
+    run_summary "${run}"
+    if [[ ${1:-} == emerge ]]; then
+        local elog="${STOREDIR}/tmp/${REL_TYPE}/${run}/var/log/emerge.log"
+        [[ -f ${elog} ]] || die "No ${elog} — run chroot gone?"
+        exec tail -f "${elog}"
+    fi
+    local dir="${LOGDIR}/${REL_TYPE}/${run}" newest
+    newest=$(ls -1t "${dir}" | head -1 || true)
+    [[ -n ${newest} ]] || die "No package logs in ${dir} yet"
+    info "Following ${newest} (Ctrl-C stops the tail, not the build)"
+    exec tail -f "${dir}/${newest}"
+}
+
+cmd_qlop() {  # [qlop args] — merge times from the run chroot's emerge.log
+    need_root
+    command -v qlop >/dev/null || die "No qlop — emerge -av app-portage/portage-utils"
+    local run; run=$(newest_run)
+    [[ -n ${run} ]] || die "No runs under ${LOGDIR}/${REL_TYPE} — nothing built yet"
+    local elog="${STOREDIR}/tmp/${REL_TYPE}/${run}/var/log/emerge.log"
+    [[ -f ${elog} ]] || die "No ${elog} — run chroot gone?"
+    run_summary "${run}"
+    if [[ $# -gt 0 ]]; then exec qlop "$@" -f "${elog}"; fi
+    exec qlop -tv -f "${elog}"
+}
 
 cmd_all() {
     need_root
@@ -1420,6 +1482,8 @@ amd64)
         stage3)   cmd_stage3 "$@" ;;
         all)      cmd_all "$@" ;;
         verify)   cmd_verify "$@" ;;
+        log)      cmd_log "$@" ;;
+        qlop|qlog) cmd_qlop "$@" ;;
         clean)    cmd_clean_amd64 "$@" ;;
         *)        die "Unknown amd64 subcommand: ${CMD} (see: $0 --help)" ;;
     esac ;;
@@ -1456,6 +1520,8 @@ arm64)
                   use_arm64_stage_conf; run_catalyst "${CMD}" ;;
         all)      use_arm64_stage_conf; cmd_all "$@" ;;
         verify)   use_arm64_stage_conf; cmd_verify "$@" ;;
+        log)      use_arm64_stage_conf; cmd_log "$@" ;;
+        qlop|qlog) use_arm64_stage_conf; cmd_qlop "$@" ;;
         crossstage)
                   use_arm64_stage_conf; cmd_arm64_crossstage "$@" ;;
         *)        die "Unknown arm64 subcommand: ${CMD} (see: $0 --help)" ;;

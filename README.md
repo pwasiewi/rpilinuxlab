@@ -123,6 +123,7 @@ xp gate                          # qemu boot gate (raspi3b for the Pi 3)
 sudo xp sd /dev/sdX              # dd to the card
 sudo xp rpi400 enter             # aarch64 shell in the Pi 400 rootfs (qemu-user)
 sudo xp rpi400 stage1            # catalyst under qemu; distccd auto-starts
+sudo xp rpi400 log               # watch it (also: log emerge, qlop)
 ```
 
 Variant profiles: copy a conf, set `PROF_BUILD_SUBDIR` (own build tree,
