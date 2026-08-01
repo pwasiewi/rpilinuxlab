@@ -35,6 +35,8 @@
 #                       proprietary_vendor_VENDOR_DEVICE added at init)
 #   XANDROID_CONTAINER  container name        (default xandroid)
 #   XANDROID_CCACHE     ccache size           (default 50G)
+#   XANDROID_JOBS       build -j cap          (default: soong's -j nproc; set
+#                       ~10 on 64 GB RAM — full parallelism OOMs on r8 steps)
 #
 # Typical flow (Pixel 9a):
 #   xandroid setup && xandroid init && xandroid sync
@@ -58,6 +60,7 @@ DEVICE="${XANDROID_DEVICE:-tegu}"
 VENDOR="${XANDROID_VENDOR:-google}"
 CONT="${XANDROID_CONTAINER:-xandroid}"
 CCACHE_SIZE="${XANDROID_CCACHE:-50G}"
+JOBS="${XANDROID_JOBS:-}"
 IMAGE=ubuntu:24.04
 
 case "${ROM}" in
@@ -240,8 +243,14 @@ cmd_build() {
     local dev="${1:-${DEVICE}}"
     need_tree
     ram_check
-    info "Building ${ROM} ${BRANCH} for ${dev} (brunch; output in out/target/product/${dev})"
-    crun "cd ${TREE} && source build/envsetup.sh && brunch ${dev}"
+    info "Building ${ROM} ${BRANCH} for ${dev} (output in out/target/product/${dev})"
+    if [[ -n ${JOBS} ]]; then
+        # capped parallelism: full -j$(nproc) OOMs on the late r8/metalava
+        # stage (multi-GB JVMs × jobs > MemAvailable; ninja killed 2026-07-31)
+        crun "cd ${TREE} && source build/envsetup.sh && breakfast ${dev} && mka bacon -j${JOBS}"
+    else
+        crun "cd ${TREE} && source build/envsetup.sh && brunch ${dev}"
+    fi
     cmd_out "${dev}"
 }
 
