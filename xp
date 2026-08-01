@@ -1,0 +1,216 @@
+#!/bin/bash
+# xp — profile dispatcher for the rpilinuxlab scripts (xarm / xstage / xlab)
+#
+# One environment switch for the whole lab: a profile names a board (or the
+# native host), and xp routes tool-agnostic verbs to the right script with the
+# right env. Profiles live in <lab>/profiles/*.conf (see profiles/README.md).
+#
+# Usage:
+#   xp <profile> <verb> [args...]        # explicit profile
+#   xp <verb> [args...]                  # profile from $XPROFILE (per-tab env)
+#   xp profiles                          # list profiles
+#   xp <profile> xarm|xstage|xlab [...]  # passthrough escape hatch
+#
+# Profiles: rpi400, rpi3, zero2w, amd64 (xp profiles → current list)
+#
+# Verbs:
+#   status          xarm + xstage + xlab status for the profile
+#   setup           xarm setup (board only), then xstage setup          [root]
+#   enter [sysroot|PATH] [CMD]  qemu-user chroot into the profile's build
+#                   rootfs (default), the crossdev sysroot, or PATH    [root]
+#   emerge ARGS     cross-emerge into the sysroot (xarm emerge)        [root]
+#   1by1 ARGS       xarm 1by1                                          [root]
+#   pkgs            cross-emerge $PROF_PKGS into the profile rootfs    [root]
+#   seed snapshot spec stage1 stage2 stage3 all verify crossstage
+#                   the xstage stage-building pipeline                 [root]
+#   build           make the rootfs: 'arm64 unpack' (stage3 method) or
+#                   'tiny build' (rootfs method)                       [root]
+#   rpi             Pi boot payload into the rootfs                    [root]
+#   image           build sd.img for the profile's board               [root]
+#   gate            boot sd.img in qemu (output-only boot gate)
+#   run             xlab run for the profile's xlab target
+#   kernel          xlab kernel build
+#   sd DEV          dd sd.img onto a real card                 [root,confirm]
+#   binhost         serve sysroot binpkgs over HTTP (port from global.conf)
+#   distcc ...      xarm distcc start|stop|status
+#
+# Env:
+#   XPROFILE        active profile when no <profile> arg (export per tab)
+#   XP_LAB_DIR      lab root override; else /etc/xp.conf, else xp's own dir
+#
+# Typical flow:
+#   export XPROFILE=rpi3
+#   sudo xp setup && sudo xp build && sudo xp rpi && sudo xp image
+#   xp gate && sudo xp sd /dev/sdX
+#   sudo xp rpi400 enter                 # aarch64 shell in the Pi 400 rootfs
+
+set -euo pipefail
+
+die()  { echo "❌  $*" >&2; exit 1; }
+info() { echo ">>>  $*"; }
+warn() { echo "⚠️   $*" >&2; }
+help() { sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \?//'; }
+
+# --- lab root discovery: env > /etc/xp.conf > next to this script ----------
+if [[ -z ${XP_LAB_DIR:-} && -r /etc/xp.conf ]]; then
+    source /etc/xp.conf
+fi
+if [[ -z ${XP_LAB_DIR:-} ]]; then
+    _here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+    [[ -f ${_here}/profiles/global.conf ]] && XP_LAB_DIR="${_here}"
+fi
+[[ -n ${XP_LAB_DIR:-} && -f ${XP_LAB_DIR}/profiles/global.conf ]] ||
+    die "Lab root not found — point /etc/xp.conf at it: echo 'XP_LAB_DIR=/path/to/rpilinuxlab' | sudo tee /etc/xp.conf"
+export XP_LAB_DIR
+PROFDIR="${XP_LAB_DIR}/profiles"
+
+XSTAGE="${XP_LAB_DIR}/genstage/xstage"
+XLAB="${XP_LAB_DIR}/xlab"
+xarm_bin() { command -v xarm >/dev/null && echo xarm || echo "${XP_LAB_DIR}/xarm"; }
+
+list_profiles() {
+    local f
+    for f in "${PROFDIR}"/*.conf; do
+        [[ $(basename "${f}") == global.conf ]] && continue
+        basename "${f}" .conf
+    done
+}
+
+# --- argument parsing: $1 is a profile iff profiles/$1.conf exists ---------
+[[ $# -ge 1 ]] || { help; exit 0; }
+case "$1" in
+    -h|--help|help) help; echo "Active XPROFILE: ${XPROFILE:-none}"; exit 0 ;;
+    profiles)       list_profiles; exit 0 ;;
+esac
+
+# a profile file named like a verb would shadow it — refuse such confs
+RESERVED=" status setup enter emerge 1by1 pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage build rpi image gate run kernel sd binhost distcc xarm xstage xlab profiles help "
+
+PROF=""
+if [[ -f ${PROFDIR}/$1.conf ]]; then
+    [[ ${RESERVED} != *" $1 "* ]] ||
+        die "Profile name '$1' collides with an xp verb — rename ${PROFDIR}/$1.conf"
+    PROF="$1"; shift
+    [[ $# -ge 1 ]] || die "Usage: xp ${PROF} <verb> (see: xp --help)"
+else
+    PROF="${XPROFILE:-}"
+    [[ -n ${PROF} ]] || die "No profile: 'xp <profile> <verb>' or export XPROFILE (profiles: $(list_profiles | tr '\n' ' '))"
+    [[ -f ${PROFDIR}/${PROF}.conf ]] || die "XPROFILE=${PROF}: no ${PROFDIR}/${PROF}.conf"
+fi
+VERB="$1"; shift
+
+# --- apply the profile ------------------------------------------------------
+source "${PROFDIR}/global.conf"
+source "${PROFDIR}/${PROF}.conf"
+xprofile_apply
+export XPROFILE="${PROF}"
+export XPROFILE_FILE="${PROFDIR}/${PROF}.conf"
+
+T="${PROF_XSTAGE_TARGET}"
+L="${PROF_XLAB_TARGET}"
+is_board() { [[ ${PROF_KIND} == board ]]; }
+need_board() { is_board || die "'${VERB}' needs a board profile — ${PROF} is native (${PROF_KIND})"; }
+no_args() { [[ $# -eq 0 ]] || die "xp ${PROF} ${VERB}: unexpected arguments: $*"; }
+
+# the profile's own rootfs/build tree (variant-aware)
+prof_build_dir() {
+    local sub="${PROF_BUILD_SUBDIR:-}"
+    if [[ -z ${sub} ]]; then
+        [[ ${T} == tiny ]] && sub=tinyroot || sub=arm64sd
+    fi
+    echo "${XP_LAB_DIR}/build/${sub}"
+}
+
+case "${VERB}" in
+status)
+    no_args "$@"
+    if is_board; then "$(xarm_bin)" status || warn "xarm status failed"; fi
+    "${XSTAGE}" "${T}" status || warn "xstage status failed"
+    "${XLAB}" "${L}" status || warn "xlab status failed"
+    ;;
+setup)
+    no_args "$@"
+    if is_board; then "$(xarm_bin)" setup; fi
+    exec "${XSTAGE}" "${T}" setup
+    ;;
+enter)
+    need_board
+    root="$(prof_build_dir)/rootfs"
+    case "${1:-}" in
+        sysroot) root="/usr/${PROF_TUPLE}"; shift ;;
+        /*)      root="$1"; shift ;;
+    esac
+    if [[ ! -d ${root} ]]; then
+        warn "No ${root} yet — falling back to the sysroot /usr/${PROF_TUPLE}"
+        root="/usr/${PROF_TUPLE}"
+    fi
+    XARM_CHROOT_ROOT="${root}" exec "$(xarm_bin)" chroot "$@"
+    ;;
+emerge|1by1)
+    need_board
+    exec "$(xarm_bin)" "${VERB}" "$@"
+    ;;
+pkgs)
+    need_board; no_args "$@"
+    [[ -n ${PROF_PKGS:-} ]] || die "Profile ${PROF} sets no PROF_PKGS"
+    root="$(prof_build_dir)/rootfs"
+    [[ -d ${root} ]] || die "No ${root} — run: sudo xp ${PROF} build"
+    info "Installing into ${root}: ${PROF_PKGS}"
+    # shellcheck disable=SC2086 — word splitting of the package list is intended
+    exec "${PROF_TUPLE}-emerge" --root="${root}" --root-deps=rdeps \
+        --usepkg --buildpkg --oneshot -q ${PROF_PKGS}
+    ;;
+seed|snapshot|spec|stage1|stage2|stage3|all|verify)
+    exec "${XSTAGE}" "${T}" "${VERB}" "$@"
+    ;;
+crossstage)
+    need_board
+    exec "${XSTAGE}" "${T}" crossstage "$@"
+    ;;
+build)
+    need_board; no_args "$@"
+    if [[ ${T} == tiny ]]; then exec "${XSTAGE}" tiny build; fi
+    exec "${XSTAGE}" "${T}" unpack
+    ;;
+rpi)
+    need_board; no_args "$@"
+    exec "${XSTAGE}" "${T}" rpi
+    ;;
+image)
+    need_board; no_args "$@"
+    exec "${XSTAGE}" "${T}" "${PROF_IMAGE_CMD}"
+    ;;
+gate)
+    need_board; no_args "$@"
+    exec "${XSTAGE}" "${T}" run-rpi
+    ;;
+run|kernel)
+    exec "${XLAB}" "${L}" "${VERB}" "$@"
+    ;;
+sd)
+    need_board
+    [[ $# -eq 1 ]] || die "Usage: sudo xp ${PROF} sd /dev/sdX|/dev/mmcblkN"
+    exec "${XSTAGE}" "${T}" sd "$1"
+    ;;
+binhost)
+    need_board; no_args "$@"
+    exec "$(xarm_bin)" binhost "${LAB_BINHOST_PORT}"
+    ;;
+distcc)
+    need_board
+    exec "$(xarm_bin)" distcc "$@"
+    ;;
+xarm)
+    need_board
+    exec "$(xarm_bin)" "$@"
+    ;;
+xstage)
+    exec "${XSTAGE}" "$@"
+    ;;
+xlab)
+    exec "${XLAB}" "$@"
+    ;;
+*)
+    die "Unknown verb: ${VERB} (see: xp --help)"
+    ;;
+esac

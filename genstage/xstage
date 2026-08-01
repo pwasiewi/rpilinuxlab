@@ -83,9 +83,10 @@
 #                    override: XSTAGE_ARM64_TARBALL=/path       [root,confirm]
 #   rpi              same Pi boot payload step as 'tiny rpi'             [root]
 #   image            configure the stage3 (root password + invoker's key,
-#                    PermitRootLogin, netifrc eth0 = XSTAGE_PI400_IP, sshd
+#                    PermitRootLogin, netifrc eth0 = the board's IP, sshd
 #                    in the default runlevel, fstab by label) and build
-#                    sd.img — real OpenRC boot, init=/sbin/init          [root]
+#                    sd.img for XSTAGE_BOARD (rpi400/rpi3) — real OpenRC
+#                    boot, init=/sbin/init                               [root]
 #   run-rpi          qemu -M raspi4b boot gate (output-only), OpenRC boot
 #   sd DEV           dd sd.img onto a real SD card               [root,confirm]
 #   clean            rm ../build/arm64sd                              [confirm]
@@ -95,8 +96,8 @@
 #   spec             render specs the qemu way: interpreter key, stages-qemu
 #                    confdir, update_seed: no (distcc_hosts sits in the conf)
 #   stage1|stage2|stage3  catalyst in a qemu-user chroot; compiles ship to
-#                    host distccd -> crossdev cross-gcc (native speed) —
-#                    start it first: xarm distcc start                  [root]
+#                    host distccd -> crossdev cross-gcc (native speed);
+#                    distccd is auto-started via xarm when not running  [root]
 #   all              seed + snapshot + spec + stage1 + stage3           [root]
 #   verify           unpack the newest built stage3, qemu-chroot smoke
 #                    test (lends the chroot our static qemu-aarch64)    [root]
@@ -116,9 +117,16 @@
 #   XSTAGE_TINY_PKGS  extra tiny packages     (default empty)
 #   XSTAGE_TINY_IMG_MB sd.img size in MiB     (default 2048; keep a power of 2)
 #   XSTAGE_ARM64_IMG_MB arm64 sd.img size in MiB (default 4096; power of 2)
+#   XSTAGE_BOARD      eth board for 'image': rpi400 (default) or rpi3
+#   XSTAGE_BUILD_SUBDIR build tree name under ../build/ (default tinyroot /
+#                     arm64sd — xp variant profiles set their own)
 #   XSTAGE_PI400_IP   Pi 400 eth0 address     (default 192.168.0.200/24)
 #   XSTAGE_PI400_GW   Pi 400 default gateway  (default 192.168.0.1)
 #   XSTAGE_PI400_DNS  Pi 400 nameserver       (default: the gateway)
+#   XSTAGE_PI3_IP     Pi 3 eth0 address       (default 192.168.0.201/24)
+#   XSTAGE_PI3_GW/_DNS Pi 3 gateway/DNS       (default 192.168.0.1 / gateway)
+#   XPROFILE          xp profile name (rpilinuxlab/profiles/ — sets the
+#                     defaults above; explicit env still wins)
 #   XSTAGE_ZERO_IP    Zero 2 W usb0 address   (default 10.0.0.2/24)
 #   XSTAGE_ZERO_GW    the machine at the other end of the cable (10.0.0.1)
 #   XSTAGE_ZERO_DNS   resolv.conf nameserver  (default 8.8.8.8)
@@ -147,6 +155,25 @@
 #   XSTAGE_ARM64_TARBALL=/path sudo ./xstage arm64 unpack   # image own stage3
 
 set -euo pipefail
+
+# --- optional xp profile layer (see rpilinuxlab/profiles/README.md) --------
+# XPROFILE=<name> (or XPROFILE_FILE=<path>) sources the profile, which exports
+# the XARM_*/XSTAGE_*/XLAB_* env overrides — explicit env still wins.
+if [[ -n ${XPROFILE:-}${XPROFILE_FILE:-} ]]; then
+    [[ -n ${XP_LAB_DIR:-} || ! -r /etc/xp.conf ]] || source /etc/xp.conf
+    if [[ -z ${XP_LAB_DIR:-} ]]; then
+        _xpd="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+        for _xpc in "${_xpd}" "${_xpd}/.."; do
+            [[ -f ${_xpc}/profiles/global.conf ]] && { XP_LAB_DIR="${_xpc}"; break; }
+        done
+    fi
+    _xpf="${XPROFILE_FILE:-${XP_LAB_DIR:-}/profiles/${XPROFILE:-}.conf}"
+    [[ -r ${_xpf} ]] ||
+        { echo "❌  xp profile not found: ${_xpf} (set XP_LAB_DIR or write /etc/xp.conf)" >&2; exit 1; }
+    source "$(dirname "${_xpf}")/global.conf"
+    source "${_xpf}"
+    xprofile_apply
+fi
 
 # ---------------------------------------------------------------------------
 # Globals
@@ -187,7 +214,10 @@ GIT_REPO="${STOREDIR}/repos/gentoo.git"
 # tiny track
 TUPLE="${XSTAGE_TINY_TUPLE:-aarch64-unknown-linux-gnu}"
 SYSROOT="/usr/${TUPLE}"
-TINY_BLD="${REPO}/build/tinyroot"
+# XSTAGE_BUILD_SUBDIR: variant build trees (xp profiles with PROF_BUILD_SUBDIR)
+# — several boards/experiments keep independent rootfs/image dirs while
+# sharing the sysroot and its binpkgs
+TINY_BLD="${REPO}/build/${XSTAGE_BUILD_SUBDIR:-tinyroot}"
 TINY_ROOT="${TINY_BLD}/rootfs"
 TINY_IMG="${TINY_BLD}/sd.img"
 TINY_MNT="${TINY_BLD}/mnt"
@@ -209,6 +239,37 @@ ZERO_KEY="${XSTAGE_ZERO_KEY:-}"             # pubkey file; default: invoker's ed
 PI400_IP="${XSTAGE_PI400_IP:-192.168.0.200/24}"
 PI400_GW="${XSTAGE_PI400_GW:-192.168.0.1}"
 PI400_DNS="${XSTAGE_PI400_DNS:-${PI400_GW}}"
+# Pi 3 wired LAN — its own address so both boards can sit on the LAN at once
+PI3_IP="${XSTAGE_PI3_IP:-192.168.0.201/24}"
+PI3_GW="${XSTAGE_PI3_GW:-192.168.0.1}"
+PI3_DNS="${XSTAGE_PI3_DNS:-${PI3_GW}}"
+# which eth board 'image' builds for: rpi400 (default) or rpi3; zero2w keeps
+# its own subcommand (image_zero). Set by the xp profile layer.
+BOARD="${XSTAGE_BOARD:-rpi400}"
+
+# board_eth_vars: BOARD -> ETH_* + the two hostnames (tiny hook / stage3)
+board_eth_vars() {
+    case "${BOARD}" in
+    rpi3)
+        ETH_IP="${PI3_IP}"; ETH_GW="${PI3_GW}"; ETH_DNS="${PI3_DNS}"
+        # Pi 3 ethernet hangs off USB: LAN9514 (3B, smsc95xx) / LAN7515 (3B+)
+        ETH_MODULES="smsc95xx lan78xx"
+        BOARD_TINY_HOSTNAME=tinypi3; BOARD_SD_HOSTNAME=pi3 ;;
+    *)
+        ETH_IP="${PI400_IP}"; ETH_GW="${PI400_GW}"; ETH_DNS="${PI400_DNS}"
+        ETH_MODULES="bcmgenet"          # the BCM2711 on-die NIC
+        BOARD_TINY_HOSTNAME=tinyroot; BOARD_SD_HOSTNAME=pi400 ;;
+    esac
+}
+
+# board_dtb: the DTB the firmware picks on the REAL board (payload sanity check)
+board_dtb() {
+    case "${1:-${BOARD}}" in
+        rpi3)   echo bcm2710-rpi-3-b.dtb ;;
+        zero2w) echo bcm2710-rpi-zero-2-w.dtb ;;
+        *)      echo bcm2711-rpi-400.dtb ;;
+    esac
+}
 # 2223, not 2222: xlab's gentoo VM already forwards that one
 SSH_PORT="${XSTAGE_SSH_PORT:-2223}"         # host port 'tiny run' forwards to :22
 TINY_PKGS="${XSTAGE_TINY_PKGS:-}"
@@ -226,7 +287,7 @@ ROOT_HINT="tiny build"                      # 'no rootfs' die messages
 # dispatch switches every TINY_* path here before calling the shared functions
 ARM64_AUTOBUILDS="${MIRROR}/releases/arm64/autobuilds"
 use_arm64_dirs() {
-    TINY_BLD="${REPO}/build/arm64sd"
+    TINY_BLD="${REPO}/build/${XSTAGE_BUILD_SUBDIR:-arm64sd}"
     TINY_ROOT="${TINY_BLD}/rootfs"
     TINY_IMG="${TINY_BLD}/sd.img"
     TINY_MNT="${TINY_BLD}/mnt"
@@ -435,9 +496,15 @@ run_catalyst() {  # run_catalyst <stage1|stage2|stage3>
     [[ -f ${spec} ]] || die "No ${spec} — run: $0 ${TGT:-amd64} spec"
     if [[ -n ${DISTCC_HOSTS_VAL} ]]; then
         # without the daemon every compile silently falls back to pure qemu
-        # emulation — roughly 19x slower; refuse rather than crawl
-        pgrep -x distccd >/dev/null ||
-            die "distccd not running (chroot compiles would fall back to pure qemu) — start it: xarm distcc start"
+        # emulation — roughly 19x slower; auto-start it (idempotent: xarm's
+        # own start is pgrep-guarded too). Stop stays manual: xarm distcc stop
+        if ! pgrep -x distccd >/dev/null; then
+            command -v xarm >/dev/null ||
+                die "distccd not running and no xarm in PATH to auto-start it"
+            local dport="${DISTCC_HOSTS_VAL#*:}"; dport="${dport%%/*}"
+            info "Auto-starting distccd (port ${dport}; log /var/tmp/xarm/distccd.log)"
+            xarm distcc start "${dport}" || die "distccd auto-start failed"
+        fi
     fi
     info "catalyst -f $1.spec (this compiles for a long time; log: ${LOGDIR})"
     # -a: ignore any stale autoresume points so spec changes take effect
@@ -676,7 +743,7 @@ cmd_tiny_rpi() {
     "${CROSS_EMERGE}" --root="${TINY_ROOT}" --root-deps=rdeps \
         --usepkg --buildpkg --oneshot -q sys-kernel/raspberrypi-image
     [[ -f ${TINY_ROOT}/boot/kernel8.img ]] || die "No kernel8.img after emerge"
-    [[ -f ${TINY_ROOT}/boot/bcm2711-rpi-400.dtb ]] || warn "bcm2711-rpi-400.dtb missing?"
+    [[ -f ${TINY_ROOT}/boot/$(board_dtb) ]] || warn "$(board_dtb) missing?"
     # a sane default inside the rootfs; the authoritative copy is written onto
     # the FAT partition by 'image' / 'image_zero', which know the board
     info "Installing the default config.txt (arm_64bit=1, kernel=kernel8.img, uart on)"
@@ -711,7 +778,10 @@ tiny_img_umount() {
     if mountpoint -q "${TINY_MNT}"; then umount "${TINY_MNT}" || warn "bind umount ${TINY_MNT} failed"; fi
 }
 
-cmd_tiny_image()      { tiny_rpi400_payload; tiny_make_image rpi400; }
+cmd_tiny_image() {
+    [[ ${BOARD} != zero2w ]] || die "XSTAGE_BOARD=zero2w — use: $0 tiny image_zero"
+    tiny_rpi400_payload; tiny_make_image "${BOARD}"
+}
 cmd_tiny_image_zero() { tiny_zero_payload; tiny_make_image zero2w; }
 
 # --- shared rootfs extras: modprobe, network, sshd -------------------------
@@ -756,21 +826,22 @@ tiny_rpi400_payload() {
 }
 
 tiny_rpi400_board_hook() {
+    board_eth_vars
     cat > "${TINY_ROOT}/etc/tiny-board.sh" <<-EOF
 	#!/bin/sh
-	# Pi 400 board hook — generated by 'xstage tiny image'.
+	# ${BOARD} board hook — generated by 'xstage tiny image'.
 	# Runs from /init: wired ethernet with a fixed address, sshd — a debug
 	# console that works even when HDMI shows nothing.
-	IP=${PI400_IP}
-	GW=${PI400_GW}
-	DNS=${PI400_DNS}
+	IP=${ETH_IP}
+	GW=${ETH_GW}
+	DNS=${ETH_DNS}
 	log() { echo "tiny-board: \$*"; }
 
-	echo tinyroot > /proc/sys/kernel/hostname
+	echo ${BOARD_TINY_HOSTNAME} > /proc/sys/kernel/hostname
 
 	# --- wired ethernet ---------------------------------------------------
-	# bcmgenet is the BCM2711 NIC; modprobe is a no-op if it's built in
-	modprobe bcmgenet 2>/dev/null
+	# board NIC drivers; modprobe is a no-op for built-ins
+	for m in ${ETH_MODULES}; do modprobe "\$m" 2>/dev/null; done
 	i=0
 	while [ ! -e /sys/class/net/eth0 ] && [ \$i -lt 10 ]; do
 	    i=\$((i + 1)); sleep 1
@@ -790,7 +861,7 @@ tiny_rpi400_board_hook() {
 	    echo "nameserver \$DNS" > /etc/resolv.conf
 	    log "eth0 \$IP via \$GW"
 	else
-	    log "no eth0 — did bcmgenet load? (lsmod, dmesg | grep genet)"
+	    log "no eth0 — did the NIC driver load? (${ETH_MODULES}; lsmod, dmesg)"
 	fi
 
 	# --- sshd -------------------------------------------------------------
@@ -939,11 +1010,12 @@ tiny_zero_board_hook() {
     chmod +x "${TINY_ROOT}/etc/tiny-board.sh"
 }
 
-tiny_make_image() {  # tiny_make_image <rpi400|zero2w>
+tiny_make_image() {  # tiny_make_image <rpi400|rpi3|zero2w>
     need_root
     local board="$1" cfg
     case "${board}" in
         rpi400) cfg="${HERE}/rpi/config.txt" ;;
+        rpi3)   cfg="${HERE}/rpi/config-rpi3.txt" ;;
         zero2w) cfg="${HERE}/rpi/config-zero2w.txt" ;;
         *)      die "Unknown board: ${board}" ;;
     esac
@@ -1009,8 +1081,8 @@ cmd_tiny_run_rpi() {
     # sibling: raspi4b (BCM2711) for the Pi 400, raspi3b (BCM2837) for the
     # Zero 2 W, whose RP3A0 package holds exactly that die.
     case "${board}" in
-        zero2w) machine=raspi3b; dtb=bcm2710-rpi-3-b.dtb ;;
-        *)      machine=raspi4b; dtb=bcm2711-rpi-4-b.dtb ;;
+        rpi3|zero2w) machine=raspi3b; dtb=bcm2710-rpi-3-b.dtb ;;
+        *)           machine=raspi4b; dtb=bcm2711-rpi-4-b.dtb ;;
     esac
     # qemu does not emulate the VideoCore firmware chain: kernel goes in via
     # -kernel and the SD image only provides the root device. The working
@@ -1067,6 +1139,10 @@ cmd_tiny_sd() {
         info "Done (${board}). Insert into the Pi Zero 2 W and power on: the"
         info "e-Paper HAT shows the boot banner; for a shell attach a 3V3 USB"
         info "serial adapter to GPIO 14/15 (115200 8N1) — HDMI works too."
+    elif [[ ${board} == rpi3 ]]; then
+        info "Done (${board}). Insert into the Pi 3 and power on: console on"
+        info "HDMI + USB keyboard; serial on GPIO 14/15 is the PL011"
+        info "(dtoverlay=disable-bt pins it to ttyAMA0, 115200 8N1)."
     else
         info "Done (${board}). Insert into the Pi 400 and power on: console on"
         info "HDMI + built-in keyboard (and serial0 on GPIO 14/15)."
@@ -1245,18 +1321,19 @@ arm64_configure() {
 
     # netifrc fixed address on eth0 — what the tiny image fakes with a board
     # hook, a stage3 does with the real thing
+    board_eth_vars
     [[ -e ${TINY_ROOT}/etc/init.d/net.lo ]] || warn "netifrc missing in the stage3?"
     cat > "${TINY_ROOT}/etc/conf.d/net" <<-EOF
-	# generated by 'xstage arm64 image'
-	config_eth0="${PI400_IP}"
-	routes_eth0="default via ${PI400_GW}"
-	dns_servers_eth0="${PI400_DNS}"
+	# generated by 'xstage arm64 image' (board: ${BOARD})
+	config_eth0="${ETH_IP}"
+	routes_eth0="default via ${ETH_GW}"
+	dns_servers_eth0="${ETH_DNS}"
 	EOF
     ln -snf net.lo "${TINY_ROOT}/etc/init.d/net.eth0"
     ln -snf /etc/init.d/net.eth0 "${TINY_ROOT}/etc/runlevels/default/net.eth0"
     ln -snf /etc/init.d/sshd    "${TINY_ROOT}/etc/runlevels/default/sshd"
 
-    echo 'hostname="pi400"' > "${TINY_ROOT}/etc/conf.d/hostname"
+    echo "hostname=\"${BOARD_SD_HOSTNAME}\"" > "${TINY_ROOT}/etc/conf.d/hostname"
 
     # fstab by label — tiny_make_image labels the partitions exactly so
     cat > "${TINY_ROOT}/etc/fstab" <<-EOF
@@ -1264,10 +1341,14 @@ arm64_configure() {
 	LABEL=RPIBOOT   /boot   vfat    noauto,noatime  0 0
 	LABEL=tinyroot  /       ext4    noatime         0 1
 	EOF
-    info "configured: eth0 ${PI400_IP} via ${PI400_GW}, sshd + net.eth0 in the default runlevel"
+    info "configured: eth0 ${ETH_IP} via ${ETH_GW}, sshd + net.eth0 in the default runlevel"
 }
 
-cmd_arm64_image() { arm64_configure; tiny_make_image rpi400; }
+cmd_arm64_image() {
+    [[ ${BOARD} != zero2w ]] || die "XSTAGE_BOARD=zero2w is a tiny-track board — use: $0 tiny image_zero"
+    arm64_configure
+    tiny_make_image "${BOARD}"
+}
 
 arm64_status() {
     local seed="-" rootfs="-" rpi=no sd="-"

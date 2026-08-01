@@ -8,6 +8,8 @@
 #   setup            create crossdev overlay, build aarch64 toolchain (-S stable),
 #                    usr-merge sysroot, pin gentoo repos.conf, set arm64 profile,
 #                    tune sysroot make.conf (stable keywords, -openmp), register binfmt
+#   tune             rewrite the sysroot make.conf managed block for the current
+#                    XARM_CPU (cheap profile/CPU switch without a full setup)
 #   status           toolchain / profile / binfmt / qemu / sysroot summary
 #   emerge ARGS      cross-emerge into sysroot (emerge-aarch64-unknown-linux-gnu)
 #   chroot [CMD]     QEMU user chroot into sysroot (mounts + trap umount)
@@ -29,6 +31,8 @@
 #   XARM_CHROOT_ROOT  alternate root for 'chroot' (e.g. an aarch64 stage3)
 #   XARM_STAGE3   stage3 path used as the 1by1 fallback chroot — the sysroot has
 #                 no native gcc, so compile fallbacks need a stage3 with one
+#   XPROFILE      xp profile name (sourced from rpilinuxlab/profiles/ — sets the
+#                 XARM_* defaults above; explicit env still wins)
 #
 # Usage:
 #   sudo xarm setup
@@ -39,6 +43,25 @@
 #   xarm status
 
 set -euo pipefail
+
+# --- optional xp profile layer (see rpilinuxlab/profiles/README.md) --------
+# XPROFILE=<name> (or XPROFILE_FILE=<path>) sources the profile, which exports
+# the XARM_*/XSTAGE_*/XLAB_* env overrides — explicit env still wins.
+if [[ -n ${XPROFILE:-}${XPROFILE_FILE:-} ]]; then
+    [[ -n ${XP_LAB_DIR:-} || ! -r /etc/xp.conf ]] || source /etc/xp.conf
+    if [[ -z ${XP_LAB_DIR:-} ]]; then
+        _xpd="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+        for _xpc in "${_xpd}" "${_xpd}/.."; do
+            [[ -f ${_xpc}/profiles/global.conf ]] && { XP_LAB_DIR="${_xpc}"; break; }
+        done
+    fi
+    _xpf="${XPROFILE_FILE:-${XP_LAB_DIR:-}/profiles/${XPROFILE:-}.conf}"
+    [[ -r ${_xpf} ]] ||
+        { echo "❌  xp profile not found: ${_xpf} (set XP_LAB_DIR or write /etc/xp.conf)" >&2; exit 1; }
+    source "$(dirname "${_xpf}")/global.conf"
+    source "${_xpf}"
+    xprofile_apply
+fi
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -101,6 +124,61 @@ binfmt_register() {
     fi
     binfmt_active || die "binfmt ${BINFMT_NAME} still not active after registration"
     info "binfmt ${BINFMT_NAME} registered"
+}
+
+# ---------------------------------------------------------------------------
+# sysroot make.conf — marker-delimited managed block, rewritten every time
+# (the old "# xarm settings" block was append-once, which made XARM_CPU a
+# silent no-op after the first setup)
+# ---------------------------------------------------------------------------
+sysroot_write_makeconf() {
+    local mc="${SYSROOT}/etc/portage/make.conf"
+    mkdir -p "${SYSROOT}/etc/portage"
+    [[ -f ${mc} ]] || touch "${mc}"
+    # migrate the legacy append-once block (it was terminal — delete to EOF)
+    if grep -q "^# xarm settings" "${mc}" && ! grep -q "^# >>> xarm managed" "${mc}"; then
+        sed -i '/^# xarm settings/,$d' "${mc}"
+    fi
+    sed -i '/^# >>> xarm managed/,/^# <<< xarm managed/d' "${mc}"
+    info "Writing managed block in ${mc} (-mtune=${CPU})"
+    cat >> "${mc}" <<-EOF
+	# >>> xarm managed — rewritten by 'xarm setup' / 'xarm tune', do not edit inside
+	# All ARM profiles share this one sysroot: -march=armv8-a keeps every binary
+	# runnable on every ARMv8 board (Pi 3 / 400 / Zero 2 W); -mtune only changes
+	# instruction scheduling, and only for FUTURE builds. Current tune: ${CPU}
+	COMMON_FLAGS="-march=armv8-a -mtune=${CPU} -O2 -pipe"
+	CFLAGS="\${COMMON_FLAGS}"
+	CXXFLAGS="\${COMMON_FLAGS}"
+	FCFLAGS="\${COMMON_FLAGS}"
+	FFLAGS="\${COMMON_FLAGS}"
+	MAKEOPTS="-j$(nproc) -l$(nproc)"
+	# binpkgs for the Pi: ROOT-relative, served by 'xarm binhost'
+	PKGDIR="\${ROOT}var/cache/binpkgs"
+	FEATURES="buildpkg -news"
+	# qemu-user chroot cannot take the namespace sandboxes (Embedded Handbook)
+	FEATURES="\${FEATURES} -pid-sandbox -ipc-sandbox -network-sandbox"
+	ACCEPT_LICENSE="*"
+	# stable only — crossdev defaults to "arch ~arch"; ~arch pulled gcc-16 whose
+	# libatomic configure probes -fno-link-libatomic and dies under a gcc-15
+	# cross toolchain (keep target gcc major == cross gcc major)
+	ACCEPT_KEYWORDS="\${ARCH}"
+	# openmp needs target libgomp = sys-devel/gcc in ROOT; keep off for the
+	# early bootstrap, re-enable once gcc is merged into the sysroot
+	# (gcc >= 15.3.1_p20260717 cross-emerges fine; 15.3.0 died on
+	# generated headers — see the lab README, experiment 8)
+	USE="\${USE} -openmp"
+	# ccache for CROSS builds: host-native ccache, but a DEDICATED aarch64 cache —
+	# never the host's /var/cache/ccache (x86 objects; do not mix architectures)
+	FEATURES="\${FEATURES} ccache"
+	CCACHE_DIR="/var/cache/ccache-xarm"
+	# <<< xarm managed
+	EOF
+}
+
+cmd_tune() {
+    need_root
+    sysroot_write_makeconf
+    info "Retuned for ${CPU} — affects future builds only (all ARM profiles share this sysroot)"
 }
 
 # ---------------------------------------------------------------------------
@@ -188,40 +266,9 @@ cmd_setup() {
             die "Profile ${PROFILE} not found — list: PORTAGE_CONFIGROOT=${SYSROOT} eselect profile list"
     fi
 
-    # 4. sysroot make.conf — append tuned block once (crossdev wrote the base file)
-    local mc="${SYSROOT}/etc/portage/make.conf"
-    if ! grep -q "^# xarm settings" "${mc}" 2>/dev/null; then
-        info "Tuning ${mc} for ${CPU}"
-        cat >> "${mc}" <<-EOF
-
-	# xarm settings — Raspberry Pi 400/4 (${CPU})
-	COMMON_FLAGS="-mcpu=${CPU} -mtune=${CPU} -O2 -pipe"
-	CFLAGS="\${COMMON_FLAGS}"
-	CXXFLAGS="\${COMMON_FLAGS}"
-	FCFLAGS="\${COMMON_FLAGS}"
-	FFLAGS="\${COMMON_FLAGS}"
-	MAKEOPTS="-j$(nproc) -l$(nproc)"
-	# binpkgi dla Pi: ROOT-relative, serwowane przez 'xarm binhost'
-	PKGDIR="\${ROOT}var/cache/binpkgs"
-	FEATURES="buildpkg -news"
-	# qemu-user chroot nie znosi sandboxa przestrzeni nazw (patrz Embedded Handbook)
-	FEATURES="\${FEATURES} -pid-sandbox -ipc-sandbox -network-sandbox"
-	ACCEPT_LICENSE="*"
-	# stable only — crossdev defaults to "arch ~arch"; ~arch pulled gcc-16 whose
-	# libatomic configure probes -fno-link-libatomic and dies under a gcc-15
-	# cross toolchain (keep target gcc major == cross gcc major)
-	ACCEPT_KEYWORDS="\${ARCH}"
-	# openmp needs target libgomp = sys-devel/gcc in ROOT; keep off for the
-	# early bootstrap, re-enable once gcc is merged into the sysroot
-	# (gcc >= 15.3.1_p20260717 cross-emerges fine; 15.3.0 died on
-	# generated headers — see the lab README, experiment 8)
-	USE="\${USE} -openmp"
-	# ccache for CROSS builds: host-native ccache, but a DEDICATED aarch64 cache —
-	# never the host's /var/cache/ccache (x86 objects; do not mix architectures)
-	FEATURES="\${FEATURES} ccache"
-	CCACHE_DIR="/var/cache/ccache-xarm"
-	EOF
-    fi
+    # 4. sysroot make.conf — managed block (idempotent rewrite; 'xarm tune'
+    # re-runs just this step after an XARM_CPU / xp profile switch)
+    sysroot_write_makeconf
 
     # 4b. host-side ARM ccache dir (separate from the host's own x86 cache)
     if command -v ccache >/dev/null 2>&1; then
@@ -250,6 +297,7 @@ cmd_setup() {
 # ---------------------------------------------------------------------------
 cmd_status() {
     echo "Target:    ${TARGET}"
+    echo "xp-layer:  profile:${XPROFILE:-none}  cpu-tune:${CPU}"
     echo "Sysroot:   ${SYSROOT} $([[ -d ${SYSROOT} ]] && du -sh "${SYSROOT}" 2>/dev/null | cut -f1 || echo '(missing)')"
     if command -v "${TARGET}-gcc" >/dev/null 2>&1; then
         echo "Toolchain: gcc $(${TARGET}-gcc -dumpversion), binutils $(${TARGET}-ld --version | head -1 | grep -oE '[0-9.]+$' || true)"
@@ -556,6 +604,7 @@ shift
 
 case "${CMD}" in
     setup)          cmd_setup "$@" ;;
+    tune)           cmd_tune "$@" ;;
     status)         cmd_status "$@" ;;
     emerge)         cmd_emerge "$@" ;;
     chroot)         cmd_chroot "$@" ;;

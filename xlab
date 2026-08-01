@@ -59,6 +59,25 @@
 
 set -euo pipefail
 
+# --- optional xp profile layer (see rpilinuxlab/profiles/README.md) --------
+# XPROFILE=<name> (or XPROFILE_FILE=<path>) sources the profile, which exports
+# the XARM_*/XSTAGE_*/XLAB_* env overrides — explicit env still wins.
+if [[ -n ${XPROFILE:-}${XPROFILE_FILE:-} ]]; then
+    [[ -n ${XP_LAB_DIR:-} || ! -r /etc/xp.conf ]] || source /etc/xp.conf
+    if [[ -z ${XP_LAB_DIR:-} ]]; then
+        _xpd="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+        for _xpc in "${_xpd}" "${_xpd}/.."; do
+            [[ -f ${_xpc}/profiles/global.conf ]] && { XP_LAB_DIR="${_xpc}"; break; }
+        done
+    fi
+    _xpf="${XPROFILE_FILE:-${XP_LAB_DIR:-}/profiles/${XPROFILE:-}.conf}"
+    [[ -r ${_xpf} ]] ||
+        { echo "❌  xp profile not found: ${_xpf} (set XP_LAB_DIR or write /etc/xp.conf)" >&2; exit 1; }
+    source "$(dirname "${_xpf}")/global.conf"
+    source "${_xpf}"
+    xprofile_apply
+fi
+
 # ---------------------------------------------------------------------------
 # Globals
 # ---------------------------------------------------------------------------

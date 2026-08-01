@@ -90,6 +90,34 @@ sudo genstage/xstage tiny sd /dev/sdX  # dd to a card -> boot the real board
 Background, stage semantics and the Buildroot mapping:
 **[genstage/readme.md](genstage/readme.md)**.
 
+## xp — one profile switch for the whole lab
+
+[`xp`](xp) coordinates the three scripts above through board profiles in
+[`profiles/`](profiles/): a profile fixes the tuple, CPU tuning, board
+(config.txt/DTB/qemu machine), network address and installation method, and
+`xp` routes tool-agnostic verbs to the right script with the right env
+(`XPROFILE=<name>` also works per-tab, and directly on `xarm`/`xstage`/`xlab`).
+Precedence: explicit env var > profile > script default. Machine-local root
+pointer for the `/usr/local/bin` copy: `/etc/xp.conf` (`XP_LAB_DIR=...`).
+
+```
+xp profiles                      # rpi400, rpi3, zero2w, amd64
+export XPROFILE=rpi3             # per-tab active profile
+sudo xp setup                    # xarm toolchain + xstage catalyst dirs
+sudo xp build                    # rootfs: stage3 unpack (arm64) / tiny build
+sudo xp rpi && sudo xp image     # Pi payload + board sd.img (192.168.0.201)
+xp gate                          # qemu boot gate (raspi3b for the Pi 3)
+sudo xp sd /dev/sdX              # dd to the card
+sudo xp rpi400 enter             # aarch64 shell in the Pi 400 rootfs (qemu-user)
+sudo xp rpi400 stage1            # catalyst under qemu; distccd auto-starts
+```
+
+Variant profiles: copy a conf, set `PROF_BUILD_SUBDIR` (own build tree,
+shared sysroot + binpkgs) and optionally `PROF_PKGS` (`xp <p> pkgs`). All ARM
+profiles share one sysroot: the managed make.conf block uses
+`-march=armv8-a -mtune=<cpu>` (`xarm tune` switches it), so binaries run on
+every ARMv8 board. Details: **[profiles/README.md](profiles/README.md)**.
+
 ## Verified walkthrough — every command, in order (2026-07-31)
 
 The exact sequence below was run end-to-end on Gentoo (gcc 15.3, QEMU 10.2)
