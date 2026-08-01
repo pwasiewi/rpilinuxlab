@@ -18,6 +18,8 @@
 # Targets:
 #   amd64      catalyst stage1/stage2/stage3 bootstrap, native amd64
 #   tiny       minimal aarch64 rootfs via the xarm crossdev sysroot
+#   arm64      official arm64 stage3 unpacked onto a Pi 400 SD image — no
+#              compilation; the future home of catalyst arm64 stage1/stage3
 #
 # Subcommands (amd64):
 #   status           seed / snapshot / specs / built stages
@@ -71,6 +73,21 @@
 #                    /dev/mmcblkN, removable-only safety)        [root,confirm]
 #   clean            rm ../build/tinyroot                            [confirm]
 #
+# Subcommands (arm64):
+#   status           seed / rootfs / payload / sd.img state
+#   seed             download + sha256-verify the latest arm64 stage3
+#                    into ../dl/ (no catalyst involved)
+#   unpack           untar the stage3 into ../build/arm64sd/rootfs
+#                    (handbook flags: xattrs, numeric owners)    [root,confirm]
+#   rpi              same Pi boot payload step as 'tiny rpi'             [root]
+#   image            configure the stage3 (root password + invoker's key,
+#                    PermitRootLogin, netifrc eth0 = XSTAGE_PI400_IP, sshd
+#                    in the default runlevel, fstab by label) and build
+#                    sd.img — real OpenRC boot, init=/sbin/init          [root]
+#   run-rpi          qemu -M raspi4b boot gate (output-only), OpenRC boot
+#   sd DEV           dd sd.img onto a real SD card               [root,confirm]
+#   clean            rm ../build/arm64sd                              [confirm]
+#
 # Env overrides:
 #   XSTAGE_DIR        catalyst data dir       (default /mnt/db5/genstage)
 #   XSTAGE_JOBS       catalyst/emerge jobs    (default nproc)
@@ -82,6 +99,7 @@
 #   XSTAGE_TINY_BASE  rootfs userland         (default gentoo; or busybox)
 #   XSTAGE_TINY_PKGS  extra tiny packages     (default empty)
 #   XSTAGE_TINY_IMG_MB sd.img size in MiB     (default 2048; keep a power of 2)
+#   XSTAGE_ARM64_IMG_MB arm64 sd.img size in MiB (default 4096; power of 2)
 #   XSTAGE_PI400_IP   Pi 400 eth0 address     (default 192.168.0.200/24)
 #   XSTAGE_PI400_GW   Pi 400 default gateway  (default 192.168.0.1)
 #   XSTAGE_PI400_DNS  Pi 400 nameserver       (default: the gateway)
@@ -102,6 +120,9 @@
 #   sudo ./xstage tiny sd /dev/sdX     # then boot the real Pi 400
 #   sudo ./xstage tiny rpi && sudo ./xstage tiny image_zero   # Zero 2 W + e-Paper
 #   ./xstage tiny run-rpi && sudo ./xstage tiny sd /dev/mmcblk0
+#   ./xstage arm64 seed && sudo ./xstage arm64 unpack          # full Gentoo
+#   sudo ./xstage arm64 rpi && sudo ./xstage arm64 image && ./xstage arm64 run-rpi
+#   sudo ./xstage arm64 sd /dev/sdX    # OpenRC Gentoo on the Pi 400
 
 set -euo pipefail
 
@@ -168,6 +189,25 @@ TINY_BASE_PKGS="app-shells/bash sys-apps/coreutils sys-apps/util-linux
     sys-apps/grep sys-apps/sed sys-apps/gawk sys-apps/findutils
     sys-process/procps sys-apps/less"
 XLAB_KERNEL="${REPO}/build/gentoo/emu/vmlinuz"
+# what PID 1 is in the image — the tiny rootfs has the /init hook script, a
+# stage3 has real OpenRC; rendered into cmdline.txt and the run-rpi -append
+TINY_INIT="/init"
+ROOT_HINT="tiny build"                      # 'no rootfs' die messages
+
+# arm64 track: same image machinery as tiny, different rootfs source — the
+# dispatch switches every TINY_* path here before calling the shared functions
+ARM64_AUTOBUILDS="${MIRROR}/releases/arm64/autobuilds"
+use_arm64_dirs() {
+    TINY_BLD="${REPO}/build/arm64sd"
+    TINY_ROOT="${TINY_BLD}/rootfs"
+    TINY_IMG="${TINY_BLD}/sd.img"
+    TINY_MNT="${TINY_BLD}/mnt"
+    TINY_BOARD_F="${TINY_BLD}/board"
+    TINY_INIT="/sbin/init"
+    ROOT_HINT="arm64 unpack"
+    # a stage3 with the Pi payload is ~2 GB unpacked; still a power of 2
+    IMG_MB="${XSTAGE_ARM64_IMG_MB:-4096}"
+}
 
 ALL_TARGETS=(amd64 tiny)
 
@@ -547,7 +587,7 @@ cmd_tiny_run() {
 
 cmd_tiny_rpi() {
     need_root; need_cross
-    [[ -x ${TINY_ROOT}/init ]] || die "No rootfs — run: sudo $0 tiny build"
+    [[ -x ${TINY_ROOT}${TINY_INIT} ]] || die "No rootfs — run: sudo $0 ${ROOT_HINT}"
     # keyword (~arm64) + license (proprietary GPU blobs) accepts, namespaced
     # like package.use/xstage-tiny
     info "Installing Pi keyword/license accepts into the sysroot"
@@ -832,8 +872,8 @@ tiny_make_image() {  # tiny_make_image <rpi400|zero2w>
         zero2w) cfg="${HERE}/rpi/config-zero2w.txt" ;;
         *)      die "Unknown board: ${board}" ;;
     esac
-    [[ -x ${TINY_ROOT}/init ]] || die "No rootfs — run: sudo $0 tiny build"
-    [[ -f ${TINY_ROOT}/boot/kernel8.img ]] || die "No Pi payload — run: sudo $0 tiny rpi"
+    [[ -x ${TINY_ROOT}${TINY_INIT} ]] || die "No rootfs — run: sudo $0 ${ROOT_HINT}"
+    [[ -f ${TINY_ROOT}/boot/kernel8.img ]] || die "No Pi payload — run: sudo $0 ${TGT} rpi"
     command -v parted >/dev/null || die "No parted — emerge -av sys-block/parted"
     command -v mkfs.vfat >/dev/null || die "No mkfs.vfat — emerge -av sys-fs/dosfstools"
     no_stale_tiny_loop
@@ -865,7 +905,8 @@ tiny_make_image() {  # tiny_make_image <rpi400|zero2w>
     cp -r "${TINY_ROOT}/boot/." "${TINY_MNT}/"
     # the board-specific config wins over whatever 'tiny rpi' left in the rootfs
     command cp -f "${cfg}" "${TINY_MNT}/config.txt"
-    sed "s/@PTUUID@/${ptuuid}/" "${HERE}/rpi/cmdline.txt.in" > "${TINY_MNT}/cmdline.txt"
+    sed -e "s/@PTUUID@/${ptuuid}/" -e "s|@INIT@|${TINY_INIT}|" \
+        "${HERE}/rpi/cmdline.txt.in" > "${TINY_MNT}/cmdline.txt"
     tiny_img_umount
 
     info "Root partition: rootfs (minus /boot, which lives on the FAT side)"
@@ -885,9 +926,9 @@ tiny_make_image() {  # tiny_make_image <rpi400|zero2w>
 cmd_tiny_run_rpi() {
     command -v qemu-system-aarch64 >/dev/null ||
         die "No qemu-system-aarch64 — emerge qemu with QEMU_SOFTMMU_TARGETS=aarch64"
-    [[ -f ${TINY_IMG} ]] || die "No sd.img — run: sudo $0 tiny image"
+    [[ -f ${TINY_IMG} ]] || die "No sd.img — run: sudo $0 ${TGT} image"
     local ptuuid board machine dtb
-    ptuuid=$(cat "${TINY_BLD}/ptuuid" 2>/dev/null) || die "No ${TINY_BLD}/ptuuid — rerun: sudo $0 tiny image"
+    ptuuid=$(cat "${TINY_BLD}/ptuuid" 2>/dev/null) || die "No ${TINY_BLD}/ptuuid — rerun: sudo $0 ${TGT} image"
     board=$(cat "${TINY_BOARD_F}" 2>/dev/null || echo rpi400)
     # qemu has no model for either of our boards, so use the closest SoC
     # sibling: raspi4b (BCM2711) for the Pi 400, raspi3b (BCM2837) for the
@@ -912,15 +953,15 @@ cmd_tiny_run_rpi() {
         -kernel "${TINY_ROOT}/boot/kernel8.img" \
         -dtb "${TINY_ROOT}/boot/${dtb}" \
         -drive "file=${TINY_IMG},format=raw,if=sd" \
-        -append "console=ttyAMA1,115200 root=PARTUUID=${ptuuid}-02 rootwait rw init=/init" \
+        -append "console=ttyAMA1,115200 root=PARTUUID=${ptuuid}-02 rootwait rw init=${TINY_INIT}" \
         -nographic
 }
 
 cmd_tiny_sd() {
     need_root
-    [[ $# -eq 1 ]] || die "Usage: sudo $0 tiny sd /dev/sdX|/dev/mmcblkN"
+    [[ $# -eq 1 ]] || die "Usage: sudo $0 ${TGT} sd /dev/sdX|/dev/mmcblkN"
     local dev="${1%/}"
-    [[ -f ${TINY_IMG} ]] || die "No sd.img — run: sudo $0 tiny image"
+    [[ -f ${TINY_IMG} ]] || die "No sd.img — run: sudo $0 ${TGT} image"
     [[ ${dev} =~ ^/dev/(sd[a-z]+|mmcblk[0-9]+)$ ]] ||
         die "Whole device without partition expected, e.g. /dev/sdb or /dev/mmcblk0"
     [[ -b ${dev} ]] || die "Block device not found: ${dev}"
@@ -992,16 +1033,142 @@ cmd_tiny_clean() {
 }
 
 # ---------------------------------------------------------------------------
+# arm64 track — official stage3 on a Pi 400 SD card, no compilation
+# ---------------------------------------------------------------------------
+# The eventual home of catalyst arm64 stage1/stage3 (qemu interpreter build,
+# releng stages-qemu confdir); until then: download the release stage3,
+# unpack it, add the Pi payload and reuse the tiny image machinery (the
+# dispatch already switched every TINY_* path via use_arm64_dirs). Unlike
+# tiny this is a full OpenRC system: PID 1 is /sbin/init, networking is
+# netifrc and sshd comes from the stage3 itself — no /etc/tiny-board.sh.
+
+cmd_arm64_seed() {
+    mkdir -p "${DL_DIR}"
+    local latest_txt="latest-stage3-arm64-${FLAVOR}.txt"
+    info "Resolving latest stage3 (arm64, ${FLAVOR}) from ${ARM64_AUTOBUILDS}"
+    local relpath
+    relpath=$(curl -fsSL "${ARM64_AUTOBUILDS}/${latest_txt}" \
+        | awk '/^[0-9]{8}T[0-9]{6}Z\// {print $1; exit}')
+    [[ -n ${relpath} ]] || die "Could not parse ${latest_txt}"
+    local tarball; tarball=$(basename "${relpath}")
+
+    if [[ -f ${DL_DIR}/${tarball} && -f ${DL_DIR}/${tarball}.sha256 ]]; then
+        info "${tarball} already downloaded"
+    else
+        info "Downloading ${tarball} (~270 MB)"
+        wget -O "${DL_DIR}/${tarball}" "${ARM64_AUTOBUILDS}/${relpath}" ||
+            { command rm -f "${DL_DIR}/${tarball}"; die "stage3 download failed"; }
+        wget -qO "${DL_DIR}/${tarball}.sha256" "${ARM64_AUTOBUILDS}/${relpath}.sha256" ||
+            { command rm -f "${DL_DIR}/${tarball}.sha256"; die "sha256 download failed"; }
+    fi
+    info "Verifying sha256"
+    (cd "${DL_DIR}" && grep -E "\s${tarball}\$" "${tarball}.sha256" | sha256sum -c --quiet) ||
+        die "SHA256 mismatch on ${tarball} — delete it from dl/ and retry"
+    info "stage3 ready: ${DL_DIR}/${tarball}"
+}
+
+arm64_newest_stage3() {
+    ls -t "${DL_DIR}/stage3-arm64-${FLAVOR}"-*.tar.xz 2>/dev/null | head -1 || true
+}
+
+cmd_arm64_unpack() {
+    need_root
+    local tarball; tarball=$(arm64_newest_stage3)
+    [[ -n ${tarball} ]] || die "No stage3-arm64 tarball in ${DL_DIR} — run: $0 arm64 seed"
+    if [[ -d ${TINY_ROOT} ]]; then
+        confirm "Remove existing ${TINY_ROOT} and re-unpack?"
+        command rm -rf "${TINY_ROOT}"
+    fi
+    mkdir -p "${TINY_ROOT}"
+    info "Unpacking $(basename "${tarball}") (handbook flags: xattrs, numeric owners)"
+    tar xpf "${tarball}" -C "${TINY_ROOT}" --xattrs-include='*.*' --numeric-owner
+    [[ -x ${TINY_ROOT}/sbin/init ]] || die "No /sbin/init after unpack — broken tarball?"
+    info "rootfs ready: ${TINY_ROOT} ($(du -sh "${TINY_ROOT}" 2>/dev/null | cut -f1 || true))"
+}
+
+arm64_configure() {
+    need_root
+    [[ -x ${TINY_ROOT}/sbin/init ]] || die "No rootfs — run: sudo $0 arm64 unpack"
+
+    # root password: the same host-side hash trick as the tiny ssh images
+    local hash
+    hash=$(openssl passwd -6 "${ZERO_PASS}") || die "openssl passwd failed"
+    sed -i "s|^root:[^:]*:|root:${hash}:|" "${TINY_ROOT}/etc/shadow" ||
+        die "could not set the root password in ${TINY_ROOT}/etc/shadow"
+
+    # ssh: root login + the invoker's key; host keys are generated by the
+    # sshd init script on first boot, so the image carries no secrets
+    mkdir -p "${TINY_ROOT}/etc/ssh/sshd_config.d" "${TINY_ROOT}/root/.ssh"
+    chmod 700 "${TINY_ROOT}/root/.ssh"
+    echo "PermitRootLogin yes" > "${TINY_ROOT}/etc/ssh/sshd_config.d/50-xstage.conf"
+    local keyfile="${ZERO_KEY}"
+    if [[ -z ${keyfile} && -n ${SUDO_USER:-} ]]; then
+        keyfile="/home/${SUDO_USER}/.ssh/id_ed25519.pub"
+    fi
+    if [[ -n ${keyfile} && -f ${keyfile} ]]; then
+        command cp -f "${keyfile}" "${TINY_ROOT}/root/.ssh/authorized_keys"
+        chmod 600 "${TINY_ROOT}/root/.ssh/authorized_keys"
+        info "ssh: root password '${ZERO_PASS}' + key $(basename "${keyfile}")"
+    else
+        info "ssh: root password '${ZERO_PASS}' (no pubkey found — set XSTAGE_ZERO_KEY=/path/to/key.pub)"
+    fi
+
+    # netifrc fixed address on eth0 — what the tiny image fakes with a board
+    # hook, a stage3 does with the real thing
+    [[ -e ${TINY_ROOT}/etc/init.d/net.lo ]] || warn "netifrc missing in the stage3?"
+    cat > "${TINY_ROOT}/etc/conf.d/net" <<-EOF
+	# generated by 'xstage arm64 image'
+	config_eth0="${PI400_IP}"
+	routes_eth0="default via ${PI400_GW}"
+	dns_servers_eth0="${PI400_DNS}"
+	EOF
+    ln -snf net.lo "${TINY_ROOT}/etc/init.d/net.eth0"
+    ln -snf /etc/init.d/net.eth0 "${TINY_ROOT}/etc/runlevels/default/net.eth0"
+    ln -snf /etc/init.d/sshd    "${TINY_ROOT}/etc/runlevels/default/sshd"
+
+    echo 'hostname="pi400"' > "${TINY_ROOT}/etc/conf.d/hostname"
+
+    # fstab by label — tiny_make_image labels the partitions exactly so
+    cat > "${TINY_ROOT}/etc/fstab" <<-EOF
+	# generated by 'xstage arm64 image'
+	LABEL=RPIBOOT   /boot   vfat    noauto,noatime  0 0
+	LABEL=tinyroot  /       ext4    noatime         0 1
+	EOF
+    info "configured: eth0 ${PI400_IP} via ${PI400_GW}, sshd + net.eth0 in the default runlevel"
+}
+
+cmd_arm64_image() { arm64_configure; tiny_make_image rpi400; }
+
+arm64_status() {
+    local seed="-" rootfs="-" rpi=no sd="-"
+    local t; t=$(arm64_newest_stage3)
+    [[ -n ${t} ]] && seed=$(basename "${t}")
+    if [[ -x ${TINY_ROOT}/sbin/init ]]; then
+        rootfs=$(du -sh "${TINY_ROOT}" 2>/dev/null | cut -f1 || true)
+    fi
+    [[ -f ${TINY_ROOT}/boot/kernel8.img ]] && rpi=yes
+    [[ -f ${TINY_IMG} ]] && sd=$(du -h "${TINY_IMG}" | cut -f1)
+    echo "arm64  seed:${seed}  rootfs:${rootfs}  rpi-payload:${rpi}  sd.img:${sd}"
+}
+
+cmd_arm64_clean() {
+    confirm "Remove ${TINY_BLD}?"
+    command rm -rf "${TINY_BLD}"
+    info "Cleaned arm64."
+}
+
+# ---------------------------------------------------------------------------
 # status / targets / dispatch
 # ---------------------------------------------------------------------------
 cmd_status_all() {
     amd64_status
     tiny_status
+    ( use_arm64_dirs; arm64_status )
 }
 
 cmd_clean_all() {
-    confirm "Clean BOTH tracks (catalyst tmp + ${TINY_BLD})?"
-    command rm -rf "${STOREDIR}/tmp" "${TINY_BLD}"
+    confirm "Clean ALL tracks (catalyst tmp + ${TINY_BLD} + $(dirname "${TINY_BLD}")/arm64sd)?"
+    command rm -rf "${STOREDIR}/tmp" "${TINY_BLD}" "$(dirname "${TINY_BLD}")/arm64sd"
     info "Cleaned all."
 }
 
@@ -1050,6 +1217,19 @@ tiny)
         sd)       cmd_tiny_sd "$@" ;;
         clean)    cmd_tiny_clean "$@" ;;
         *)        die "Unknown tiny subcommand: ${CMD} (see: $0 --help)" ;;
+    esac ;;
+arm64)
+    use_arm64_dirs
+    case "${CMD}" in
+        status)   arm64_status ;;
+        seed)     cmd_arm64_seed "$@" ;;
+        unpack)   cmd_arm64_unpack "$@" ;;
+        rpi)      cmd_tiny_rpi "$@" ;;
+        image)    cmd_arm64_image "$@" ;;
+        run-rpi)  cmd_tiny_run_rpi "$@" ;;
+        sd)       cmd_tiny_sd "$@" ;;
+        clean)    cmd_arm64_clean "$@" ;;
+        *)        die "Unknown arm64 subcommand: ${CMD} (see: $0 --help)" ;;
     esac ;;
 *)  die "Unknown target: ${TGT} (see: $0 targets)" ;;
 esac
