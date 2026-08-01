@@ -326,11 +326,24 @@ cmd_verify() {
     mkdir -p "${vdir}"
     tar xpf "${tarball}" -C "${vdir}" --xattrs-include='*.*' --numeric-owner
     info "Chroot smoke test"
+    # portage needs a real /dev (it checks /dev/fd and process substitution)
+    # and /proc — without them 'emerge --version' prints warnings and fails
+    # while the chroot's exit status still comes from the last command
+    mount -t proc none "${vdir}/proc"
+    mount --rbind /dev "${vdir}/dev"
+    mount --make-rslave "${vdir}/dev"
+    # shellcheck disable=SC2064 — expand ${vdir} now, not at trap time
+    trap "umount -R '${vdir}/dev' 2>/dev/null || true; umount '${vdir}/proc' 2>/dev/null || true" EXIT INT TERM
+    # -e -o pipefail inside the chroot: each check must pass on its own
     chroot "${vdir}" /bin/bash -c '
+        set -eo pipefail
         gcc --version | head -1
         emerge --version
         head -1 /etc/os-release' ||
         die "Chroot smoke test failed"
+    umount -R "${vdir}/dev"
+    umount "${vdir}/proc"
+    trap - EXIT INT TERM
     info "OK: tarball $(du -h "${tarball}" | cut -f1), unpacked $(du -sh "${vdir}" | cut -f1)"
 }
 
