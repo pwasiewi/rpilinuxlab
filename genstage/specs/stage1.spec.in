@@ -1,6 +1,7 @@
 # stage1: build the toolchain subset of @system (the profile's packages.build)
 # from the seed stage3, installed with ROOT=/tmp/stage1root inside the seed
-# chroot. Rendered by 'xstage amd64 spec' — @KEY@ tokens are substituted.
+# chroot. Rendered by 'xstage amd64|arm64 spec' — @KEY@ tokens are
+# substituted; the arm64 render appends the interpreter: key.
 subarch: @SUBARCH@
 target: stage1
 version_stamp: @FLAVOR@-@STAMP@
@@ -9,7 +10,8 @@ profile: @PROFILE@
 snapshot_treeish: @TREEISH@
 source_subpath: @SEED_SUBPATH@
 compression_mode: pixz
-update_seed: yes
+# amd64: yes; arm64: no — a seed update would recompile under pure emulation
+update_seed: @UPDATE_SEED@
 update_seed_command: --update --deep --changed-use @world
 portage_confdir: @CONFDIR@
 portage_prefix: releng

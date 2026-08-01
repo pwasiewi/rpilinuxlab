@@ -289,6 +289,60 @@ the release one.
   hostname set, sshd up with fresh host keys; `net.eth0` fails only because
   qemu emulates no genet NIC, exactly like the tiny gate.
 
+## Building arm64 stages on the amd64 host (arm64 track, build half)
+
+How Gentoo Release Engineering does it: the official arm64 stages come from
+**catalyst on native arm64 build machines** — their specs look exactly like
+our amd64 ones. For arches *without* build machines, releng runs the same
+catalyst under **qemu-user emulation**: the spec gains
+`interpreter: /usr/bin/qemu-aarch64` (catalyst copies the static binary into
+the chroot, binfmt_misc execs every arm64 binary through it) and
+`portage_confdir` points at the `stages-qemu` confdir, whose `env/` and
+`patches/` work around what emulation can't do. Pure emulation is the price:
+the xarm census measured a qemu chroot at ~19× slower than cross-compiling,
+so a stage1+stage3 pair would take an estimated 25–50 h.
+
+This track cuts that down two ways:
+
+1. **distcc-to-cross** (`arm64 setup/spec/stage1/stage3`): catalyst's
+   `distcc` option installs distcc inside the chroot and builds the standard
+   CHOST masquerade, so every `aarch64-unknown-linux-gnu-gcc` call is shipped
+   to the host's `distccd` (`distcc_hosts = "127.0.0.1:3632/N"` in
+   `catalyst-arm64.conf` — the chroot shares the host network). The daemon
+   resolves that compiler name to the **crossdev cross-gcc**, i.e. the
+   compiles run at native speed; only configure/preprocess/link stay
+   emulated. Start the daemon first: `xarm distcc start` (`stage1`/`stage3`
+   refuse to run without it — silent fallback would mean pure emulation).
+   `update_seed: no` for this arch: refreshing the seed would recompile half
+   of it under emulation before the build even starts. Estimated 6–12 h.
+2. **crossstage** (`arm64 crossstage`): skip catalyst entirely — cross-emerge
+   `@system` into a ROOT with the crossdev toolchain (the census proved all
+   190 Pi packages build this way) and tar it with the release flags
+   (`--xattrs --numeric-owner`). Roughly 1–2 h, but **lab-grade**: no releng
+   confdir, no seed provenance — a tarball for this lab's SD pipeline, not a
+   release artifact.
+
+```
+xarm distcc start                  # host distccd on 127.0.0.1:3632
+sudo ./xstage arm64 setup          # conf + qemu/binfmt/crossdev preflight
+./xstage arm64 seed                # arm64 release seed -> builds/default/
+sudo ./xstage arm64 snapshot       # shared gentoo.git, own state dir
+./xstage arm64 spec                # interpreter key, stages-qemu confdir
+sudo ./xstage arm64 stage1         # hours; then: sudo ./xstage arm64 stage3
+sudo ./xstage arm64 verify         # qemu-chroot smoke test on the result
+sudo ./xstage arm64 crossstage     # or: the 1-2 h no-catalyst lab stage3
+XSTAGE_ARM64_TARBALL=/mnt/db5/genstage/catalyst/builds/lab-arm64/stage3-arm64-openrc-<stamp>.tar.xz \
+  sudo ./xstage arm64 unpack       # then rpi/image/run-rpi/sd as usual
+```
+
+Everything heavy is the amd64 pipeline **retargeted** (`use_arm64_stage_conf`
+switches SUBARCH/PROFILE/CONFDIR/CONF/SPECDIR/STATE/LOGDIR and appends the
+`interpreter:` key at render time); snapshots, the releng clone and
+`gentoo.git` are shared between the arches. `verify` copies the static
+`qemu-aarch64` into the unpacked stage before chrooting — binfmt (no `F`
+flag here) resolves the interpreter path *inside* the chroot, and stage
+tarballs don't ship qemu.
+
 ## Storage layout
 
 | Path | Contents |
@@ -300,6 +354,10 @@ the release one.
 | `/mnt/db5/genstage/catalyst/repos/gentoo.git` | bare shallow clone for `catalyst -s` |
 | `/mnt/db5/genstage/catalyst/tmp/` | scratch chroots (`clean` target) |
 | `/mnt/db5/genstage/{specs,state,logs,releng}` | rendered specs, treeish/stamp, build logs, releng clone |
+| `/mnt/db5/genstage/conf/catalyst-arm64.conf` | arm64 build config (distcc option + `distcc_hosts`) |
+| `/mnt/db5/genstage/{specs,state,logs}-arm64/` | the same trio for the arm64 build half |
+| `/mnt/db5/genstage/catalyst/builds/lab-arm64/` | **our** arm64 stage outputs (catalyst + `-cross` tarballs) |
+| `/mnt/db5/genstage/crossstage/rootfs/` | crossstage scratch ROOT |
 | `../dl/stage3-amd64-*` | seed download cache (shared with xlab's arm64 seeds) |
 | `../build/tinyroot/{rootfs,rootfs.squashfs,initrd}` | tiny track outputs |
 | `../build/tinyroot/{sd.img,ptuuid,board}` | SD image, its MBR disk id, and which board it was built for |
@@ -313,11 +371,12 @@ sits on `/mnt/db5` outside the repo.
 
 ## Future work
 
-- **arm64 stages on this amd64 host**: catalyst spec key
-  `interpreter: /usr/bin/qemu-aarch64` + the releng `stages-qemu` confdir —
-  releng builds several arches this way (~10× slower under emulation). An
-  `export` step copying the result into `../dl/` would let `xlab gentoo
-  image` boot a self-built arm64 stage3.
+- **arm64 export to xlab**: an `export` step copying a built arm64 stage3
+  into `../dl/` would let `xlab gentoo image` boot it too (the SD pipeline
+  already eats it via `XSTAGE_ARM64_TARBALL`).
+- **catalyst ccache for arm64**: the `ccache` option would help repeat runs,
+  but it interacts with the `CCACHE_PREFIX`/fallback trap from the xarm
+  distcc work — add only after the plain distcc path is proven.
 - **UEFI boot in qemu** (separate task): boot the built artifacts through an
   OVMF/AAVMF firmware instead of `-kernel`, reusing the host's
   `efi-boot` / `build-initrd-uuid-next` patterns (`~/Claude/bin`) — squashfs
