@@ -12,27 +12,40 @@ target builds in `build/<target>/`.
 
 ```
 ./xlab targets                # aarch64 (RPi3) | armhfp (RPi2) | arm | x86_64 | gentoo
+                              #   (xp profiles: rpi3/zero2w -> aarch64,
+                              #    rpi400 -> gentoo, amd64 -> x86_64)
 ./xlab status                 # toolchain / kernel / rootfs per target
+                              #   (xp <profile> status)
 ./xlab aarch64 run            # builds kernel+busybox+initrd if missing, boots raspi3b
+                              #   (xp rpi3 run)
 ./xlab gentoo kernel          # rpi kernel, arm64 defconfig + virtio built-in
+                              #   (xp rpi400 kernel)
 ./xlab gentoo stage3          # latest arm64 stage3 + sha256 verify
+                              #   (xp rpi400 xlab gentoo stage3)
 sudo ./xlab gentoo image      # 8G ext4 image: stage3, modules, serial autologin
+                              #   (sudo xp rpi400 xlab gentoo image -- NOT
+                              #    'xp rpi400 image': that builds the board
+                              #    sd.img via xstage)
 ./xlab gentoo run             # -M virt, serial on stdio, ssh -> localhost:2222
+                              #   (xp rpi400 run)
 sudo ./xlab gentoo mount      # image on build/gentoo/mnt (manual tweaks)
+                              #   (sudo xp rpi400 xlab gentoo mount)
 sudo ./xlab gentoo chroot     # qemu-user chroot via xarm, binpkgs bound inside
+                              #   (sudo xp rpi400 xlab gentoo chroot)
 ```
 
 xarm cooperation — cross-compile on the host, install into the image:
 ```
 sudo xarm emerge -av app-editors/nano                            # binpkg in sysroot
 sudo ./xlab gentoo chroot "emerge -av --usepkg app-editors/nano" # offline install
+#   (sudo xp rpi400 xlab gentoo chroot "emerge -av --usepkg app-editors/nano")
 # or into the RUNNING VM: 'sudo xarm binhost' on the host, then in the guest
 # 'emerge --getbinpkg --usepkg nano' (binrepos.conf -> 10.0.2.2:8686 preinstalled)
 ```
 
 The gentoo image is a lab config (root autologin, empty password) — keep it
 on qemu user-mode networking. Cross toolchains come from crossdev;
-`./xlab <target> kernel` prints the exact `crossdev` command when one is
+`./xlab <target> kernel` (`xp <profile> kernel`) prints the exact `crossdev` command when one is
 missing, and for aarch64 the whole setup is `sudo xarm setup` (below).
 
 ## xarm — aarch64 cross-compile manager
@@ -140,6 +153,7 @@ sudo crossdev -S --target arm-softfloat-linux-gnueabi      # ARM926 versatile
 
 git clone https://github.com/pwasiewi/rpilinuxlab && cd rpilinuxlab
 ./xlab status              # every row should say tc:ok
+                           #   (xp <profile> status)
 ```
 
 ### 1. Bare-metal RPi2 kernel (no Linux, ~50 lines)
@@ -161,9 +175,13 @@ Each `run` fetches, builds and boots whatever is missing
 
 ```bash
 ./xlab x86_64  run         # mainline 6.6.147, KVM + -cpu host, boots in <1 s
+                           #   (xp amd64 run)
 ./xlab armhfp  run         # rpi 6.1 kernel, -M raspi2b, console ttyAMA0
+                           #   (no xp profile -- RPi2 is xlab-only)
 ./xlab aarch64 run         # rpi 6.1 kernel, -M raspi3b, console ttyAMA1 (PL011 quirk)
+                           #   (xp rpi3 run)
 ./xlab arm     run         # mainline 6.6.147, -M versatileab, armv5tejl
+                           #   (no xp profile)
 ```
 
 Headless/scripted variant (how the boots were verified — pipe commands in,
@@ -180,9 +198,13 @@ grab the serial log):
 
 ```bash
 ./xlab gentoo kernel       # arm64 defconfig + virtio/PL011/ext4 built-in, Image + modules
+                           #   (xp rpi400 kernel)
 ./xlab gentoo stage3       # latest arm64 openrc stage3, sha256-verified
+                           #   (xp rpi400 xlab gentoo stage3)
 sudo ./xlab gentoo image   # 8G ext4: stage3 + modules + autologin + gentoo tree copy
+                           #   (sudo xp rpi400 xlab gentoo image)
 ./xlab gentoo run          # -M virt: root autologins on serial; leave with: poweroff
+                           #   (xp rpi400 run)
 ```
 
 ### 4. Cross-built binpkgs → offline install into the image
@@ -190,6 +212,7 @@ sudo ./xlab gentoo image   # 8G ext4: stage3 + modules + autologin + gentoo tree
 ```bash
 sudo xarm emerge -av media-libs/libjpeg-turbo                    # binpkg lands in the sysroot
 sudo ./xlab gentoo chroot "emerge -1vK media-libs/libjpeg-turbo" # installs it, no network
+#   (sudo xp rpi400 xlab gentoo chroot "emerge -1vK media-libs/libjpeg-turbo")
 ```
 
 ### 5. Binhost → install into the RUNNING VM
@@ -197,7 +220,8 @@ sudo ./xlab gentoo chroot "emerge -1vK media-libs/libjpeg-turbo" # installs it, 
 ```bash
 xarm binhost                                   # terminal A: serves sysroot binpkgs on :8686
 curl -s http://127.0.0.1:8686/Packages | head  # sanity: index answers
-./xlab gentoo run                              # terminal B, then INSIDE the guest:
+./xlab gentoo run                              # terminal B (xp rpi400 run),
+                                               # then INSIDE the guest:
   emerge -1vKg media-libs/libjpeg-turbo        #   fetches from 10.0.2.2:8686, installs
   poweroff
 ```
@@ -206,6 +230,7 @@ curl -s http://127.0.0.1:8686/Packages | head  # sanity: index answers
 
 ```bash
 ./xlab status                                  # what is built per target
+                                               #   (xp <profile> status)
 sudo e2fsck -fp build/gentoo/emu/gentoo.img    # image integrity (must be unmounted!)
 losetup -j build/gentoo/emu/gentoo.img         # MUST be empty — a leftover loop means
                                                # a live ext4 is still writing: corruption
@@ -219,7 +244,7 @@ sudo grep -l loop0 /proc/*/mountinfo           # who holds it
 sudo nsenter -t <PID> -m umount -l /dev/loop0  # release per holder (repeat; or reboot)
 
 # worst case — image corrupted: rebuild it, everything is scripted anyway
-sudo ./xlab gentoo image
+sudo ./xlab gentoo image                       # (sudo xp rpi400 xlab gentoo image)
 ```
 
 ## Legacy per-directory Makefiles
