@@ -20,6 +20,7 @@
 #   binhost [PORT]   serve sysroot binpkgs over HTTP for the Pi (default 8686)
 #   distcc start|stop|status  host distccd on loopback (compile offload for the
 #                    qemu chroot: compiles escape emulation, run on the cross gcc)
+#   distcc log       tail -f the distccd log (/var/tmp/xarm/distccd.log)
 #   distcc chroot-setup [ROOT] [PORT]  masquerade wrapper + hosts file in a stage3
 #   distcc-wrapper   print client-side (Pi) distcc masquerade wrapper + setup hints
 #   clean            remove toolchain + optionally sysroot (confirm)
@@ -542,10 +543,15 @@ cmd_distcc() {
         echo "127.0.0.1:${port}/$(nproc),lzo" > "${root}/etc/distcc/hosts"
         info "Masquerade wrapper + /etc/distcc/hosts written in ${root}"
         echo "Per-run:    FEATURES=\"distcc\" emerge ...      (FEATURES=\"-ccache distcc\" to isolate)"
-        echo "With ccache: FEATURES=\"ccache distcc\" CCACHE_PREFIX=distcc emerge ..."
-        echo "Permanent:  FEATURES=\"\${FEATURES} distcc\" (+ CCACHE_PREFIX) in ${root}/etc/portage/make.conf"
+        echo "With ccache: FEATURES=\"ccache distcc\" emerge ...   (plain chaining; never"
+        echo "            CCACHE_PREFIX=distcc — with DISTCC_FALLBACK=0 it breaks configure)"
+        echo "Permanent:  FEATURES=\"\${FEATURES} distcc\" in ${root}/etc/portage/make.conf"
         ;;
-    *)  die "Usage: xarm distcc {start [PORT]|stop|status|chroot-setup [ROOT] [PORT]}" ;;
+    log)
+        [[ -f ${DISTCCD_LOG} ]] || die "No ${DISTCCD_LOG} — distccd has not run yet"
+        exec tail -f "${DISTCCD_LOG}"
+        ;;
+    *)  die "Usage: xarm distcc {start [PORT]|stop|status|log|chroot-setup [ROOT] [PORT]}" ;;
     esac
 }
 

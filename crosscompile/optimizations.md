@@ -39,6 +39,8 @@ architectures.
 |---|---|---|---|
 | cross-emerge | `/var/cache/ccache-xarm` (host, 10G) | host-native | sysroot `make.conf`: `FEATURES="… ccache"`, `CCACHE_DIR` |
 | chroot | `/var/cache/ccache` *inside* the stage3 (10G) | aarch64, runs under qemu | stage3 `make.conf`: same two lines |
+| catalyst amd64 | `/mnt/db5/genstage/ccache-amd64` (host, 20G) | chroot's amd64 | `"ccache"` in catalyst options; dir via host `CCACHE_DIR` set by xstage `run_catalyst` (2026-08-01) |
+| catalyst arm64 | `/mnt/db5/genstage/ccache-arm64` (host, 20G) | chroot's aarch64, under qemu | same mechanism; a hit skips distcc entirely |
 
 Notes:
 
@@ -101,6 +103,10 @@ compile phase collapses toward cross speed.
 - Adding distcc invalidates the existing ARM ccache once: ccache now hashes
   the masquerade wrapper as "the compiler", so the first combined run re-misses
   everything (~10 min observed) before the cache re-warms.
+- Catalyst is immune to the `CCACHE_PREFIX` trap: its `chroot-functions.sh`
+  builds the plain `FEATURES="ccache distcc"` chain and never sets
+  `CCACHE_PREFIX`, so the ccache+distcc combination in the stage chroots is
+  the proven-safe form.
 
 Verdict: distcc works and is kept as automation, but it only pays off for
 compile-heavy/thin-configure packages *and* the chroot is pure insurance anyway

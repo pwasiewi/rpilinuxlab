@@ -27,7 +27,8 @@
 #   destroy         remove the container (data volume is kept)     [confirm]
 #
 # Env overrides:
-#   XANDROID_DIR        data volume dir       (default /mnt/db5/android)
+#   XANDROID_DIR        data volume dir       (default /mnt/db5/android;
+#                       also settable in /etc/xp.conf — explicit env wins)
 #   XANDROID_ROM        lineage | axion       (default lineage; separate trees)
 #   XANDROID_BRANCH     manifest branch       (default lineage-23.2)
 #   XANDROID_DEVICE     device codename       (default tegu = Pixel 9a)
@@ -53,6 +54,8 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Globals
 # ---------------------------------------------------------------------------
+# data dir precedence: env > /etc/xp.conf > default
+if [[ -z ${XANDROID_DIR:-} && -r /etc/xp.conf ]]; then source /etc/xp.conf; fi
 XDIR="${XANDROID_DIR:-/mnt/db5/android}"
 ROM="${XANDROID_ROM:-lineage}"
 BRANCH="${XANDROID_BRANCH:-lineage-23.2}"

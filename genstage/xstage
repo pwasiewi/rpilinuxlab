@@ -112,7 +112,8 @@
 #                    stage3 (feed it back via XSTAGE_ARM64_TARBALL)     [root]
 #
 # Env overrides:
-#   XSTAGE_DIR        catalyst data dir       (default /mnt/db5/genstage)
+#   XSTAGE_DIR        catalyst data dir       (default /mnt/db5/genstage;
+#                     also settable in /etc/xp.conf — explicit env wins)
 #   XSTAGE_JOBS       catalyst/emerge jobs    (default nproc)
 #   XSTAGE_MIRROR     gentoo mirror           (default https://distfiles.gentoo.org)
 #   XSTAGE_FLAVOR     stage flavour           (default openrc)
@@ -189,7 +190,8 @@ REPO="$(dirname "${HERE}")"          # rpilinuxlab root: shared dl/ and build/
 DL_DIR="${REPO}/dl"
 JOBS="${XSTAGE_JOBS:-$(nproc)}"
 
-# amd64 / catalyst track
+# amd64 / catalyst track — data dir precedence: env > /etc/xp.conf > default
+if [[ -z ${XSTAGE_DIR:-} && -r /etc/xp.conf ]]; then source /etc/xp.conf; fi
 XDIR="${XSTAGE_DIR:-/mnt/db5/genstage}"
 MIRROR="${XSTAGE_MIRROR:-https://distfiles.gentoo.org}"
 FLAVOR="${XSTAGE_FLAVOR:-openrc}"
@@ -198,11 +200,15 @@ SUBARCH=amd64
 PROFILE="default/linux/amd64/23.0"
 AUTOBUILDS="${MIRROR}/releases/${SUBARCH}/autobuilds"
 # per-arch catalyst knobs — amd64 builds natively, so no extra spec keys
-CAT_OPTIONS='"autoresume", "bindist", "pkgcache", "seedcache"'
+CAT_OPTIONS='"autoresume", "bindist", "pkgcache", "seedcache", "ccache"'
 CAT_EXTRA_CONF=""       # extra catalyst.conf lines (arm64: distcc_hosts)
 INTERPRETER=""          # qemu-user binary catalyst copies into a foreign chroot
 UPDATE_SEED="yes"       # stage1: refresh the seed before building from it
 DISTCC_HOSTS_VAL=""     # non-empty -> distcc offload expected, gate on distccd
+# per-track compiler cache — catalyst's "ccache" option bind-mounts the host
+# CCACHE_DIR (set at invocation in run_catalyst) into the chroot at
+# /var/tmp/ccache; one cache per architecture, never shared across arches
+CCACHE_TRACK_DIR="${XDIR}/ccache-amd64"
 
 STOREDIR="${XDIR}/catalyst"
 CONF="${XDIR}/conf/catalyst.conf"
@@ -322,7 +328,8 @@ use_arm64_stage_conf() {
     INTERPRETER="/usr/bin/qemu-aarch64"
     # updating the seed would first recompile half of it under pure emulation
     UPDATE_SEED="no"
-    CAT_OPTIONS='"autoresume", "bindist", "pkgcache", "seedcache", "distcc"'
+    CAT_OPTIONS='"autoresume", "bindist", "pkgcache", "seedcache", "distcc", "ccache"'
+    CCACHE_TRACK_DIR="${XDIR}/ccache-arm64"
     DISTCC_HOSTS_VAL="${XSTAGE_DISTCC_HOSTS:-127.0.0.1:3632/${JOBS}}"
     # distcc_hosts is a catalyst.conf value, not a spec key
     CAT_EXTRA_CONF="distcc_hosts = \"${DISTCC_HOSTS_VAL}\""
@@ -369,6 +376,7 @@ cmd_setup() {
     mkdir -p "${XDIR}/conf" "${SPECDIR}" "${STATE}" "${LOGDIR}" \
              "${STOREDIR}/builds/default" "${STOREDIR}/builds/${REL_TYPE}" \
              "${STOREDIR}/repos" "${STOREDIR}/tmp"
+    ccache_track_dir_setup
 
     if [[ -f ${CONF} ]]; then
         info "Keeping existing ${CONF}"
@@ -496,6 +504,12 @@ cmd_spec() {
     done
 }
 
+ccache_track_dir_setup() {  # catalyst aborts when the ccache dir is missing
+    mkdir -p "${CCACHE_TRACK_DIR}"
+    [[ -f ${CCACHE_TRACK_DIR}/ccache.conf ]] ||
+        echo "max_size = 20.0G" > "${CCACHE_TRACK_DIR}/ccache.conf"
+}
+
 run_catalyst() {  # run_catalyst <stage1|stage2|stage3>
     need_root; need_catalyst
     local spec="${SPECDIR}/$1.spec"
@@ -512,9 +526,13 @@ run_catalyst() {  # run_catalyst <stage1|stage2|stage3>
             xarm distcc start "${dport}" || die "distccd auto-start failed"
         fi
     fi
+    ccache_track_dir_setup
     info "catalyst -f $1.spec (this compiles for a long time; log: ${LOGDIR})"
-    # -a: ignore any stale autoresume points so spec changes take effect
-    catalyst -c "${CONF}" -af "${spec}"
+    # -a: ignore any stale autoresume points so spec changes take effect.
+    # CCACHE_DIR: catalyst's "ccache" option bind-mounts this host dir into
+    # the chroot — without it catalyst falls back to /var/tmp/ccache, which
+    # here is a symlink to the host's x86 cache (wrong architecture)
+    CCACHE_DIR="${CCACHE_TRACK_DIR}" catalyst -c "${CONF}" -af "${spec}"
     local out; out=$(built_stage "$1")
     [[ -n ${out} ]] || die "catalyst finished but no $1 tarball in builds/${REL_TYPE}"
     info "$1 ready: ${out} ($(du -h "${out}" | cut -f1))"

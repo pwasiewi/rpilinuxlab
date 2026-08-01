@@ -18,6 +18,27 @@ echo "XP_LAB_DIR=$HOME/Claude/rpilinuxlab" | sudo tee /etc/xp.conf
 Running `./xp` from the repo needs no conf (it finds `profiles/` next to
 itself). `XP_LAB_DIR` in the environment overrides both.
 
+`/etc/xp.conf` also takes the data-volume roots — `XSTAGE_DIR`,
+`XANDROID_DIR`, `XOWRT_DIR` (defaults under `/mnt/db5/`) — sourced by
+xstage/xandroid/xowrt directly, so the overrides survive `sudo`. Same
+precedence: explicit env > conf > built-in default. Keep the file
+assignments-only (it is sourced as root).
+
+Relocation caveat: files already generated under the old `XSTAGE_DIR` keep
+absolute paths — `conf/catalyst*.conf` (`storedir`, `port_logdir`) and
+`specs*/*.spec` (`portage_confdir`). After copying the tree, fix them in
+place (here from `/mnt/db5` to `/mnt/NEW`):
+
+```
+sudo sed -i 's|/mnt/db5|/mnt/NEW|g' /mnt/NEW/genstage/conf/*.conf \
+    /mnt/NEW/genstage/specs/*.spec /mnt/NEW/genstage/specs-arm64/*.spec
+grep -rn /mnt/db5 /mnt/NEW/genstage/conf /mnt/NEW/genstage/specs*   # expect nothing
+```
+
+(or simply rerun `xstage <track> setup` + `spec`, which regenerates them
+from the new `XSTAGE_DIR`). xandroid/xowrt keep no absolute paths in
+generated files — only the env/conf variable matters there.
+
 ## Profiles
 
 | profile | board | CPU | method | network |

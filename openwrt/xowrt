@@ -25,7 +25,8 @@
 #   src-menuconfig   make menuconfig in the source tree
 #
 # Env overrides:
-#   XOWRT_DIR       data dir            (default /mnt/db5/openwrt)
+#   XOWRT_DIR       data dir            (default /mnt/db5/openwrt; also
+#                   settable in /etc/xp.conf — explicit env wins)
 #   XOWRT_RELEASE   OpenWrt release     (default 25.12.5)
 #   XOWRT_TARGET    target/subtarget    (default mediatek/filogic)
 #   XOWRT_PROFILE   device profile      (default cudy_tr3000-v1; also
@@ -48,6 +49,8 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Globals
 # ---------------------------------------------------------------------------
+# data dir precedence: env > /etc/xp.conf > default
+if [[ -z ${XOWRT_DIR:-} && -r /etc/xp.conf ]]; then source /etc/xp.conf; fi
 XDIR="${XOWRT_DIR:-/mnt/db5/openwrt}"
 RELEASE="${XOWRT_RELEASE:-25.12.5}"
 TARGET="${XOWRT_TARGET:-mediatek/filogic}"

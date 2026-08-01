@@ -386,9 +386,23 @@ sits on `/mnt/db5` outside the repo.
 - **arm64 export to xlab**: an `export` step copying a built arm64 stage3
   into `../dl/` would let `xlab gentoo image` boot it too (the SD pipeline
   already eats it via `XSTAGE_ARM64_TARBALL`).
-- **catalyst ccache for arm64**: the `ccache` option would help repeat runs,
-  but it interacts with the `CCACHE_PREFIX`/fallback trap from the xarm
-  distcc work — add only after the plain distcc path is proven.
+- ~~**catalyst ccache for arm64**~~ — DONE 2026-08-01 (the gate — "plain
+  distcc path proven" — fell that day: arm64 stage1 ran through gcc with
+  19k+ `COMPILE_OK` distcc jobs). Both tracks now carry `"ccache"` in
+  `options`: catalyst bind-mounts a **host-side, per-track** cache dir into
+  the chroot at `/var/tmp/ccache` and the *chroot's own* ccache (aarch64
+  under qemu on the arm64 track) does the hashing. The dir is selected via
+  the host `CCACHE_DIR` env var at invocation (`run_catalyst` exports it —
+  catalyst has no conf key, and its fallback `/var/tmp/ccache` is a symlink
+  to the host x86 cache, i.e. the wrong architecture): `xstage` uses
+  `/mnt/db5/genstage/ccache-amd64` and `ccache-arm64` (20G each via the
+  dir's own `ccache.conf`). Interplay with distcc is safe by construction —
+  catalyst's `chroot-functions.sh` chains plain `FEATURES="ccache distcc"`,
+  no `CCACHE_PREFIX`; a cache hit skips distcc entirely. First run per track
+  is cold (and pays a one-time qemu-emulated build of `dev-util/ccache`,
+  binpkg-cached afterwards); the built stage3 tarball ships ccache (stage2's
+  preclean removes it, stage1/stage3 don't — harmless, arguably useful on
+  the Pi).
 - **UEFI boot in qemu** (separate task): boot the built artifacts through an
   OVMF/AAVMF firmware instead of `-kernel`, reusing the host's
   `efi-boot` / `build-initrd-uuid-next` patterns (`~/Claude/bin`) — squashfs
