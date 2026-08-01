@@ -1,0 +1,14 @@
+# stage2 (educational, optional): run scripts/bootstrap.sh inside the stage1
+# chroot — the toolchain rebuilds itself with itself, giving one more layer of
+# separation from the seed. Modern releng skips this: stage3 builds directly
+# from stage1. Rendered by 'xstage amd64 spec'.
+subarch: @SUBARCH@
+target: stage2
+version_stamp: @FLAVOR@-@STAMP@
+rel_type: @REL_TYPE@
+profile: @PROFILE@
+snapshot_treeish: @TREEISH@
+source_subpath: @REL_TYPE@/stage1-@SUBARCH@-@FLAVOR@-@STAMP@
+compression_mode: pixz
+portage_confdir: @CONFDIR@
+portage_prefix: releng

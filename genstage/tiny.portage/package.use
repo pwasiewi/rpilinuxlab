@@ -1,0 +1,8 @@
+# USE flags for the tiny rootfs. 'xstage tiny build' installs this file into
+# the sysroot as etc/portage/package.use/xstage-tiny (portage ignores env USE
+# for USE-dependency constraints, so the flags must be persistent config):
+# static busybox with applet symlinks installed into ROOT by the ebuild.
+sys-apps/busybox static make-symlinks -pam -syslog -savedconfig
+# busybox[static] links libcrypt statically — the sysroot copies need .a files
+sys-libs/libxcrypt static-libs
+virtual/libcrypt static-libs

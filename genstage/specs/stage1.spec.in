@@ -1,0 +1,15 @@
+# stage1: build the toolchain subset of @system (the profile's packages.build)
+# from the seed stage3, installed with ROOT=/tmp/stage1root inside the seed
+# chroot. Rendered by 'xstage amd64 spec' — @KEY@ tokens are substituted.
+subarch: @SUBARCH@
+target: stage1
+version_stamp: @FLAVOR@-@STAMP@
+rel_type: @REL_TYPE@
+profile: @PROFILE@
+snapshot_treeish: @TREEISH@
+source_subpath: @SEED_SUBPATH@
+compression_mode: pixz
+update_seed: yes
+update_seed_command: --update --deep --changed-use @world
+portage_confdir: @CONFDIR@
+portage_prefix: releng

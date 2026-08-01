@@ -1,0 +1,533 @@
+#!/bin/bash
+# xstage — Gentoo stage bootstrapping + Buildroot-style tiny rootfs, in the
+# xlab/xarm/xowrt style.
+#
+# Two tracks in one script:
+#  * amd64 — catalyst-driven stage1 -> stage3 (the way Release Engineering
+#    builds the official tarballs), native on this host. stage2 is kept as an
+#    explicit educational step (bootstrap.sh inside the stage1 chroot) but the
+#    default pipeline goes stage1 -> stage3 like modern releng.
+#  * tiny  — the Gentoo analog of Buildroot: a minimal aarch64 rootfs emerged
+#    into a directory with --root= (no portage inside), regenerated from
+#    scratch on the host instead of updated on the target.
+# Recipe/background: ~/Claude/rpilinuxlab/genstage/readme.md
+#
+# Usage: xstage <target> <subcommand> [args]
+#        xstage targets | status | clean
+#
+# Targets:
+#   amd64      catalyst stage1/stage2/stage3 bootstrap, native amd64
+#   tiny       minimal aarch64 rootfs via the xarm crossdev sysroot
+#
+# Subcommands (amd64):
+#   status           seed / snapshot / specs / built stages
+#   setup            check catalyst+pixz+squashfs, dirs on /mnt/db5, private
+#                    catalyst.conf, releng + gentoo.git clones          [root]
+#   seed             download + sha256-verify the latest amd64 stage3 seed
+#                    into ../dl/ and place it in catalyst builds/default/
+#   snapshot [REF]   update gentoo.git, catalyst -s REF (default stable),
+#                    record the commit hash for the specs               [root]
+#   spec             render specs/*.spec.in -> $XSTAGE_DIR/specs/
+#   stage1           catalyst -f stage1.spec  (toolchain from the seed) [root]
+#   stage2           catalyst -f stage2.spec  (educational: bootstrap.sh
+#                    rebuilds the stage1 toolchain with itself; NOT part
+#                    of 'all' — releng skips it)                        [root]
+#   stage3           catalyst -f stage3.spec  (emerge -e @system)      [root]
+#   all              seed + snapshot + spec + stage1 + stage3           [root]
+#   verify           unpack the newest built stage3, chroot smoke test  [root]
+#   clean            rm catalyst tmp/ ('clean all': + built stages,
+#                    snapshots and state; seeds and git repos kept)  [confirm]
+#
+# Subcommands (tiny):
+#   status           toolchain / rootfs / squashfs / initrd state
+#   build            REGENERATE from scratch: rm rootfs, cross-emerge
+#                    baselayout + base packages (+XSTAGE_TINY_PKGS) with
+#                    --root=, device nodes, /init                [root,confirm]
+#                    base = XSTAGE_TINY_BASE: 'gentoo' (default: bash,
+#                    coreutils, util-linux & friends) or 'busybox' (static)
+#   pack             mksquashfs + cpio newc initrd into ../build/tinyroot/
+#   run              boot the initrd with xlab's arm64 kernel in qemu -M virt
+#   clean            rm ../build/tinyroot                            [confirm]
+#
+# Env overrides:
+#   XSTAGE_DIR        catalyst data dir       (default /mnt/db5/genstage)
+#   XSTAGE_JOBS       catalyst/emerge jobs    (default nproc)
+#   XSTAGE_MIRROR     gentoo mirror           (default https://distfiles.gentoo.org)
+#   XSTAGE_FLAVOR     stage flavour           (default openrc)
+#   XSTAGE_REL_TYPE   catalyst rel_type       (default lab; seeds stay in default/)
+#   XSTAGE_TREEISH    snapshot hash override  (default: recorded by 'snapshot')
+#   XSTAGE_TINY_TUPLE crossdev tuple          (default aarch64-unknown-linux-gnu)
+#   XSTAGE_TINY_BASE  rootfs userland         (default gentoo; or busybox)
+#   XSTAGE_TINY_PKGS  extra tiny packages     (default empty)
+#
+# Typical flow:
+#   sudo ./xstage amd64 setup
+#   ./xstage amd64 seed
+#   sudo ./xstage amd64 all            # stage1 -> stage3, hours of compiling
+#   sudo ./xstage amd64 verify
+#   sudo ./xstage tiny build && sudo ./xstage tiny pack && ./xstage tiny run
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(dirname "${HERE}")"          # rpilinuxlab root: shared dl/ and build/
+DL_DIR="${REPO}/dl"
+JOBS="${XSTAGE_JOBS:-$(nproc)}"
+
+# amd64 / catalyst track
+XDIR="${XSTAGE_DIR:-/mnt/db5/genstage}"
+MIRROR="${XSTAGE_MIRROR:-https://distfiles.gentoo.org}"
+FLAVOR="${XSTAGE_FLAVOR:-openrc}"
+REL_TYPE="${XSTAGE_REL_TYPE:-lab}"
+SUBARCH=amd64
+PROFILE="default/linux/amd64/23.0"
+AUTOBUILDS="${MIRROR}/releases/${SUBARCH}/autobuilds"
+
+STOREDIR="${XDIR}/catalyst"
+CONF="${XDIR}/conf/catalyst.conf"
+SPECDIR="${XDIR}/specs"
+STATE="${XDIR}/state"
+LOGDIR="${XDIR}/logs"
+RELENG="${XDIR}/releng"
+CONFDIR="${RELENG}/releases/portage/stages"
+# the sync mirror, not repo/gentoo.git: only it has the CI-verified 'stable'
+# branch, plus the generated metadata/md5-cache catalyst profits from
+GENTOO_GIT="https://anongit.gentoo.org/git/repo/sync/gentoo.git"
+RELENG_GIT="https://github.com/gentoo/releng.git"
+GIT_REPO="${STOREDIR}/repos/gentoo.git"
+
+# tiny track
+TUPLE="${XSTAGE_TINY_TUPLE:-aarch64-unknown-linux-gnu}"
+SYSROOT="/usr/${TUPLE}"
+TINY_BLD="${REPO}/build/tinyroot"
+TINY_ROOT="${TINY_BLD}/rootfs"
+TINY_BASE="${XSTAGE_TINY_BASE:-gentoo}"     # gentoo | busybox
+TINY_PKGS="${XSTAGE_TINY_PKGS:-}"
+# the real Gentoo base userland (glibc/ncurses/readline & co. arrive as rdeps)
+TINY_BASE_PKGS="app-shells/bash sys-apps/coreutils sys-apps/util-linux
+    sys-apps/grep sys-apps/sed sys-apps/gawk sys-apps/findutils
+    sys-process/procps sys-apps/less"
+XLAB_KERNEL="${REPO}/build/gentoo/emu/vmlinuz"
+
+ALL_TARGETS=(amd64 tiny)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+die()     { echo "❌  $*" >&2; exit 1; }
+info()    { echo ">>>  $*"; }
+warn()    { echo "⚠️   $*" >&2; }
+confirm() { read -r -p "$1 [yes/NO]: " ans; [[ "$ans" == "yes" ]] || die "Aborted."; }
+help()    { sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \?//'; }
+
+need_root()     { [[ $EUID -eq 0 ]] || die "Root required: sudo $0 ${TGT:-} ${CMD:-}"; }
+need_catalyst() { command -v catalyst >/dev/null || die "No catalyst — install: emerge -av dev-util/catalyst"; }
+
+# ---------------------------------------------------------------------------
+# amd64 track — catalyst stage1/2/3
+# ---------------------------------------------------------------------------
+seed_tarball()  { ls -1t "${STOREDIR}/builds/default/stage3-${SUBARCH}-${FLAVOR}"-*.tar.xz 2>/dev/null | head -1 || true; }
+built_stage()   { ls -1t "${STOREDIR}/builds/${REL_TYPE}/$1-${SUBARCH}-${FLAVOR}"-*.tar.xz 2>/dev/null | head -1 || true; }
+snapshot_hash() {
+    local s
+    s=$(ls -1t "${STOREDIR}/snapshots/gentoo"-*.sqfs 2>/dev/null | head -1 || true)
+    if [[ -n ${s} ]]; then s=${s##*/gentoo-}; echo "${s%.sqfs}"; fi
+}
+treeish() {
+    if [[ -n ${XSTAGE_TREEISH:-} ]]; then echo "${XSTAGE_TREEISH}"; return; fi
+    if [[ -f ${STATE}/treeish ]]; then cat "${STATE}/treeish"; fi
+}
+
+cmd_setup() {
+    need_root; need_catalyst
+    grep -qw squashfs /proc/filesystems ||
+        die "Host kernel lacks SquashFS — catalyst mounts its snapshot as sqfs"
+    command -v pixz >/dev/null ||
+        warn "No pixz (specs use compression_mode: pixz) — emerge -av app-arch/pixz"
+    [[ -f /usr/share/openpgp-keys/gentoo-release.asc ]] ||
+        warn "No gentoo-release keyring — snapshot commit verification will fail: emerge -av sec-keys/openpgp-keys-gentoo-release"
+
+    mkdir -p "${XDIR}/conf" "${SPECDIR}" "${STATE}" "${LOGDIR}" \
+             "${STOREDIR}/builds/default" "${STOREDIR}/builds/${REL_TYPE}" \
+             "${STOREDIR}/repos" "${STOREDIR}/tmp"
+
+    if [[ -f ${CONF} ]]; then
+        info "Keeping existing ${CONF}"
+    else
+        info "Writing ${CONF}"
+        # private config — /etc/catalyst is never touched; every catalyst call
+        # in this script passes -c ${CONF}
+        cat > "${CONF}" <<-EOF
+	# xstage catalyst config (private; used via: catalyst -c ${CONF})
+	digests = ["blake2b", "sha512"]
+	options = ["autoresume", "bindist", "pkgcache", "seedcache"]
+	storedir = "${STOREDIR}"
+	port_logdir = "${LOGDIR}"
+	jobs = ${JOBS}
+	load-average = $(nproc).0
+	EOF
+    fi
+
+    if [[ -d ${RELENG}/.git ]]; then
+        info "Keeping existing releng clone"
+    else
+        info "Cloning releng (spec confdir templates)"
+        git clone --depth 1 "${RELENG_GIT}" "${RELENG}"
+    fi
+
+    if [[ -d ${GIT_REPO} ]]; then
+        info "Keeping existing gentoo.git"
+    else
+        # catalyst -s snapshots from the git repo at repos/<repo_name>.git
+        info "Cloning gentoo.git (bare, branch stable, shallow — ~80 MB)"
+        git clone --bare --depth 1 --branch stable "${GENTOO_GIT}" "${GIT_REPO}"
+    fi
+    # seed and spec run without root — hand their target dirs to the invoker
+    if [[ -n ${SUDO_UID:-} ]]; then
+        chown "${SUDO_UID}:${SUDO_GID}" "${STOREDIR}/builds/default" "${STATE}" "${SPECDIR}"
+    fi
+    info "Setup done. Next: $0 amd64 seed"
+}
+
+cmd_seed() {
+    mkdir -p "${DL_DIR}"
+    local latest_txt="latest-stage3-${SUBARCH}-${FLAVOR}.txt"
+    info "Resolving latest stage3 (${SUBARCH}, ${FLAVOR}) from ${AUTOBUILDS}"
+    local relpath
+    relpath=$(curl -fsSL "${AUTOBUILDS}/${latest_txt}" \
+        | awk '/^[0-9]{8}T[0-9]{6}Z\// {print $1; exit}')
+    [[ -n ${relpath} ]] || die "Could not parse ${latest_txt}"
+    local tarball; tarball=$(basename "${relpath}")
+
+    if [[ -f ${DL_DIR}/${tarball} && -f ${DL_DIR}/${tarball}.sha256 ]]; then
+        info "${tarball} already downloaded"
+    else
+        info "Downloading ${tarball} (~300 MB)"
+        wget -O "${DL_DIR}/${tarball}" "${AUTOBUILDS}/${relpath}" ||
+            { command rm -f "${DL_DIR}/${tarball}"; die "seed download failed"; }
+        wget -qO "${DL_DIR}/${tarball}.sha256" "${AUTOBUILDS}/${relpath}.sha256" ||
+            { command rm -f "${DL_DIR}/${tarball}.sha256"; die "sha256 download failed"; }
+    fi
+    info "Verifying sha256"
+    (cd "${DL_DIR}" && grep -E "\s${tarball}\$" "${tarball}.sha256" | sha256sum -c --quiet) ||
+        die "SHA256 mismatch on ${tarball} — delete it from dl/ and retry"
+
+    [[ -d ${STOREDIR}/builds/default ]] || die "No ${STOREDIR}/builds/default — run: sudo $0 amd64 setup"
+    if [[ ! -f ${STOREDIR}/builds/default/${tarball} ]]; then
+        info "Placing seed in catalyst builds/default/"
+        cp "${DL_DIR}/${tarball}" "${STOREDIR}/builds/default/${tarball}"
+    fi
+    info "Seed ready: ${STOREDIR}/builds/default/${tarball}"
+}
+
+cmd_snapshot() {
+    need_root; need_catalyst
+    local ref="${1:-stable}"
+    [[ -d ${GIT_REPO} ]] || die "No ${GIT_REPO} — run: sudo $0 amd64 setup"
+    info "Updating gentoo.git (${ref})"
+    git -C "${GIT_REPO}" fetch --depth 1 origin "${ref}"
+    git -C "${GIT_REPO}" update-ref "refs/heads/${ref}" FETCH_HEAD
+    info "Taking snapshot: catalyst -s ${ref}"
+    catalyst -c "${CONF}" -s "${ref}"
+    local hash; hash=$(snapshot_hash)
+    [[ -n ${hash} ]] || die "No snapshot appeared in ${STOREDIR}/snapshots"
+    echo "${hash}" > "${STATE}/treeish"
+    info "Snapshot treeish recorded: ${hash}"
+}
+
+render_spec() {  # render_spec <stage1|stage2|stage3> <stamp> <tree> <seed_subpath>
+    local st="$1" stamp="$2" tree="$3" seed="$4"
+    sed -e "s|@SUBARCH@|${SUBARCH}|g" \
+        -e "s|@FLAVOR@|${FLAVOR}|g" \
+        -e "s|@STAMP@|${stamp}|g" \
+        -e "s|@REL_TYPE@|${REL_TYPE}|g" \
+        -e "s|@PROFILE@|${PROFILE}|g" \
+        -e "s|@TREEISH@|${tree}|g" \
+        -e "s|@SEED_SUBPATH@|${seed}|g" \
+        -e "s|@CONFDIR@|${CONFDIR}|g" \
+        "${HERE}/specs/${st}.spec.in" > "${SPECDIR}/${st}.spec"
+    info "Rendered ${SPECDIR}/${st}.spec"
+}
+
+cmd_spec() {
+    local tree; tree=$(treeish)
+    [[ -n ${tree} ]] || die "No snapshot treeish — run: sudo $0 amd64 snapshot"
+    local seed; seed=$(seed_tarball)
+    [[ -n ${seed} ]] || die "No seed stage3 in builds/default — run: $0 amd64 seed"
+    local seed_subpath="default/$(basename "${seed}" .tar.xz)"
+    # one stamp shared by all three specs, so stage2/stage3 source_subpath
+    # points exactly at the stage1 this run produces
+    local stamp; stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    echo "${stamp}" > "${STATE}/stamp"
+    [[ -d ${CONFDIR} ]] || die "No releng confdir ${CONFDIR} — run: sudo $0 amd64 setup"
+    local st
+    for st in stage1 stage2 stage3; do
+        render_spec "${st}" "${stamp}" "${tree}" "${seed_subpath}"
+    done
+}
+
+run_catalyst() {  # run_catalyst <stage1|stage2|stage3>
+    need_root; need_catalyst
+    local spec="${SPECDIR}/$1.spec"
+    [[ -f ${spec} ]] || die "No ${spec} — run: $0 amd64 spec"
+    info "catalyst -f $1.spec (this compiles for a long time; log: ${LOGDIR})"
+    # -a: ignore any stale autoresume points so spec changes take effect
+    catalyst -c "${CONF}" -af "${spec}"
+    local out; out=$(built_stage "$1")
+    [[ -n ${out} ]] || die "catalyst finished but no $1 tarball in builds/${REL_TYPE}"
+    info "$1 ready: ${out} ($(du -h "${out}" | cut -f1))"
+}
+
+cmd_stage1() { run_catalyst stage1; }
+cmd_stage2() { run_catalyst stage2; }
+cmd_stage3() { run_catalyst stage3; }
+
+cmd_all() {
+    need_root
+    if [[ -n $(seed_tarball) ]]; then
+        info "Seed already present — skipping download"
+    else
+        cmd_seed
+    fi
+    cmd_snapshot
+    cmd_spec
+    cmd_stage1
+    cmd_stage3
+    info "Bootstrap complete: $(built_stage stage3)"
+}
+
+cmd_verify() {
+    need_root
+    local tarball; tarball=$(built_stage stage3)
+    [[ -n ${tarball} ]] || die "No built stage3 in builds/${REL_TYPE} — run: sudo $0 amd64 all"
+    local vdir="${STOREDIR}/tmp/verify"
+    info "Unpacking $(basename "${tarball}") into ${vdir}"
+    command rm -rf "${vdir}"
+    mkdir -p "${vdir}"
+    tar xpf "${tarball}" -C "${vdir}" --xattrs-include='*.*' --numeric-owner
+    info "Chroot smoke test"
+    chroot "${vdir}" /bin/bash -c '
+        gcc --version | head -1
+        emerge --version
+        head -1 /etc/os-release' ||
+        die "Chroot smoke test failed"
+    info "OK: tarball $(du -h "${tarball}" | cut -f1), unpacked $(du -sh "${vdir}" | cut -f1)"
+}
+
+amd64_status() {
+    local cat=MISSING seed="-" tree="-" specs="-" s1="-" s3="-"
+    if command -v catalyst >/dev/null; then cat=ok; fi
+    local t
+    t=$(seed_tarball);        if [[ -n ${t} ]]; then seed=$(basename "${t}"); fi
+    t=$(treeish);             if [[ -n ${t} ]]; then tree=${t:0:12}; fi
+    if [[ -f ${SPECDIR}/stage1.spec ]]; then specs="rendered ($(cat "${STATE}/stamp" 2>/dev/null || echo '?'))"; fi
+    t=$(built_stage stage1);  if [[ -n ${t} ]]; then s1=$(du -h "${t}" | cut -f1); fi
+    t=$(built_stage stage3);  if [[ -n ${t} ]]; then s3=$(du -h "${t}" | cut -f1); fi
+    echo "amd64  catalyst:${cat}  conf:$([[ -f ${CONF} ]] && echo ok || echo -)  seed:${seed}"
+    echo "       treeish:${tree}  specs:${specs}  stage1:${s1}  stage3:${s3}"
+}
+
+cmd_clean_amd64() {
+    local all="${1:-}"
+    if [[ ${all} == all ]]; then
+        confirm "Remove catalyst tmp/, built stages, snapshots and state (seeds + git repos kept)?"
+        command rm -rf "${STOREDIR}/tmp" "${STOREDIR}/builds/${REL_TYPE}" \
+                       "${STOREDIR}/snapshots" "${STATE}" "${SPECDIR}"
+    else
+        confirm "Remove catalyst tmp/ (scratch chroots)?"
+        command rm -rf "${STOREDIR}/tmp"
+    fi
+    info "Cleaned."
+}
+
+# ---------------------------------------------------------------------------
+# tiny track — Buildroot-style minimal rootfs
+# ---------------------------------------------------------------------------
+CROSS_EMERGE="${TUPLE}-emerge"
+
+need_cross() {
+    command -v "${CROSS_EMERGE}" >/dev/null ||
+        die "No ${CROSS_EMERGE} — install the crossdev toolchain: sudo xarm setup"
+}
+
+cmd_tiny_build() {
+    need_root; need_cross
+    if [[ -d ${TINY_ROOT} && -n $(ls -A "${TINY_ROOT}" 2>/dev/null) ]]; then
+        confirm "Regenerate from scratch (rm -rf ${TINY_ROOT})?"
+        command rm -rf "${TINY_ROOT}"
+    fi
+    mkdir -p "${TINY_ROOT}"
+
+    # portage ignores env USE for USE-dependency constraints (busybox[static]
+    # needs libxcrypt[static-libs] in the sysroot) — the flags must live in
+    # persistent config, so install our namespaced package.use into the sysroot
+    info "Installing tiny USE flags: ${SYSROOT}/etc/portage/package.use/xstage-tiny"
+    cp "${HERE}/tiny.portage/package.use" "${SYSROOT}/etc/portage/package.use/xstage-tiny"
+
+    # the Buildroot idea on Gentoo: build in the sysroot, install only the
+    # runtime files into ROOT; the target never sees portage (updates happen
+    # here, the rootfs is regenerated, never emerged on the device)
+    info "baselayout (USE=build lays out the FS skeleton)"
+    USE="build" "${CROSS_EMERGE}" --root="${TINY_ROOT}" --root-deps=rdeps \
+        --usepkg --buildpkg --oneshot -q sys-apps/baselayout
+    if [[ ${TINY_BASE} == busybox ]]; then
+        info "busybox (static, applet symlinks via USE=make-symlinks)"
+        "${CROSS_EMERGE}" --root="${TINY_ROOT}" --root-deps=rdeps \
+            --usepkg --buildpkg --oneshot -q sys-apps/busybox
+    else
+        info "Gentoo base userland: ${TINY_BASE_PKGS//$'\n'/ }"
+        # INSTALL_MASK keeps the Buildroot spirit: no docs/locales on the target
+        # shellcheck disable=SC2086 — word splitting of the package list is intended
+        INSTALL_MASK="/usr/share/man /usr/share/doc /usr/share/info /usr/share/locale" \
+        "${CROSS_EMERGE}" --root="${TINY_ROOT}" --root-deps=rdeps \
+            --usepkg --buildpkg --oneshot -q ${TINY_BASE_PKGS}
+        # /bin/sh normally comes from app-alternatives/sh — symlink it ourselves
+        [[ -e ${TINY_ROOT}/bin/sh ]] || ln -s bash "${TINY_ROOT}/bin/sh"
+    fi
+    if [[ -n ${TINY_PKGS} ]]; then
+        info "Extra packages: ${TINY_PKGS}"
+        # shellcheck disable=SC2086 — word splitting of the package list is intended
+        "${CROSS_EMERGE}" --root="${TINY_ROOT}" --root-deps=rdeps \
+            --usepkg --buildpkg --oneshot -q ${TINY_PKGS}
+    fi
+
+    info "Device nodes + /init"
+    mkdir -p "${TINY_ROOT}"/{dev,proc,sys,tmp,root,mnt}
+    [[ -e ${TINY_ROOT}/dev/console ]] || mknod "${TINY_ROOT}/dev/console" c 5 1
+    [[ -e ${TINY_ROOT}/dev/null ]]    || mknod "${TINY_ROOT}/dev/null" c 1 3
+    local shell=/bin/sh
+    [[ ${TINY_BASE} == busybox ]] || shell=/bin/bash
+    cat > "${TINY_ROOT}/init" <<-EOF
+	#!/bin/sh
+	# tinyroot /init — mount pseudo-filesystems and drop to a shell
+
+	mount -t proc     none /proc
+	mount -t sysfs    none /sys
+	mount -t devtmpfs none /dev 2>/dev/null || true
+
+	echo
+	echo "tinyroot: Gentoo-built ${TINY_BASE} rootfs, no portage inside."
+	echo "Boot took \$(cut -d' ' -f1 /proc/uptime) seconds"
+	echo
+
+	exec ${shell}
+	EOF
+    chmod +x "${TINY_ROOT}/init"
+    info "rootfs ready: ${TINY_ROOT} ($(du -sh "${TINY_ROOT}" | cut -f1), $(find "${TINY_ROOT}" | wc -l) entries)"
+}
+
+cmd_tiny_pack() {
+    need_root
+    [[ -x ${TINY_ROOT}/init ]] || die "No rootfs — run: sudo $0 tiny build"
+    command -v mksquashfs >/dev/null || die "No mksquashfs — emerge -av sys-fs/squashfs-tools"
+    info "Packing squashfs"
+    mksquashfs "${TINY_ROOT}" "${TINY_BLD}/rootfs.squashfs" -comp zstd -noappend -quiet
+    info "Packing cpio initrd"
+    (cd "${TINY_ROOT}" && find . | cpio --quiet -H newc -o --owner=0.0) \
+        > "${TINY_BLD}/initrd"
+    # give the artifacts back to the invoking user so 'run' works without sudo
+    if [[ -n ${SUDO_UID:-} ]]; then
+        chown "${SUDO_UID}:${SUDO_GID}" "${TINY_BLD}/rootfs.squashfs" "${TINY_BLD}/initrd"
+    fi
+    info "squashfs: $(du -h "${TINY_BLD}/rootfs.squashfs" | cut -f1)  initrd: $(du -h "${TINY_BLD}/initrd" | cut -f1)"
+}
+
+cmd_tiny_run() {
+    command -v qemu-system-aarch64 >/dev/null ||
+        die "No qemu-system-aarch64 — emerge qemu with QEMU_SOFTMMU_TARGETS=aarch64"
+    [[ -f ${TINY_BLD}/initrd ]] || die "No initrd — run: sudo $0 tiny pack"
+    # borrow xlab's arm64 -M virt kernel; do NOT touch xlab's own artifacts
+    [[ -f ${XLAB_KERNEL} ]] ||
+        die "No ${XLAB_KERNEL} — build it first: (cd ${REPO} && ./xlab gentoo kernel)"
+    info "Booting tinyroot (-M virt; quit qemu: Ctrl-A X)"
+    exec qemu-system-aarch64 -M virt -cpu cortex-a72 -smp 2 -m 1024 \
+        -kernel "${XLAB_KERNEL}" -initrd "${TINY_BLD}/initrd" \
+        -append "console=ttyAMA0 init=/init" \
+        -nographic
+}
+
+tiny_status() {
+    local tc=ok rootfs="-" sq="-" ird="-" pkgs="-"
+    if ! command -v "${CROSS_EMERGE}" >/dev/null 2>&1; then tc=MISSING; fi
+    if [[ -d ${SYSROOT}/var/cache/binpkgs ]]; then
+        pkgs=$({ find "${SYSROOT}/var/cache/binpkgs" -name '*.gpkg.tar' -o -name '*.tbz2' 2>/dev/null || true; } | wc -l)
+    fi
+    # du exits non-zero on subdirs unreadable without root but still prints
+    # the total — don't let pipefail+set -e turn that into a dead status
+    local base="-"
+    if [[ -x ${TINY_ROOT}/init ]]; then
+        rootfs=$(du -sh "${TINY_ROOT}" 2>/dev/null | cut -f1 || true)
+        if [[ -e ${TINY_ROOT}/bin/busybox ]]; then base=busybox; else base=gentoo; fi
+    fi
+    if [[ -f ${TINY_BLD}/rootfs.squashfs ]]; then sq=$(du -h "${TINY_BLD}/rootfs.squashfs" | cut -f1); fi
+    if [[ -f ${TINY_BLD}/initrd ]]; then ird=$(du -h "${TINY_BLD}/initrd" | cut -f1); fi
+    echo "tiny   tc:${tc}  sysroot-binpkgs:${pkgs}  base:${base}  rootfs:${rootfs}  squashfs:${sq}  initrd:${ird}"
+    echo "       kernel:$([[ -f ${XLAB_KERNEL} ]] && echo ok || echo 'MISSING (./xlab gentoo kernel)')"
+}
+
+cmd_tiny_clean() {
+    confirm "Remove ${TINY_BLD}?"
+    command rm -rf "${TINY_BLD}"
+    info "Cleaned tiny."
+}
+
+# ---------------------------------------------------------------------------
+# status / targets / dispatch
+# ---------------------------------------------------------------------------
+cmd_status_all() {
+    amd64_status
+    tiny_status
+}
+
+cmd_clean_all() {
+    confirm "Clean BOTH tracks (catalyst tmp + ${TINY_BLD})?"
+    command rm -rf "${STOREDIR}/tmp" "${TINY_BLD}"
+    info "Cleaned all."
+}
+
+cmd_targets() {
+    sed -n '/^# Targets:/,/^#$/p' "$0" | sed 's/^# \?//'
+}
+
+[[ $# -ge 1 ]] || { help; exit 0; }
+
+case "$1" in
+    -h|--help|help) help; exit 0 ;;
+    targets)        cmd_targets; exit 0 ;;
+    status)         cmd_status_all; exit 0 ;;
+    clean)          cmd_clean_all; exit 0 ;;
+esac
+
+TGT="$1"; shift
+CMD="${1:-status}"; shift || true
+
+case "${TGT}" in
+amd64)
+    case "${CMD}" in
+        status)   amd64_status ;;
+        setup)    cmd_setup "$@" ;;
+        seed)     cmd_seed "$@" ;;
+        snapshot) cmd_snapshot "$@" ;;
+        spec)     cmd_spec "$@" ;;
+        stage1)   cmd_stage1 "$@" ;;
+        stage2)   cmd_stage2 "$@" ;;
+        stage3)   cmd_stage3 "$@" ;;
+        all)      cmd_all "$@" ;;
+        verify)   cmd_verify "$@" ;;
+        clean)    cmd_clean_amd64 "$@" ;;
+        *)        die "Unknown amd64 subcommand: ${CMD} (see: $0 --help)" ;;
+    esac ;;
+tiny)
+    case "${CMD}" in
+        status)   tiny_status ;;
+        build)    cmd_tiny_build "$@" ;;
+        pack)     cmd_tiny_pack "$@" ;;
+        run)      cmd_tiny_run "$@" ;;
+        clean)    cmd_tiny_clean "$@" ;;
+        *)        die "Unknown tiny subcommand: ${CMD} (see: $0 --help)" ;;
+    esac ;;
+*)  die "Unknown target: ${TGT} (see: $0 targets)" ;;
+esac

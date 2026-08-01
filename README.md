@@ -58,6 +58,31 @@ slower and warm ccache cuts another ~27%. Details of the setup steps,
 gotchas and speed levers live in [`crosscompile/`](crosscompile/)
 (`manual-setup.md`, `xarm-setup.md`, `optimizations.md`).
 
+## genstage — Gentoo stage bootstrapping + tiny rootfs (xstage)
+
+[`genstage/xstage`](genstage/xstage) rebuilds Gentoo's own release artifacts
+and the Buildroot idea, side by side: the **amd64** track drives catalyst
+through the official `stage1 -> stage3` bootstrap (seed stage3 + tree
+snapshot + releng spec files; `stage2`/`bootstrap.sh` kept as an explicit
+educational step), and the **tiny** track cross-emerges a minimal rootfs
+**into a directory** via the xarm sysroot (`--root=`, no portage on the
+target — updates = regenerate on the host; base userland = real Gentoo
+packages by default, `XSTAGE_TINY_BASE=busybox` for the static-busybox
+variant), packs it as squashfs + cpio initrd and boots it with xlab's arm64
+kernel. Heavy data on
+`/mnt/db5/genstage` (`XSTAGE_DIR`).
+
+```
+sudo genstage/xstage amd64 setup && genstage/xstage amd64 seed
+sudo genstage/xstage amd64 all       # snapshot -> spec -> stage1 -> stage3
+sudo genstage/xstage amd64 verify    # chroot smoke test of the built stage3
+sudo genstage/xstage tiny build && sudo genstage/xstage tiny pack
+genstage/xstage tiny run             # qemu -M virt -> bash shell
+```
+
+Background, stage semantics and the Buildroot mapping:
+**[genstage/readme.md](genstage/readme.md)**.
+
 ## Verified walkthrough — every command, in order (2026-07-31)
 
 The exact sequence below was run end-to-end on Gentoo (gcc 15.3, QEMU 10.2)

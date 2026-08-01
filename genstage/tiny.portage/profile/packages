@@ -1,0 +1,7 @@
+# Belt-and-braces for the tiny rootfs: drop portage from the @system set so
+# no dependency calculation can ever pull it into the target. xstage never
+# emerges portage into the rootfs anyway (explicit package list, --root-deps=
+# rdeps, --oneshot) — this file only takes effect if you point
+# PORTAGE_CONFIGROOT at a config stack that includes this profile dir
+# (see genstage/readme.md, "No portage on the target").
+-*sys-apps/portage

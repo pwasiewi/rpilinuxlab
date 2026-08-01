@@ -1,0 +1,14 @@
+# stage3: emerge -e @system in the stage1 chroot — the full base system, the
+# same kind of tarball the Handbook installs from. Sources our stage1 directly
+# (releng style; change source_subpath to the stage2 for the classic chain).
+# Rendered by 'xstage amd64 spec'.
+subarch: @SUBARCH@
+target: stage3
+version_stamp: @FLAVOR@-@STAMP@
+rel_type: @REL_TYPE@
+profile: @PROFILE@
+snapshot_treeish: @TREEISH@
+source_subpath: @REL_TYPE@/stage1-@SUBARCH@-@FLAVOR@-@STAMP@
+compression_mode: pixz
+portage_confdir: @CONFDIR@
+portage_prefix: releng
