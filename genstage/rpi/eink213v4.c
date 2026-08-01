@@ -5,8 +5,7 @@
 //   * /dev/spidev0.0            — the pixel/command stream (dtparam=spi=on)
 //   * /dev/gpiochipN (v2 ABI)   — RST / DC / PWR outputs, BUSY input
 // Both are in the mainline UAPI, so this binary is the whole userland the
-// panel needs. Pin numbers are the Waveshare HAT wiring (BCM numbering), the
-// same ones pwnagotchi's waveshare_4 driver uses.
+// panel needs. Pin numbers are the stock Waveshare HAT wiring (BCM numbering).
 //
 // Build (cross): aarch64-...-gcc -O2 -static -o eink213 eink213v4.c
 // Usage: eink213 [-t] [-c] [-r] [-k] [-2] [-d SPIDEV] [-g CHIP] [LINE...]

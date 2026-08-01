@@ -209,11 +209,11 @@ ssh root@10.0.0.2                  # over the USB cable (host = 10.0.0.1/24)
   guest writes out of `sd.img`.
   On the host side: give the `enx…` interface `10.0.0.1/24` and plug the cable
   into the Zero's **USB** port, not PWR IN.
-- **Pin/geometry compatibility with pwnagotchi.** The BCM pin numbers
-  (RST 17, DC 25, CS 8/CE0, BUSY 24, PWR 18), the 250x122 geometry and the
-  SSD1680 command sequence match Waveshare's `epd2in13_V4` reference driver,
-  i.e. the `ui.display.type = "waveshare_4"` panel. If the image comes out
-  upside down for a given HAT orientation, `eink213 -r` flips it.
+- **Stock HAT wiring.** The BCM pin numbers (RST 17, DC 25, CS 8/CE0,
+  BUSY 24, PWR 18), the 250x122 geometry and the SSD1680 command sequence
+  match Waveshare's `epd2in13_V4` reference driver, so any 2.13" V4 HAT works
+  as shipped. If the image comes out upside down for a given HAT orientation,
+  `eink213 -r` flips it.
 
 The qemu gate uses **`-M raspi3b`** (BCM2837 — literally the Zero 2 W's die;
 qemu models no Zero 2 W) and is subject to the same input limitation as
