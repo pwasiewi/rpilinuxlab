@@ -78,6 +78,10 @@ sudo genstage/xstage amd64 all       # snapshot -> spec -> stage1 -> stage3
 sudo genstage/xstage amd64 verify    # chroot smoke test of the built stage3
 sudo genstage/xstage tiny build && sudo genstage/xstage tiny pack
 genstage/xstage tiny run             # qemu -M virt -> bash shell
+sudo genstage/xstage tiny rpi        # + kernel8.img/firmware/DTBs (Pi 400)
+sudo genstage/xstage tiny image      # sd.img: MBR FAT32 boot + ext4 rootfs
+genstage/xstage tiny run-rpi         # qemu -M raspi4b boot gate (output-only)
+sudo genstage/xstage tiny sd /dev/sdX  # dd to a card -> boot the real Pi 400
 ```
 
 Background, stage semantics and the Buildroot mapping:

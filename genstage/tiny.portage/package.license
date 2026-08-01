@@ -1,0 +1,4 @@
+# The GPU boot blobs (start4.elf/fixup4.dat) are proprietary Broadcom binaries.
+# 'xstage tiny rpi' installs this as etc/portage/package.license/xstage-tiny.
+sys-boot/raspberrypi-firmware raspberrypi-videocore-bin
+sys-kernel/raspberrypi-image raspberrypi-videocore-bin

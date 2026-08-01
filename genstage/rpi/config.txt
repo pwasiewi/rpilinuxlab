@@ -1,0 +1,16 @@
+# tinyroot config.txt — read by the BCM2711 GPU firmware (start4.elf) from the
+# FAT32 boot partition. The EEPROM bootloader (Pi 4/400: no bootcode.bin on the
+# card) loads start4.elf, which parses this file, picks the board's DTB
+# automatically (bcm2711-rpi-400.dtb on a Pi 400) and starts the ARM cores.
+
+# boot the 64-bit kernel (kernel8.img); without this the firmware assumes 32-bit
+arm_64bit=1
+
+# which image to load; 'kernel=u-boot.bin' here would chain-load U-Boot instead
+kernel=kernel8.img
+
+# PL011 UART on GPIO14/15 (serial0) — serial console for debugging
+enable_uart=1
+
+# don't wait for a rainbow splash; tiny boots have no display manager anyway
+disable_splash=1

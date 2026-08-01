@@ -47,6 +47,15 @@
 #                    coreutils, util-linux & friends) or 'busybox' (static)
 #   pack             mksquashfs + cpio newc initrd into ../build/tinyroot/
 #   run              boot the initrd with xlab's arm64 kernel in qemu -M virt
+#   rpi              add the Pi 400 boot payload to the rootfs: cross-emerge
+#                    sys-kernel/raspberrypi-image (kernel8.img + start4.elf +
+#                    DTBs + /lib/modules) + our config.txt               [root]
+#   image            build sd.img: MBR, FAT32 boot + ext4 rootfs, PARTUUID
+#                    cmdline — the same image boots qemu and the card    [root]
+#   run-rpi          boot sd.img in qemu -M raspi4b: boot GATE only — output
+#                    on ttyAMA1, but qemu can't inject input into raspi4b
+#   sd DEV           dd sd.img onto a real SD card (/dev/sdX or
+#                    /dev/mmcblkN, removable-only safety)        [root,confirm]
 #   clean            rm ../build/tinyroot                            [confirm]
 #
 # Env overrides:
@@ -59,6 +68,7 @@
 #   XSTAGE_TINY_TUPLE crossdev tuple          (default aarch64-unknown-linux-gnu)
 #   XSTAGE_TINY_BASE  rootfs userland         (default gentoo; or busybox)
 #   XSTAGE_TINY_PKGS  extra tiny packages     (default empty)
+#   XSTAGE_TINY_IMG_MB sd.img size in MiB     (default 2048; keep a power of 2)
 #
 # Typical flow:
 #   sudo ./xstage amd64 setup
@@ -66,6 +76,8 @@
 #   sudo ./xstage amd64 all            # stage1 -> stage3, hours of compiling
 #   sudo ./xstage amd64 verify
 #   sudo ./xstage tiny build && sudo ./xstage tiny pack && ./xstage tiny run
+#   sudo ./xstage tiny rpi && sudo ./xstage tiny image && ./xstage tiny run-rpi
+#   sudo ./xstage tiny sd /dev/sdX     # then boot the real Pi 400
 
 set -euo pipefail
 
@@ -104,6 +116,11 @@ TUPLE="${XSTAGE_TINY_TUPLE:-aarch64-unknown-linux-gnu}"
 SYSROOT="/usr/${TUPLE}"
 TINY_BLD="${REPO}/build/tinyroot"
 TINY_ROOT="${TINY_BLD}/rootfs"
+TINY_IMG="${TINY_BLD}/sd.img"
+TINY_MNT="${TINY_BLD}/mnt"
+# power of 2: qemu's SD-card emulation rejects other sizes
+IMG_MB="${XSTAGE_TINY_IMG_MB:-2048}"
+BOOT_MB=256
 TINY_BASE="${XSTAGE_TINY_BASE:-gentoo}"     # gentoo | busybox
 TINY_PKGS="${XSTAGE_TINY_PKGS:-}"
 # the real Gentoo base userland (glibc/ncurses/readline & co. arrive as rdeps)
@@ -449,6 +466,167 @@ cmd_tiny_run() {
         -nographic
 }
 
+# --- Pi 400 SD-card pipeline ----------------------------------------------
+# BCM2711 boot chain: EEPROM (no bootcode.bin on the card) -> start4.elf +
+# fixup4.dat on an MBR FAT32 partition 1 -> config.txt -> kernel8.img +
+# auto-selected DTB (bcm2711-rpi-400.dtb) + cmdline.txt; partition 2 = rootfs.
+
+cmd_tiny_rpi() {
+    need_root; need_cross
+    [[ -x ${TINY_ROOT}/init ]] || die "No rootfs — run: sudo $0 tiny build"
+    # keyword (~arm64) + license (proprietary GPU blobs) accepts, namespaced
+    # like package.use/xstage-tiny
+    info "Installing Pi keyword/license accepts into the sysroot"
+    mkdir -p "${SYSROOT}/etc/portage/package.accept_keywords" \
+             "${SYSROOT}/etc/portage/package.license"
+    cp "${HERE}/tiny.portage/package.accept_keywords" \
+       "${SYSROOT}/etc/portage/package.accept_keywords/xstage-tiny"
+    cp "${HERE}/tiny.portage/package.license" \
+       "${SYSROOT}/etc/portage/package.license/xstage-tiny"
+    info "raspberrypi-image (prebuilt kernel8.img + firmware + DTBs + modules)"
+    "${CROSS_EMERGE}" --root="${TINY_ROOT}" --root-deps=rdeps \
+        --usepkg --buildpkg --oneshot -q sys-kernel/raspberrypi-image
+    [[ -f ${TINY_ROOT}/boot/kernel8.img ]] || die "No kernel8.img after emerge"
+    [[ -f ${TINY_ROOT}/boot/bcm2711-rpi-400.dtb ]] || warn "bcm2711-rpi-400.dtb missing?"
+    info "Installing our config.txt (arm_64bit=1, kernel=kernel8.img, uart on)"
+    cp "${HERE}/rpi/config.txt" "${TINY_ROOT}/boot/config.txt"
+    info "Pi boot payload ready: $(find "${TINY_ROOT}/boot" -type f | wc -l) files in /boot"
+}
+
+no_stale_tiny_loop() {
+    # a zombie loop pinned in another mount namespace = a live fs instance
+    # still writing over the image ('(deleted)' entries are inert)
+    local l
+    l=$(losetup -j "${TINY_IMG}" 2>/dev/null | { grep -v '(deleted)' || true; } | cut -d: -f1 | head -1)
+    [[ -z ${l} ]] || die "Stale loop ${l} still attached to ${TINY_IMG} — find the holder or reboot"
+}
+
+tiny_img_mount() {  # $1 = partition device
+    mkdir -p "${TINY_MNT}"
+    # mounts under the shared /home tree propagate into sandboxed systemd
+    # services' namespaces and can get pinned there (xlab corrupted its image
+    # that way on 2026-07-31) — a private bind underneath stops propagation
+    mount --bind "${TINY_MNT}" "${TINY_MNT}"
+    mount --make-private "${TINY_MNT}"
+    if ! mount "$1" "${TINY_MNT}"; then
+        umount "${TINY_MNT}"
+        die "Mount of $1 failed"
+    fi
+}
+
+tiny_img_umount() {
+    # two layers: the partition mount and the private bind under it
+    if mountpoint -q "${TINY_MNT}"; then umount "${TINY_MNT}" || warn "umount ${TINY_MNT} failed"; fi
+    if mountpoint -q "${TINY_MNT}"; then umount "${TINY_MNT}" || warn "bind umount ${TINY_MNT} failed"; fi
+}
+
+cmd_tiny_image() {
+    need_root
+    [[ -x ${TINY_ROOT}/init ]] || die "No rootfs — run: sudo $0 tiny build"
+    [[ -f ${TINY_ROOT}/boot/kernel8.img ]] || die "No Pi payload — run: sudo $0 tiny rpi"
+    command -v parted >/dev/null || die "No parted — emerge -av sys-block/parted"
+    command -v mkfs.vfat >/dev/null || die "No mkfs.vfat — emerge -av sys-fs/dosfstools"
+    no_stale_tiny_loop
+    info "Creating ${TINY_IMG} (${IMG_MB} MiB: ${BOOT_MB} MiB FAT32 boot + ext4 rootfs)"
+    command rm -f "${TINY_IMG}"
+    truncate -s "${IMG_MB}M" "${TINY_IMG}"
+    # MBR (msdos), not GPT: the Pi GPU bootloader expects an MBR FAT32 part 1
+    parted --script "${TINY_IMG}" \
+        mklabel msdos \
+        mkpart primary fat32 1MiB "$((BOOT_MB + 1))MiB" \
+        set 1 lba on \
+        mkpart primary ext4 "$((BOOT_MB + 1))MiB" 100%
+    local loop
+    loop=$(losetup -Pf --show "${TINY_IMG}")
+    # shellcheck disable=SC2064 — expand ${loop} now, it's gone at trap time
+    trap "tiny_img_umount; losetup -d ${loop} 2>/dev/null || true" EXIT INT TERM
+    mkfs.vfat -F32 -n RPIBOOT "${loop}p1" >/dev/null
+    mkfs.ext4 -q -L tinyroot "${loop}p2"
+    # MBR disk id -> root=PARTUUID=<id>-02: survives dd, so the identical
+    # cmdline works in qemu and on the physical card regardless of mmcblk N
+    local ptuuid
+    ptuuid=$(blkid -o value -s PTUUID "${loop}")
+    [[ -n ${ptuuid} ]] || die "No PTUUID on ${loop}"
+    echo "${ptuuid}" > "${TINY_BLD}/ptuuid"
+
+    info "Boot partition: /boot payload + rendered cmdline.txt"
+    tiny_img_mount "${loop}p1"
+    # plain cp -r: vfat has no owners/modes, cp -a would fail preserving them
+    cp -r "${TINY_ROOT}/boot/." "${TINY_MNT}/"
+    sed "s/@PTUUID@/${ptuuid}/" "${HERE}/rpi/cmdline.txt.in" > "${TINY_MNT}/cmdline.txt"
+    tiny_img_umount
+
+    info "Root partition: rootfs (minus /boot, which lives on the FAT side)"
+    tiny_img_mount "${loop}p2"
+    rsync -a --exclude='/boot/*' "${TINY_ROOT}/" "${TINY_MNT}/"
+    tiny_img_umount
+
+    losetup -d "${loop}"
+    trap - EXIT INT TERM
+    if [[ -n ${SUDO_UID:-} ]]; then
+        chown "${SUDO_UID}:${SUDO_GID}" "${TINY_IMG}" "${TINY_BLD}/ptuuid"
+    fi
+    info "sd.img ready: $(du -h "${TINY_IMG}" | cut -f1) (PARTUUID ${ptuuid}-02)"
+}
+
+cmd_tiny_run_rpi() {
+    command -v qemu-system-aarch64 >/dev/null ||
+        die "No qemu-system-aarch64 — emerge qemu with QEMU_SOFTMMU_TARGETS=aarch64"
+    [[ -f ${TINY_IMG} ]] || die "No sd.img — run: sudo $0 tiny image"
+    local ptuuid
+    ptuuid=$(cat "${TINY_BLD}/ptuuid" 2>/dev/null) || die "No ${TINY_BLD}/ptuuid — rerun: sudo $0 tiny image"
+    # qemu does not emulate the VideoCore firmware chain: kernel goes in via
+    # -kernel and the SD image only provides the root device. The machine is
+    # the 4B (qemu has no Pi 400 model — same BCM2711); its working serial
+    # console is ttyAMA1, not ttyAMA0/serial0 as on real hardware.
+    # KNOWN QEMU GAP (verified 2026-08-01, cf. qemu issue #2969): serial and
+    # USB input never reach the raspi4b guest — output-only. This subcommand
+    # is a BOOT GATE (kernel + PARTUUID root + init reach the bash banner);
+    # for an interactive shell use 'tiny run' (-M virt) or the real Pi.
+    info "Booting sd.img (-M raspi4b; OUTPUT-ONLY — quit qemu: Ctrl-A X)"
+    exec qemu-system-aarch64 -M raspi4b \
+        -kernel "${TINY_ROOT}/boot/kernel8.img" \
+        -dtb "${TINY_ROOT}/boot/bcm2711-rpi-4-b.dtb" \
+        -drive "file=${TINY_IMG},format=raw,if=sd" \
+        -append "console=ttyAMA1,115200 root=PARTUUID=${ptuuid}-02 rootwait rw init=/init" \
+        -nographic
+}
+
+cmd_tiny_sd() {
+    need_root
+    [[ $# -eq 1 ]] || die "Usage: sudo $0 tiny sd /dev/sdX|/dev/mmcblkN"
+    local dev="${1%/}"
+    [[ -f ${TINY_IMG} ]] || die "No sd.img — run: sudo $0 tiny image"
+    [[ ${dev} =~ ^/dev/(sd[a-z]+|mmcblk[0-9]+)$ ]] ||
+        die "Whole device without partition expected, e.g. /dev/sdb or /dev/mmcblk0"
+    [[ -b ${dev} ]] || die "Block device not found: ${dev}"
+    local name="${dev#/dev/}"
+    # never a disk that holds a mounted / (covers LUKS/LVM via the child tree)
+    lsblk -no MOUNTPOINTS "${dev}" | grep -qx / &&
+        die "${dev} holds the root filesystem — refusing"
+    local removable idbus model size
+    removable=$(cat "/sys/block/${name}/removable" 2>/dev/null || echo 0)
+    idbus=$(udevadm info --query=property --name="${dev}" | { grep '^ID_BUS=' || true; } | cut -d= -f2)
+    [[ ${removable} == 1 || ${idbus} == usb || ${idbus} == mmc || ${name} == mmcblk* ]] ||
+        die "${dev}: removable=0 and ID_BUS='${idbus:-?}' — refusing to touch an internal disk"
+    [[ $(blockdev --getsize64 "${dev}") -ge $(stat -c%s "${TINY_IMG}") ]] ||
+        die "${dev} is smaller than ${TINY_IMG}"
+    model=$(cat "/sys/block/${name}/device/model" 2>/dev/null || echo '?')
+    size=$(lsblk -dno SIZE "${dev}")
+    warn "Target: ${dev}  model:${model% }  size:${size}  removable:${removable}  bus:${idbus:-?}"
+    confirm "Overwrite ${dev} with ${TINY_IMG} (ALL data on it is lost)?"
+    local p
+    for p in "${dev}"?*; do
+        [[ -b ${p} ]] && umount "${p}" 2>/dev/null || true
+    done
+    dd if="${TINY_IMG}" of="${dev}" bs=4M conv=fsync status=progress
+    sync; partprobe "${dev}" 2>/dev/null || true
+    lsblk -o NAME,SIZE,FSTYPE,LABEL "${dev}"
+    info "Done. Insert into the Pi 400 and power on: console on HDMI +"
+    info "built-in keyboard (and serial0 on GPIO 14/15). To use the whole"
+    info "card later: parted ${dev} resizepart 2 100% && resize2fs ${dev}p2/2."
+}
+
 tiny_status() {
     local tc=ok rootfs="-" sq="-" ird="-" pkgs="-"
     if ! command -v "${CROSS_EMERGE}" >/dev/null 2>&1; then tc=MISSING; fi
@@ -464,8 +642,11 @@ tiny_status() {
     fi
     if [[ -f ${TINY_BLD}/rootfs.squashfs ]]; then sq=$(du -h "${TINY_BLD}/rootfs.squashfs" | cut -f1); fi
     if [[ -f ${TINY_BLD}/initrd ]]; then ird=$(du -h "${TINY_BLD}/initrd" | cut -f1); fi
+    local sd="-" rpi=no
+    if [[ -f ${TINY_IMG} ]]; then sd=$(du -h "${TINY_IMG}" | cut -f1); fi
+    if [[ -f ${TINY_ROOT}/boot/kernel8.img ]]; then rpi=yes; fi
     echo "tiny   tc:${tc}  sysroot-binpkgs:${pkgs}  base:${base}  rootfs:${rootfs}  squashfs:${sq}  initrd:${ird}"
-    echo "       kernel:$([[ -f ${XLAB_KERNEL} ]] && echo ok || echo 'MISSING (./xlab gentoo kernel)')"
+    echo "       kernel:$([[ -f ${XLAB_KERNEL} ]] && echo ok || echo 'MISSING (./xlab gentoo kernel)')  rpi-payload:${rpi}  sd.img:${sd}"
 }
 
 cmd_tiny_clean() {
@@ -526,6 +707,10 @@ tiny)
         build)    cmd_tiny_build "$@" ;;
         pack)     cmd_tiny_pack "$@" ;;
         run)      cmd_tiny_run "$@" ;;
+        rpi)      cmd_tiny_rpi "$@" ;;
+        image)    cmd_tiny_image "$@" ;;
+        run-rpi)  cmd_tiny_run_rpi "$@" ;;
+        sd)       cmd_tiny_sd "$@" ;;
         clean)    cmd_tiny_clean "$@" ;;
         *)        die "Unknown tiny subcommand: ${CMD} (see: $0 --help)" ;;
     esac ;;

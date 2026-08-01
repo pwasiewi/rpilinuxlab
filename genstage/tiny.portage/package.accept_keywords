@@ -1,0 +1,6 @@
+# Keywords for the Pi boot payload ('xstage tiny rpi' installs this file into
+# the sysroot as etc/portage/package.accept_keywords/xstage-tiny). Both packages
+# are KEYWORDS="-* arm arm64"; accept ~arm64 so the newest kernel/firmware pair
+# is available (they must match: DTBs drift between kernel versions).
+sys-kernel/raspberrypi-image ~arm64
+sys-boot/raspberrypi-firmware ~arm64

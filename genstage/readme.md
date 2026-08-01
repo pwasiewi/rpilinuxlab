@@ -113,6 +113,47 @@ References:
 [Embedded Handbook — Cross-compiling with Portage](https://wiki.gentoo.org/wiki/Embedded_Handbook/General/Cross-compiling_with_Portage),
 [RPi Minimal musl+busybox cross building](https://wiki.gentoo.org/wiki/Raspberry_Pi/Minimal_musl%2Bbusybox_cross_building).
 
+## Booting the Pi 400 (tiny → real hardware)
+
+```
+sudo ./xstage tiny rpi             # kernel8.img + firmware + DTBs into rootfs/boot
+sudo ./xstage tiny image           # sd.img: MBR, FAT32 boot + ext4 rootfs
+./xstage tiny run-rpi              # qemu -M raspi4b boot gate (output-only)
+sudo ./xstage tiny sd /dev/sdX     # dd to a real card, then boot the Pi 400
+```
+
+- **Boot chain (BCM2711)**: the EEPROM bootloader (no `bootcode.bin` on the card)
+  loads `start4.elf`+`fixup4.dat` from an **MBR FAT32 partition 1** (GPT won't
+  boot), which reads `config.txt` ([`rpi/config.txt`](rpi/config.txt):
+  `arm_64bit=1`, `kernel=kernel8.img`, `enable_uart=1`), auto-picks the board's
+  DTB (`bcm2711-rpi-400.dtb` on the Pi 400) and starts the ARM cores on
+  `kernel8.img` with [`rpi/cmdline.txt.in`](rpi/cmdline.txt.in) as the command
+  line. No U-Boot needed — though mainline U-Boot's `rpi_arm64_defconfig`
+  officially covers the Pi 400 if chain-loading is ever wanted
+  ([docs](https://docs.u-boot.org/en/latest/board/broadcom/raspberrypi.html)).
+- **The payload is a Gentoo package**: `tiny rpi` cross-emerges
+  `sys-kernel/raspberrypi-image` (pulls `sys-boot/raspberrypi-firmware`) into
+  the rootfs — prebuilt `kernel8.img`, GPU blobs, every Pi DTB, `overlays/` and
+  the matching `/lib/modules`, all portage-tracked in the sysroot VDB. Keyword
+  and license accepts are installed from [`tiny.portage/`](tiny.portage/) as
+  `…/xstage-tiny` files (the blobs are `raspberrypi-videocore-bin` licensed).
+- **One image, both worlds**: `tiny image` renders
+  `root=PARTUUID=<mbr-disk-id>-02` into `cmdline.txt`. The MBR disk id survives
+  `dd`, so the same `sd.img` finds its root as `mmcblk1` in qemu and `mmcblk0`
+  on the Pi without editing anything. Image size stays a power of 2 (default
+  2048 MiB) because qemu's SD emulation rejects other sizes; on a bigger card,
+  grow partition 2 afterwards (`parted resizepart 2 100%` + `resize2fs`).
+- **qemu raspi4b caveats** (verified here): qemu doesn't emulate the VideoCore
+  firmware, so the kernel is always passed with `-kernel` and the SD image only
+  provides the root device; the PL011 console enumerates as **ttyAMA1** (DTB
+  alias `serial1` = uart0); and the guest receives **no input at all** — serial
+  RX and USB are both dead ([qemu #2969](https://gitlab.com/qemu-project/qemu/-/issues/2969);
+  the 4B's USB controller sits on unemulated PCIe). `run-rpi` is therefore a
+  boot *gate*: it proves kernel + PARTUUID root + `/init` reach the bash banner
+  (3.1 s guest time). Interactive tiny work stays on `tiny run` (`-M virt`);
+  interactive Pi work happens on the real Pi 400 (HDMI + built-in keyboard,
+  or serial0 on GPIO 14/15).
+
 ## Storage layout
 
 | Path | Contents |
@@ -126,6 +167,7 @@ References:
 | `/mnt/db5/genstage/{specs,state,logs,releng}` | rendered specs, treeish/stamp, build logs, releng clone |
 | `../dl/stage3-amd64-*` | seed download cache (shared with xlab's arm64 seeds) |
 | `../build/tinyroot/{rootfs,rootfs.squashfs,initrd}` | tiny track outputs |
+| `../build/tinyroot/{sd.img,ptuuid}` | Pi 400 SD image + its MBR disk id |
 
 Nothing here needs `.gitignore` changes: tiny artifacts land under the
 already-ignored `/build/`, seed downloads under `/dl/`, and everything heavy
@@ -144,3 +186,12 @@ sits on `/mnt/db5` outside the repo.
   root located by UUID, switch_root from a busybox initrd.
 - **musl tiny variant**: a second crossdev toolchain
   (`aarch64-…-linux-musl`) for the truly smallest images (5–10 MB squashfs).
+- **own Pi kernel**: the raspberrypi/linux tree is already unpacked at
+  `../src/linux-stable_20231123/` with `bcm2711_defconfig` and
+  `bcm2711-rpi-400.dts` — an xlab-style `kmake` build would replace the
+  prebuilt `raspberrypi-image` kernel (firmware blobs still come from the
+  ebuild).
+- **U-Boot chain-load**: cross-build mainline `rpi_arm64_defconfig`
+  (officially supports the Pi 400), `config.txt: kernel=u-boot.bin`.
+- **networked tiny**: add `sys-firmware/raspberrypi-wifi-ucode` +
+  `linux-firmware[savedconfig]` for the Pi 400's brcmfmac43455 WiFi.

@@ -1,0 +1,1 @@
+console=serial0,115200 console=tty1 root=PARTUUID=@PTUUID@-02 rootwait init=/init
