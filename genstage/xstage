@@ -943,7 +943,7 @@ cmd_tiny_sd() {
     for p in "${dev}"?*; do
         [[ -b ${p} ]] && umount "${p}" 2>/dev/null || true
     done
-    dd if="${TINY_IMG}" of="${dev}" bs=4M conv=fsync status=progress
+    dd if="${TINY_IMG}" of="${dev}" bs=8M conv=fsync status=progress
     sync; partprobe "${dev}" 2>/dev/null || true
     lsblk -o NAME,SIZE,FSTYPE,LABEL "${dev}"
     local board; board=$(cat "${TINY_BOARD_F}" 2>/dev/null || echo rpi400)
