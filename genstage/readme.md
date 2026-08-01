@@ -154,6 +154,91 @@ sudo ./xstage tiny sd /dev/sdX     # dd to a real card, then boot the Pi 400
   interactive Pi work happens on the real Pi 400 (HDMI + built-in keyboard,
   or serial0 on GPIO 14/15).
 
+## Booting the Pi Zero 2 W with a Waveshare 2.13" V4 e-Paper HAT
+
+```
+sudo ./xstage tiny rpi             # same payload as above (all DTBs included)
+sudo ./xstage tiny image_zero      # sd.img: panel driver + sshd + usb0 net
+./xstage tiny run-rpi              # qemu -M raspi3b boot gate (output-only)
+sudo ./xstage tiny sd /dev/mmcblk0 # dd to the card, then boot the Zero 2 W
+ssh root@10.0.0.2                  # over the USB cable (host = 10.0.0.1/24)
+```
+
+`image_zero` is the Pi 400 image builder with three board-specific twists:
+
+- **Different boot chain, same files.** The Zero 2 W's BCM2710A1 (an RP3A0
+  package around the BCM2837 die) has no boot EEPROM: its ROM loads
+  `bootcode.bin`, then `start.elf` + `fixup.dat` — *not* the `start4.*` pair the
+  Pi 4/400 uses. `sys-kernel/raspberrypi-image` ships both sets, so only
+  `config.txt` changes: [`rpi/config-zero2w.txt`](rpi/config-zero2w.txt) is
+  written onto the FAT partition instead of the Pi 400 one. It adds
+  `dtparam=spi=on` (the HAT) and `dtoverlay=disable-bt`, which hands the PL011
+  back to GPIO 14/15 so `serial0` is `ttyAMA0` at a fixed baud rate rather than
+  the mini-UART, whose clock follows the core clock. The firmware auto-selects
+  `bcm2710-rpi-zero-2-w.dtb`.
+- **The panel driver is part of the rootfs.**
+  [`rpi/eink213v4.c`](rpi/eink213v4.c) is a ~400-line C program that talks to
+  the SSD1680 over `/dev/spidev0.0` and drives RST/DC/PWR/BUSY through the
+  **gpiochip v2 UAPI** — no Python, no libgpiod, no BCM2835 library, which is
+  what makes it fit a rootfs that has no package manager. `image_zero`
+  cross-compiles it to `/usr/bin/eink213` (24 KB) and cross-emerges
+  `sys-apps/kmod`, because the Pi kernel ships SPI as xz-compressed modules and
+  nothing here runs udev — `/init` therefore does `modprobe spi-bcm2835 spidev`
+  itself before writing the boot banner to the panel.
+  Text is drawn with the kernel's own VGA 8x16 console font, extracted from
+  `../src/linux-stable_20231123/lib/fonts/font_8x16.c` by
+  [`rpi/mkfont.sh`](rpi/mkfont.sh) into a generated `rpi/font8x16.h`
+  (31 columns x 7 rows in landscape, `-2` doubles the size).
+  `eink213 -o out.pbm` renders a frame **to a file instead of the panel**, so
+  the layout can be checked on the host with no hardware attached — that is how
+  the rotation maths (landscape 250x122 → the panel's native portrait RAM) was
+  verified here.
+- **A test workflow, not just a boot**: `image_zero` also installs
+  `sys-apps/iproute2` + `net-misc/openssh` (USE `-pam`: there is no login stack
+  here, so sshd reads `/etc/shadow` directly) and generates
+  `/etc/tiny-board.sh`, the board hook `/init` runs. It loads `g_ether` —
+  `dwc2` is built into the Pi kernel and switched to peripheral mode by
+  `dtoverlay=dwc2` — then configures **usb0 = 10.0.0.2/24** with the machine at
+  the other end of the cable as the gateway (10.0.0.1), starts sshd and shows
+  the ssh address on the panel. Fixed locally-administered MACs
+  (`dev_addr`/`host_addr`) keep the host-side interface name stable across
+  boots. Root logs in by password (`XSTAGE_ZERO_PASS`, default `tiny`) and by
+  key (the invoking user's `id_ed25519.pub`, or `XSTAGE_ZERO_KEY`); **ssh host
+  keys are generated on the board at first boot**, so the image itself carries
+  no secrets — which is also why `run-rpi` boots with `-snapshot`, keeping
+  guest writes out of `sd.img`.
+  On the host side: give the `enx…` interface `10.0.0.1/24` and plug the cable
+  into the Zero's **USB** port, not PWR IN.
+- **Pin/geometry compatibility with pwnagotchi.** The BCM pin numbers
+  (RST 17, DC 25, CS 8/CE0, BUSY 24, PWR 18), the 250x122 geometry and the
+  SSD1680 command sequence match Waveshare's `epd2in13_V4` reference driver,
+  i.e. the `ui.display.type = "waveshare_4"` panel. If the image comes out
+  upside down for a given HAT orientation, `eink213 -r` flips it.
+
+The qemu gate uses **`-M raspi3b`** (BCM2837 — literally the Zero 2 W's die;
+qemu models no Zero 2 W) and is subject to the same input limitation as
+`raspi4b`: verified here with both `-nographic` and `-serial stdio`, keystrokes
+never reach the guest, so it proves boot only (SD → `mmcblk0p2` by PARTUUID →
+`/init` → sshd → bash banner). SPI and the USB gadget are not emulated, so the
+panel and `usb0` need the real board.
+
+**sshd is testable without hardware**, though: the board hook falls back to
+`eth0` with qemu's user-net defaults (10.0.2.15/24 via 10.0.2.2), and
+`tiny run` (`-M virt`) attaches a virtio NIC forwarded to
+`127.0.0.1:2223`. So after `tiny image_zero`:
+
+```
+sudo ./xstage tiny pack            # repack the initrd with the new rootfs
+./xstage tiny run                  # terminal A
+ssh -p 2223 root@127.0.0.1         # terminal B — key or password login
+```
+
+Verified here end to end: key auth, password auth and PTY allocation
+(`/dev/pts/0`, which is why `/init` mounts `devpts` — without it every login
+dies with "PTY allocation request failed"). Note `tiny run` needs `-m 2048`
+now: an initramfs is unpacked into tmpfs, and a rootfs carrying the Pi module
+tree plus openssh panics a 1 GB guest with "Unable to mount root fs".
+
 ## Storage layout
 
 | Path | Contents |
@@ -167,7 +252,8 @@ sudo ./xstage tiny sd /dev/sdX     # dd to a real card, then boot the Pi 400
 | `/mnt/db5/genstage/{specs,state,logs,releng}` | rendered specs, treeish/stamp, build logs, releng clone |
 | `../dl/stage3-amd64-*` | seed download cache (shared with xlab's arm64 seeds) |
 | `../build/tinyroot/{rootfs,rootfs.squashfs,initrd}` | tiny track outputs |
-| `../build/tinyroot/{sd.img,ptuuid}` | Pi 400 SD image + its MBR disk id |
+| `../build/tinyroot/{sd.img,ptuuid,board}` | SD image, its MBR disk id, and which board it was built for |
+| `rpi/font8x16.h` | generated by `rpi/mkfont.sh` from the kernel tree (not committed) |
 
 Nothing here needs `.gitignore` changes: tiny artifacts land under the
 already-ignored `/build/`, seed downloads under `/dl/`, and everything heavy
@@ -194,4 +280,11 @@ sits on `/mnt/db5` outside the repo.
 - **U-Boot chain-load**: cross-build mainline `rpi_arm64_defconfig`
   (officially supports the Pi 400), `config.txt: kernel=u-boot.bin`.
 - **networked tiny**: add `sys-firmware/raspberrypi-wifi-ucode` +
-  `linux-firmware[savedconfig]` for the Pi 400's brcmfmac43455 WiFi.
+  `linux-firmware[savedconfig]` for the Pi 400's brcmfmac43455 WiFi (the
+  Zero 2 W's brcmfmac43436 comes from the same package) — the e-Paper banner
+  would then have an IP address to show.
+- **e-Paper on hardware**: `eink213` is verified by construction (offline PBM
+  render + a clean cross build) but has never driven a physical panel; the
+  first run on the Zero 2 W should be `eink213 -t` (test pattern), then `-r` if
+  the orientation is wrong. A partial-refresh mode (SSD1680 command `0x22`
+  with `0xff`/LUT reload) would make a status ticker practical.

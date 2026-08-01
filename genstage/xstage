@@ -46,14 +46,24 @@
 #                    base = XSTAGE_TINY_BASE: 'gentoo' (default: bash,
 #                    coreutils, util-linux & friends) or 'busybox' (static)
 #   pack             mksquashfs + cpio newc initrd into ../build/tinyroot/
-#   run              boot the initrd with xlab's arm64 kernel in qemu -M virt
-#   rpi              add the Pi 400 boot payload to the rootfs: cross-emerge
-#                    sys-kernel/raspberrypi-image (kernel8.img + start4.elf +
-#                    DTBs + /lib/modules) + our config.txt               [root]
-#   image            build sd.img: MBR, FAT32 boot + ext4 rootfs, PARTUUID
-#                    cmdline — the same image boots qemu and the card    [root]
-#   run-rpi          boot sd.img in qemu -M raspi4b: boot GATE only — output
-#                    on ttyAMA1, but qemu can't inject input into raspi4b
+#   run              boot the initrd with xlab's arm64 kernel in qemu -M virt,
+#                    NIC forwarded to 127.0.0.1:$XSTAGE_SSH_PORT (ssh test)
+#   rpi              add the Pi boot payload to the rootfs: cross-emerge
+#                    sys-kernel/raspberrypi-image (kernel8.img + start*.elf +
+#                    every DTB + /lib/modules); board-independent — the
+#                    image step picks the right config.txt              [root]
+#   image            build sd.img for the Pi 400: MBR, FAT32 boot + ext4
+#                    rootfs, PARTUUID cmdline — the same image boots qemu
+#                    and the card                                        [root]
+#   image_zero       the same for a Pi Zero 2 W + Waveshare 2.13" V4 e-Paper
+#                    HAT: SPI + USB-gadget (dwc2) in config.txt; kmod, the
+#                    eink213 panel driver, iproute2 and sshd added to the
+#                    rootfs; /etc/tiny-board.sh brings up usb0 (10.0.0.2,
+#                    host = 10.0.0.1), starts sshd and paints the banner
+#                    on the display                                      [root]
+#   run-rpi          boot sd.img in qemu (raspi4b or raspi3b, matching the
+#                    board the image was built for): boot GATE only — output
+#                    on ttyAMA1, but qemu can't inject input into it
 #   sd DEV           dd sd.img onto a real SD card (/dev/sdX or
 #                    /dev/mmcblkN, removable-only safety)        [root,confirm]
 #   clean            rm ../build/tinyroot                            [confirm]
@@ -69,6 +79,12 @@
 #   XSTAGE_TINY_BASE  rootfs userland         (default gentoo; or busybox)
 #   XSTAGE_TINY_PKGS  extra tiny packages     (default empty)
 #   XSTAGE_TINY_IMG_MB sd.img size in MiB     (default 2048; keep a power of 2)
+#   XSTAGE_ZERO_IP    Zero 2 W usb0 address   (default 10.0.0.2/24)
+#   XSTAGE_ZERO_GW    the machine at the other end of the cable (10.0.0.1)
+#   XSTAGE_ZERO_DNS   resolv.conf nameserver  (default 8.8.8.8)
+#   XSTAGE_ZERO_PASS  root password in the image             (default tiny)
+#   XSTAGE_ZERO_KEY   pubkey for root        (default ~SUDO_USER/.ssh/id_ed25519.pub)
+#   XSTAGE_SSH_PORT   host port 'tiny run' forwards to :22   (default 2223)
 #
 # Typical flow:
 #   sudo ./xstage amd64 setup
@@ -78,6 +94,8 @@
 #   sudo ./xstage tiny build && sudo ./xstage tiny pack && ./xstage tiny run
 #   sudo ./xstage tiny rpi && sudo ./xstage tiny image && ./xstage tiny run-rpi
 #   sudo ./xstage tiny sd /dev/sdX     # then boot the real Pi 400
+#   sudo ./xstage tiny rpi && sudo ./xstage tiny image_zero   # Zero 2 W + e-Paper
+#   ./xstage tiny run-rpi && sudo ./xstage tiny sd /dev/mmcblk0
 
 set -euo pipefail
 
@@ -118,10 +136,21 @@ TINY_BLD="${REPO}/build/tinyroot"
 TINY_ROOT="${TINY_BLD}/rootfs"
 TINY_IMG="${TINY_BLD}/sd.img"
 TINY_MNT="${TINY_BLD}/mnt"
+# which board the current sd.img was built for — 'run-rpi' and 'sd' read it
+TINY_BOARD_F="${TINY_BLD}/board"
 # power of 2: qemu's SD-card emulation rejects other sizes
 IMG_MB="${XSTAGE_TINY_IMG_MB:-2048}"
 BOOT_MB=256
 TINY_BASE="${XSTAGE_TINY_BASE:-gentoo}"     # gentoo | busybox
+# Pi Zero 2 W USB-gadget link: the board is ZERO_IP, the machine you plug the
+# cable into is ZERO_GW (give it 10.0.0.1/24 on the enx… interface)
+ZERO_IP="${XSTAGE_ZERO_IP:-10.0.0.2/24}"
+ZERO_GW="${XSTAGE_ZERO_GW:-10.0.0.1}"
+ZERO_DNS="${XSTAGE_ZERO_DNS:-8.8.8.8}"
+ZERO_PASS="${XSTAGE_ZERO_PASS:-tiny}"
+ZERO_KEY="${XSTAGE_ZERO_KEY:-}"             # pubkey file; default: invoker's ed25519
+# 2223, not 2222: xlab's gentoo VM already forwards that one
+SSH_PORT="${XSTAGE_SSH_PORT:-2223}"         # host port 'tiny run' forwards to :22
 TINY_PKGS="${XSTAGE_TINY_PKGS:-}"
 # the real Gentoo base userland (glibc/ncurses/readline & co. arrive as rdeps)
 TINY_BASE_PKGS="app-shells/bash sys-apps/coreutils sys-apps/util-linux
@@ -428,6 +457,13 @@ cmd_tiny_build() {
     mkdir -p "${TINY_ROOT}"/{dev,proc,sys,tmp,root,mnt}
     [[ -e ${TINY_ROOT}/dev/console ]] || mknod "${TINY_ROOT}/dev/console" c 5 1
     [[ -e ${TINY_ROOT}/dev/null ]]    || mknod "${TINY_ROOT}/dev/null" c 1 3
+    write_tiny_init
+    info "rootfs ready: ${TINY_ROOT} ($(du -sh "${TINY_ROOT}" | cut -f1), $(find "${TINY_ROOT}" | wc -l) entries)"
+}
+
+# /init is regenerated by 'build' and again by 'image_zero' (which adds the
+# e-Paper tool the hook below looks for) — one function, one source of truth
+write_tiny_init() {
     local shell=/bin/sh
     [[ ${TINY_BASE} == busybox ]] || shell=/bin/bash
     cat > "${TINY_ROOT}/init" <<-EOF
@@ -437,6 +473,13 @@ cmd_tiny_build() {
 	mount -t proc     none /proc
 	mount -t sysfs    none /sys
 	mount -t devtmpfs none /dev 2>/dev/null || true
+	# without devpts an ssh login dies with "PTY allocation request failed"
+	mkdir -p /dev/pts
+	mount -t devpts devpts /dev/pts 2>/dev/null || true
+
+	# board hook: 'xstage tiny image_zero' writes the Zero 2 W setup here
+	# (USB-gadget ethernet, sshd, e-Paper banner)
+	[ -x /etc/tiny-board.sh ] && /etc/tiny-board.sh
 
 	echo
 	echo "tinyroot: Gentoo-built ${TINY_BASE} rootfs, no portage inside."
@@ -446,7 +489,6 @@ cmd_tiny_build() {
 	exec ${shell}
 	EOF
     chmod +x "${TINY_ROOT}/init"
-    info "rootfs ready: ${TINY_ROOT} ($(du -sh "${TINY_ROOT}" | cut -f1), $(find "${TINY_ROOT}" | wc -l) entries)"
 }
 
 cmd_tiny_pack() {
@@ -472,10 +514,18 @@ cmd_tiny_run() {
     # borrow xlab's arm64 -M virt kernel; do NOT touch xlab's own artifacts
     [[ -f ${XLAB_KERNEL} ]] ||
         die "No ${XLAB_KERNEL} — build it first: (cd ${REPO} && ./xlab gentoo kernel)"
-    info "Booting tinyroot (-M virt; quit qemu: Ctrl-A X)"
-    exec qemu-system-aarch64 -M virt -cpu cortex-a72 -smp 2 -m 1024 \
+    # a NIC + host forward, so an image built by 'image_zero' can be ssh-tested
+    # here (the board hook falls back to eth0 with qemu's user-net defaults
+    # when there is no USB gadget): ssh -p ${SSH_PORT} root@127.0.0.1
+    info "Booting tinyroot (-M virt, ssh on 127.0.0.1:${SSH_PORT}; quit qemu: Ctrl-A X)"
+    # -m 2048: an initramfs is unpacked into tmpfs, so the guest needs room for
+    # the cpio *and* its expansion — a rootfs with the Pi module tree and
+    # openssh in it panics ("Unable to mount root fs") at 1024
+    exec qemu-system-aarch64 -M virt -cpu cortex-a72 -smp 2 -m 2048 \
         -kernel "${XLAB_KERNEL}" -initrd "${TINY_BLD}/initrd" \
         -append "console=ttyAMA0 init=/init" \
+        -netdev "user,id=n0,hostfwd=tcp::${SSH_PORT}-:22" \
+        -device virtio-net-device,netdev=n0 \
         -nographic
 }
 
@@ -501,8 +551,10 @@ cmd_tiny_rpi() {
         --usepkg --buildpkg --oneshot -q sys-kernel/raspberrypi-image
     [[ -f ${TINY_ROOT}/boot/kernel8.img ]] || die "No kernel8.img after emerge"
     [[ -f ${TINY_ROOT}/boot/bcm2711-rpi-400.dtb ]] || warn "bcm2711-rpi-400.dtb missing?"
-    info "Installing our config.txt (arm_64bit=1, kernel=kernel8.img, uart on)"
-    cp "${HERE}/rpi/config.txt" "${TINY_ROOT}/boot/config.txt"
+    # a sane default inside the rootfs; the authoritative copy is written onto
+    # the FAT partition by 'image' / 'image_zero', which know the board
+    info "Installing the default config.txt (arm_64bit=1, kernel=kernel8.img, uart on)"
+    command cp -f "${HERE}/rpi/config.txt" "${TINY_ROOT}/boot/config.txt"
     info "Pi boot payload ready: $(find "${TINY_ROOT}/boot" -type f | wc -l) files in /boot"
 }
 
@@ -533,14 +585,176 @@ tiny_img_umount() {
     if mountpoint -q "${TINY_MNT}"; then umount "${TINY_MNT}" || warn "bind umount ${TINY_MNT} failed"; fi
 }
 
-cmd_tiny_image() {
+cmd_tiny_image()      { tiny_make_image rpi400; }
+cmd_tiny_image_zero() { tiny_zero_payload; tiny_make_image zero2w; }
+
+# --- Pi Zero 2 W + Waveshare 2.13" V4 e-Paper -----------------------------
+# Same partition layout as the Pi 400 image; what differs is config.txt (this
+# SoC boots bootcode.bin + start.elf, and the HAT needs SPI) and the rootfs
+# extras: modprobe, plus the panel driver that /init calls at boot.
+
+tiny_zero_payload() {
+    need_root; need_cross
+    [[ -x ${TINY_ROOT}/init ]] || die "No rootfs — run: sudo $0 tiny build"
+
+    if [[ -x ${TINY_ROOT}/bin/modprobe || -x ${TINY_ROOT}/usr/bin/modprobe ||
+          -x ${TINY_ROOT}/sbin/modprobe ]]; then
+        info "modprobe already in the rootfs"
+    else
+        info "kmod (modprobe for the kernel's xz-compressed SPI modules)"
+        INSTALL_MASK="/usr/share/man /usr/share/doc /usr/share/info /usr/share/locale" \
+        "${CROSS_EMERGE}" --root="${TINY_ROOT}" --root-deps=rdeps \
+            --usepkg --buildpkg --oneshot -q sys-apps/kmod
+    fi
+
+    # the test workflow is 'plug in the USB cable and ssh to the board'
+    local netpkgs=()
+    [[ -x ${TINY_ROOT}/bin/ip || -x ${TINY_ROOT}/sbin/ip ]] || netpkgs+=(sys-apps/iproute2)
+    [[ -x ${TINY_ROOT}/usr/sbin/sshd ]] || netpkgs+=(net-misc/openssh)
+    if [[ ${#netpkgs[@]} -gt 0 ]]; then
+        info "Network + login: ${netpkgs[*]}"
+        INSTALL_MASK="/usr/share/man /usr/share/doc /usr/share/info /usr/share/locale" \
+        "${CROSS_EMERGE}" --root="${TINY_ROOT}" --root-deps=rdeps \
+            --usepkg --buildpkg --oneshot -q "${netpkgs[@]}"
+    else
+        info "iproute2 + openssh already in the rootfs"
+    fi
+    [[ -x ${TINY_ROOT}/usr/sbin/sshd ]] || die "sshd missing after emerge"
+
+    # the font header is generated from the kernel tree in ../src, not committed
+    [[ -f ${HERE}/rpi/font8x16.h ]] || "${HERE}/rpi/mkfont.sh"
+    info "Cross-compiling eink213 (SPI + gpiochip v2, no libs beyond libc)"
+    "${TUPLE}-gcc" -O2 -Wall -Wextra -s -o "${TINY_ROOT}/usr/bin/eink213" \
+        "${HERE}/rpi/eink213v4.c" ||
+        die "eink213 build failed"
+    info "e-Paper support ready: /usr/bin/eink213 ($(du -h "${TINY_ROOT}/usr/bin/eink213" | cut -f1))"
+
+    tiny_zero_ssh_config
+    tiny_zero_board_hook
+    write_tiny_init          # /init runs the hook the two calls above just wrote
+}
+
+tiny_zero_ssh_config() {
+    mkdir -p "${TINY_ROOT}"/{etc/ssh,root/.ssh,var/empty,run}
+    chmod 700 "${TINY_ROOT}/root/.ssh"
+    # a lab box on a point-to-point USB link: root logs in directly, there is
+    # no other account and no PAM — sshd reads /etc/shadow itself
+    cat > "${TINY_ROOT}/etc/ssh/sshd_config" <<-EOF
+	# generated by 'xstage tiny image_zero'
+	PermitRootLogin yes
+	PasswordAuthentication yes
+	PermitEmptyPasswords no
+	UsePAM no
+	PrintMotd no
+	Subsystem sftp /usr/lib/misc/sftp-server
+	EOF
+
+    # root password: openssl (host side) writes the SHA-512 crypt into the
+    # rootfs shadow — no chroot needed, the file format is arch-independent
+    local hash
+    hash=$(openssl passwd -6 "${ZERO_PASS}") || die "openssl passwd failed"
+    sed -i "s|^root:[^:]*:|root:${hash}:|" "${TINY_ROOT}/etc/shadow" ||
+        die "could not set the root password in ${TINY_ROOT}/etc/shadow"
+
+    # key login too, if the invoking user has an ed25519 key (or named one)
+    local keyfile="${ZERO_KEY}"
+    if [[ -z ${keyfile} && -n ${SUDO_USER:-} ]]; then
+        keyfile="/home/${SUDO_USER}/.ssh/id_ed25519.pub"
+    fi
+    if [[ -n ${keyfile} && -f ${keyfile} ]]; then
+        command cp -f "${keyfile}" "${TINY_ROOT}/root/.ssh/authorized_keys"
+        chmod 600 "${TINY_ROOT}/root/.ssh/authorized_keys"
+        info "ssh: root password '${ZERO_PASS}' + key $(basename "${keyfile}")"
+    else
+        info "ssh: root password '${ZERO_PASS}' (no pubkey found — set XSTAGE_ZERO_KEY=/path/to/key.pub)"
+    fi
+}
+
+tiny_zero_board_hook() {
+    # everything board-specific lives in one script /init calls, so the rootfs
+    # itself (and the Pi 400 image built from it) stays generic
+    cat > "${TINY_ROOT}/etc/tiny-board.sh" <<-EOF
+	#!/bin/sh
+	# Pi Zero 2 W board hook — generated by 'xstage tiny image_zero'.
+	# Runs from /init: USB-gadget ethernet, sshd, e-Paper banner.
+	IP=${ZERO_IP}
+	GW=${ZERO_GW}
+	DNS=${ZERO_DNS}
+	log() { echo "tiny-board: \$*"; }
+
+	echo tinyzero > /proc/sys/kernel/hostname
+
+	# --- USB gadget ethernet ---------------------------------------------
+	# dwc2 is built into the Pi kernel and put into peripheral mode by
+	# 'dtoverlay=dwc2'; g_ether then presents a CDC/RNDIS NIC to the host.
+	# Fixed locally-administered MACs keep the host-side interface name
+	# stable across boots. The cable belongs in the USB port, not PWR IN.
+	modprobe g_ether dev_addr=02:00:00:00:00:02 host_addr=02:00:00:00:00:01 2>/dev/null
+	i=0
+	while [ ! -e /sys/class/net/usb0 ] && [ \$i -lt 10 ]; do
+	    i=\$((i + 1)); sleep 1
+	done
+	if [ -e /sys/class/net/usb0 ]; then
+	    ip addr add "\$IP" dev usb0 2>/dev/null
+	    ip link set usb0 up
+	    ip route add default via "\$GW" 2>/dev/null
+	    echo "nameserver \$DNS" > /etc/resolv.conf
+	    log "usb0 \$IP via \$GW"
+	elif [ -e /sys/class/net/eth0 ]; then
+	    # qemu -M virt has no USB gadget, but it does have virtio-net on
+	    # slirp: these are qemu's own user-net defaults, so 'xstage tiny run'
+	    # can exercise sshd with no hardware attached
+	    ip addr add 10.0.2.15/24 dev eth0 2>/dev/null
+	    ip link set eth0 up
+	    ip route add default via 10.0.2.2 2>/dev/null
+	    echo "nameserver \$DNS" > /etc/resolv.conf
+	    IP=10.0.2.15/24
+	    log "no usb0; eth0 10.0.2.15 (qemu user-net)"
+	else
+	    log "no usb0 — check dtoverlay=dwc2 and use the USB (data) port"
+	fi
+
+	# --- sshd -------------------------------------------------------------
+	if [ -x /usr/sbin/sshd ]; then
+	    mkdir -p /run /var/empty /var/log
+	    # host keys are made on the board, so the image carries no secrets
+	    [ -f /etc/ssh/ssh_host_ed25519_key ] || ssh-keygen -A >/dev/null 2>&1
+	    if /usr/sbin/sshd; then
+	        log "sshd up: ssh root@\${IP%%/*}"
+	    else
+	        log "sshd failed to start"
+	    fi
+	fi
+
+	# --- e-Paper ----------------------------------------------------------
+	# SPI is a module in the Pi kernel and nothing here runs udev
+	if [ -x /usr/bin/eink213 ]; then
+	    modprobe spi-bcm2835 2>/dev/null
+	    modprobe spidev 2>/dev/null
+	    if [ -e /dev/spidev0.0 ]; then
+	        /usr/bin/eink213 "tinyroot / gentoo" "\$(uname -r)" \\
+	            "ssh root@\${IP%%/*}" \\
+	            "boot \$(cut -d' ' -f1 /proc/uptime)s" &
+	    fi
+	fi
+	EOF
+    chmod +x "${TINY_ROOT}/etc/tiny-board.sh"
+}
+
+tiny_make_image() {  # tiny_make_image <rpi400|zero2w>
     need_root
+    local board="$1" cfg
+    case "${board}" in
+        rpi400) cfg="${HERE}/rpi/config.txt" ;;
+        zero2w) cfg="${HERE}/rpi/config-zero2w.txt" ;;
+        *)      die "Unknown board: ${board}" ;;
+    esac
     [[ -x ${TINY_ROOT}/init ]] || die "No rootfs — run: sudo $0 tiny build"
     [[ -f ${TINY_ROOT}/boot/kernel8.img ]] || die "No Pi payload — run: sudo $0 tiny rpi"
     command -v parted >/dev/null || die "No parted — emerge -av sys-block/parted"
     command -v mkfs.vfat >/dev/null || die "No mkfs.vfat — emerge -av sys-fs/dosfstools"
     no_stale_tiny_loop
-    info "Creating ${TINY_IMG} (${IMG_MB} MiB: ${BOOT_MB} MiB FAT32 boot + ext4 rootfs)"
+    info "Creating ${TINY_IMG} for ${board} (${IMG_MB} MiB: ${BOOT_MB} MiB FAT32 boot + ext4 rootfs)"
     command rm -f "${TINY_IMG}"
     truncate -s "${IMG_MB}M" "${TINY_IMG}"
     # MBR (msdos), not GPT: the Pi GPU bootloader expects an MBR FAT32 part 1
@@ -562,10 +776,12 @@ cmd_tiny_image() {
     [[ -n ${ptuuid} ]] || die "No PTUUID on ${loop}"
     echo "${ptuuid}" > "${TINY_BLD}/ptuuid"
 
-    info "Boot partition: /boot payload + rendered cmdline.txt"
+    info "Boot partition: /boot payload + ${board} config.txt + rendered cmdline.txt"
     tiny_img_mount "${loop}p1"
     # plain cp -r: vfat has no owners/modes, cp -a would fail preserving them
     cp -r "${TINY_ROOT}/boot/." "${TINY_MNT}/"
+    # the board-specific config wins over whatever 'tiny rpi' left in the rootfs
+    command cp -f "${cfg}" "${TINY_MNT}/config.txt"
     sed "s/@PTUUID@/${ptuuid}/" "${HERE}/rpi/cmdline.txt.in" > "${TINY_MNT}/cmdline.txt"
     tiny_img_umount
 
@@ -576,30 +792,42 @@ cmd_tiny_image() {
 
     losetup -d "${loop}"
     trap - EXIT INT TERM
+    echo "${board}" > "${TINY_BOARD_F}"
     if [[ -n ${SUDO_UID:-} ]]; then
-        chown "${SUDO_UID}:${SUDO_GID}" "${TINY_IMG}" "${TINY_BLD}/ptuuid"
+        chown "${SUDO_UID}:${SUDO_GID}" "${TINY_IMG}" "${TINY_BLD}/ptuuid" "${TINY_BOARD_F}"
     fi
-    info "sd.img ready: $(du -h "${TINY_IMG}" | cut -f1) (PARTUUID ${ptuuid}-02)"
+    info "sd.img ready for ${board}: $(du -h "${TINY_IMG}" | cut -f1) (PARTUUID ${ptuuid}-02)"
 }
 
 cmd_tiny_run_rpi() {
     command -v qemu-system-aarch64 >/dev/null ||
         die "No qemu-system-aarch64 — emerge qemu with QEMU_SOFTMMU_TARGETS=aarch64"
     [[ -f ${TINY_IMG} ]] || die "No sd.img — run: sudo $0 tiny image"
-    local ptuuid
+    local ptuuid board machine dtb
     ptuuid=$(cat "${TINY_BLD}/ptuuid" 2>/dev/null) || die "No ${TINY_BLD}/ptuuid — rerun: sudo $0 tiny image"
+    board=$(cat "${TINY_BOARD_F}" 2>/dev/null || echo rpi400)
+    # qemu has no model for either of our boards, so use the closest SoC
+    # sibling: raspi4b (BCM2711) for the Pi 400, raspi3b (BCM2837) for the
+    # Zero 2 W, whose RP3A0 package holds exactly that die.
+    case "${board}" in
+        zero2w) machine=raspi3b; dtb=bcm2710-rpi-3-b.dtb ;;
+        *)      machine=raspi4b; dtb=bcm2711-rpi-4-b.dtb ;;
+    esac
     # qemu does not emulate the VideoCore firmware chain: kernel goes in via
-    # -kernel and the SD image only provides the root device. The machine is
-    # the 4B (qemu has no Pi 400 model — same BCM2711); its working serial
-    # console is ttyAMA1, not ttyAMA0/serial0 as on real hardware.
-    # KNOWN QEMU GAP (verified 2026-08-01, cf. qemu issue #2969): serial and
-    # USB input never reach the raspi4b guest — output-only. This subcommand
+    # -kernel and the SD image only provides the root device. The working
+    # serial console is ttyAMA1, not ttyAMA0/serial0 as on real hardware.
+    # KNOWN QEMU GAP (verified 2026-08-01 on both machines, cf. qemu issue
+    # #2969): serial and USB input never reach the guest, with -nographic or
+    # with -serial stdio alike — these models are output-only. This subcommand
     # is a BOOT GATE (kernel + PARTUUID root + init reach the bash banner);
     # for an interactive shell use 'tiny run' (-M virt) or the real Pi.
-    info "Booting sd.img (-M raspi4b; OUTPUT-ONLY — quit qemu: Ctrl-A X)"
-    exec qemu-system-aarch64 -M raspi4b \
+    # -snapshot: guest writes go to a temporary overlay, never to sd.img. The
+    # gate boots a rootfs that generates ssh host keys on first boot; without
+    # this, every card dd'ed from the image would ship the keys qemu made.
+    info "Booting sd.img for ${board} (-M ${machine}, -snapshot; OUTPUT-ONLY — quit qemu: Ctrl-A X)"
+    exec qemu-system-aarch64 -M "${machine}" -snapshot \
         -kernel "${TINY_ROOT}/boot/kernel8.img" \
-        -dtb "${TINY_ROOT}/boot/bcm2711-rpi-4-b.dtb" \
+        -dtb "${TINY_ROOT}/boot/${dtb}" \
         -drive "file=${TINY_IMG},format=raw,if=sd" \
         -append "console=ttyAMA1,115200 root=PARTUUID=${ptuuid}-02 rootwait rw init=/init" \
         -nographic
@@ -635,9 +863,17 @@ cmd_tiny_sd() {
     dd if="${TINY_IMG}" of="${dev}" bs=4M conv=fsync status=progress
     sync; partprobe "${dev}" 2>/dev/null || true
     lsblk -o NAME,SIZE,FSTYPE,LABEL "${dev}"
-    info "Done. Insert into the Pi 400 and power on: console on HDMI +"
-    info "built-in keyboard (and serial0 on GPIO 14/15). To use the whole"
-    info "card later: parted ${dev} resizepart 2 100% && resize2fs ${dev}p2/2."
+    local board; board=$(cat "${TINY_BOARD_F}" 2>/dev/null || echo rpi400)
+    if [[ ${board} == zero2w ]]; then
+        info "Done (${board}). Insert into the Pi Zero 2 W and power on: the"
+        info "e-Paper HAT shows the boot banner; for a shell attach a 3V3 USB"
+        info "serial adapter to GPIO 14/15 (115200 8N1) — HDMI works too."
+    else
+        info "Done (${board}). Insert into the Pi 400 and power on: console on"
+        info "HDMI + built-in keyboard (and serial0 on GPIO 14/15)."
+    fi
+    info "To use the whole card later: parted ${dev} resizepart 2 100% &&"
+    info "resize2fs on partition 2."
 }
 
 tiny_status() {
@@ -655,11 +891,15 @@ tiny_status() {
     fi
     if [[ -f ${TINY_BLD}/rootfs.squashfs ]]; then sq=$(du -h "${TINY_BLD}/rootfs.squashfs" | cut -f1); fi
     if [[ -f ${TINY_BLD}/initrd ]]; then ird=$(du -h "${TINY_BLD}/initrd" | cut -f1); fi
-    local sd="-" rpi=no
-    if [[ -f ${TINY_IMG} ]]; then sd=$(du -h "${TINY_IMG}" | cut -f1); fi
+    local sd="-" rpi=no board="-" eink=no
+    if [[ -f ${TINY_IMG} ]]; then
+        sd=$(du -h "${TINY_IMG}" | cut -f1)
+        board=$(cat "${TINY_BOARD_F}" 2>/dev/null || echo '?')
+    fi
     if [[ -f ${TINY_ROOT}/boot/kernel8.img ]]; then rpi=yes; fi
+    if [[ -x ${TINY_ROOT}/usr/bin/eink213 ]]; then eink=yes; fi
     echo "tiny   tc:${tc}  sysroot-binpkgs:${pkgs}  base:${base}  rootfs:${rootfs}  squashfs:${sq}  initrd:${ird}"
-    echo "       kernel:$([[ -f ${XLAB_KERNEL} ]] && echo ok || echo 'MISSING (./xlab gentoo kernel)')  rpi-payload:${rpi}  sd.img:${sd}"
+    echo "       kernel:$([[ -f ${XLAB_KERNEL} ]] && echo ok || echo 'MISSING (./xlab gentoo kernel)')  rpi-payload:${rpi}  eink213:${eink}  sd.img:${sd} (${board})"
 }
 
 cmd_tiny_clean() {
@@ -720,8 +960,9 @@ tiny)
         build)    cmd_tiny_build "$@" ;;
         pack)     cmd_tiny_pack "$@" ;;
         run)      cmd_tiny_run "$@" ;;
-        rpi)      cmd_tiny_rpi "$@" ;;
-        image)    cmd_tiny_image "$@" ;;
+        rpi)        cmd_tiny_rpi "$@" ;;
+        image)      cmd_tiny_image "$@" ;;
+        image_zero) cmd_tiny_image_zero "$@" ;;
         run-rpi)  cmd_tiny_run_rpi "$@" ;;
         sd)       cmd_tiny_sd "$@" ;;
         clean)    cmd_tiny_clean "$@" ;;
