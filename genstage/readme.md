@@ -117,9 +117,10 @@ References:
 
 ```
 sudo ./xstage tiny rpi             # kernel8.img + firmware + DTBs into rootfs/boot
-sudo ./xstage tiny image           # sd.img: MBR, FAT32 boot + ext4 rootfs
+sudo ./xstage tiny image           # sd.img: MBR, FAT32 boot + ext4 rootfs + sshd
 ./xstage tiny run-rpi              # qemu -M raspi4b boot gate (output-only)
 sudo ./xstage tiny sd /dev/sdX     # dd to a real card, then boot the Pi 400
+ssh root@192.168.0.200             # over the wired LAN — works with a dark HDMI
 ```
 
 - **Boot chain (BCM2711)**: the EEPROM bootloader (no `bootcode.bin` on the card)
@@ -143,6 +144,20 @@ sudo ./xstage tiny sd /dev/sdX     # dd to a real card, then boot the Pi 400
   on the Pi without editing anything. Image size stays a power of 2 (default
   2048 MiB) because qemu's SD emulation rejects other sizes; on a bigger card,
   grow partition 2 afterwards (`parted resizepart 2 100%` + `resize2fs`).
+- **Headless debug console**: `tiny image` reuses the Zero 2 W ssh machinery —
+  it cross-emerges `sys-apps/kmod`, `sys-apps/iproute2` and `net-misc/openssh`
+  into the rootfs and writes a Pi 400 `/etc/tiny-board.sh`: eth0 gets a fixed
+  LAN address (`XSTAGE_PI400_IP`, default `192.168.0.200/24`, gateway
+  `XSTAGE_PI400_GW` = `192.168.0.1`) and sshd starts with root login (password
+  `XSTAGE_ZERO_PASS`, default `tiny`, plus the invoker's `id_ed25519.pub`; host
+  keys are generated on the board at first boot). The board is reachable over
+  the cable even when HDMI shows nothing — first stop for display debugging:
+  `ssh root@192.168.0.200 'dmesg | grep -iE "hdmi|vc4|drm|fb"'`. bcmgenet is
+  built into the Pi kernel, so no module dance is needed; under `tiny run`
+  (`-M virt`) the same hook detects the virtio NIC and falls back to qemu's
+  user-net defaults, so sshd is testable with `ssh -p 2223 root@127.0.0.1`.
+  `rpi/config.txt` also sets `hdmi_force_hotplug=1` so the firmware emits HDMI
+  even when display detection fails at power-on.
 - **qemu raspi4b caveats** (verified here): qemu doesn't emulate the VideoCore
   firmware, so the kernel is always passed with `-kernel` and the SD image only
   provides the root device; the PL011 console enumerates as **ttyAMA1** (DTB

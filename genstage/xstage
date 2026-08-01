@@ -54,7 +54,10 @@
 #                    image step picks the right config.txt              [root]
 #   image            build sd.img for the Pi 400: MBR, FAT32 boot + ext4
 #                    rootfs, PARTUUID cmdline — the same image boots qemu
-#                    and the card                                        [root]
+#                    and the card. Adds iproute2 + sshd to the rootfs;
+#                    /etc/tiny-board.sh gives eth0 a fixed LAN address
+#                    (default 192.168.0.200) and starts sshd, so the board
+#                    is reachable even with a dark HDMI                  [root]
 #   image_zero       the same for a Pi Zero 2 W + Waveshare 2.13" V4 e-Paper
 #                    HAT: SPI + USB-gadget (dwc2) in config.txt; kmod, the
 #                    eink213 panel driver, iproute2 and sshd added to the
@@ -79,10 +82,13 @@
 #   XSTAGE_TINY_BASE  rootfs userland         (default gentoo; or busybox)
 #   XSTAGE_TINY_PKGS  extra tiny packages     (default empty)
 #   XSTAGE_TINY_IMG_MB sd.img size in MiB     (default 2048; keep a power of 2)
+#   XSTAGE_PI400_IP   Pi 400 eth0 address     (default 192.168.0.200/24)
+#   XSTAGE_PI400_GW   Pi 400 default gateway  (default 192.168.0.1)
+#   XSTAGE_PI400_DNS  Pi 400 nameserver       (default: the gateway)
 #   XSTAGE_ZERO_IP    Zero 2 W usb0 address   (default 10.0.0.2/24)
 #   XSTAGE_ZERO_GW    the machine at the other end of the cable (10.0.0.1)
 #   XSTAGE_ZERO_DNS   resolv.conf nameserver  (default 8.8.8.8)
-#   XSTAGE_ZERO_PASS  root password in the image             (default tiny)
+#   XSTAGE_ZERO_PASS  root password, both ssh images         (default tiny)
 #   XSTAGE_ZERO_KEY   pubkey for root        (default ~SUDO_USER/.ssh/id_ed25519.pub)
 #   XSTAGE_SSH_PORT   host port 'tiny run' forwards to :22   (default 2223)
 #
@@ -149,6 +155,11 @@ ZERO_GW="${XSTAGE_ZERO_GW:-10.0.0.1}"
 ZERO_DNS="${XSTAGE_ZERO_DNS:-8.8.8.8}"
 ZERO_PASS="${XSTAGE_ZERO_PASS:-tiny}"
 ZERO_KEY="${XSTAGE_ZERO_KEY:-}"             # pubkey file; default: invoker's ed25519
+# Pi 400 wired LAN: fixed address so the board is reachable over ssh even
+# when HDMI shows nothing — the headless debug console
+PI400_IP="${XSTAGE_PI400_IP:-192.168.0.200/24}"
+PI400_GW="${XSTAGE_PI400_GW:-192.168.0.1}"
+PI400_DNS="${XSTAGE_PI400_DNS:-${PI400_GW}}"
 # 2223, not 2222: xlab's gentoo VM already forwards that one
 SSH_PORT="${XSTAGE_SSH_PORT:-2223}"         # host port 'tiny run' forwards to :22
 TINY_PKGS="${XSTAGE_TINY_PKGS:-}"
@@ -477,8 +488,8 @@ write_tiny_init() {
 	mkdir -p /dev/pts
 	mount -t devpts devpts /dev/pts 2>/dev/null || true
 
-	# board hook: 'xstage tiny image_zero' writes the Zero 2 W setup here
-	# (USB-gadget ethernet, sshd, e-Paper banner)
+	# board hook: 'xstage tiny image' / 'image_zero' write the board setup
+	# here (ethernet or USB gadget, sshd, e-Paper banner)
 	[ -x /etc/tiny-board.sh ] && /etc/tiny-board.sh
 
 	echo
@@ -585,29 +596,25 @@ tiny_img_umount() {
     if mountpoint -q "${TINY_MNT}"; then umount "${TINY_MNT}" || warn "bind umount ${TINY_MNT} failed"; fi
 }
 
-cmd_tiny_image()      { tiny_make_image rpi400; }
+cmd_tiny_image()      { tiny_rpi400_payload; tiny_make_image rpi400; }
 cmd_tiny_image_zero() { tiny_zero_payload; tiny_make_image zero2w; }
 
-# --- Pi Zero 2 W + Waveshare 2.13" V4 e-Paper -----------------------------
-# Same partition layout as the Pi 400 image; what differs is config.txt (this
-# SoC boots bootcode.bin + start.elf, and the HAT needs SPI) and the rootfs
-# extras: modprobe, plus the panel driver that /init calls at boot.
+# --- shared rootfs extras: modprobe, network, sshd -------------------------
+# Both board images get the same test workflow: boot headless, ssh to the
+# board. What differs is only /etc/tiny-board.sh (which interface, which
+# address) — written by the per-board payload function below.
 
-tiny_zero_payload() {
-    need_root; need_cross
-    [[ -x ${TINY_ROOT}/init ]] || die "No rootfs — run: sudo $0 tiny build"
-
+tiny_net_install() {
     if [[ -x ${TINY_ROOT}/bin/modprobe || -x ${TINY_ROOT}/usr/bin/modprobe ||
           -x ${TINY_ROOT}/sbin/modprobe ]]; then
         info "modprobe already in the rootfs"
     else
-        info "kmod (modprobe for the kernel's xz-compressed SPI modules)"
+        info "kmod (modprobe for the kernel's xz-compressed modules)"
         INSTALL_MASK="/usr/share/man /usr/share/doc /usr/share/info /usr/share/locale" \
         "${CROSS_EMERGE}" --root="${TINY_ROOT}" --root-deps=rdeps \
             --usepkg --buildpkg --oneshot -q sys-apps/kmod
     fi
 
-    # the test workflow is 'plug in the USB cable and ssh to the board'
     local netpkgs=()
     [[ -x ${TINY_ROOT}/bin/ip || -x ${TINY_ROOT}/sbin/ip ]] || netpkgs+=(sys-apps/iproute2)
     [[ -x ${TINY_ROOT}/usr/sbin/sshd ]] || netpkgs+=(net-misc/openssh)
@@ -620,6 +627,82 @@ tiny_zero_payload() {
         info "iproute2 + openssh already in the rootfs"
     fi
     [[ -x ${TINY_ROOT}/usr/sbin/sshd ]] || die "sshd missing after emerge"
+}
+
+# --- Pi 400: wired ethernet + sshd -----------------------------------------
+
+tiny_rpi400_payload() {
+    need_root; need_cross
+    [[ -x ${TINY_ROOT}/init ]] || die "No rootfs — run: sudo $0 tiny build"
+    tiny_net_install
+    tiny_ssh_config
+    tiny_rpi400_board_hook
+    write_tiny_init          # /init runs the hook the call above just wrote
+}
+
+tiny_rpi400_board_hook() {
+    cat > "${TINY_ROOT}/etc/tiny-board.sh" <<-EOF
+	#!/bin/sh
+	# Pi 400 board hook — generated by 'xstage tiny image'.
+	# Runs from /init: wired ethernet with a fixed address, sshd — a debug
+	# console that works even when HDMI shows nothing.
+	IP=${PI400_IP}
+	GW=${PI400_GW}
+	DNS=${PI400_DNS}
+	log() { echo "tiny-board: \$*"; }
+
+	echo tinyroot > /proc/sys/kernel/hostname
+
+	# --- wired ethernet ---------------------------------------------------
+	# bcmgenet is the BCM2711 NIC; modprobe is a no-op if it's built in
+	modprobe bcmgenet 2>/dev/null
+	i=0
+	while [ ! -e /sys/class/net/eth0 ] && [ \$i -lt 10 ]; do
+	    i=\$((i + 1)); sleep 1
+	done
+	if [ -e /sys/class/net/eth0 ]; then
+	    case "\$(readlink /sys/class/net/eth0/device/driver 2>/dev/null)" in
+	    *virtio*)
+	        # the 'tiny run' (-M virt) gate: virtio-net on slirp — use qemu's
+	        # user-net defaults, the LAN address would go nowhere there
+	        IP=10.0.2.15/24
+	        GW=10.0.2.2
+	        log "virtio NIC — qemu user-net defaults" ;;
+	    esac
+	    ip addr add "\$IP" dev eth0 2>/dev/null
+	    ip link set eth0 up
+	    ip route add default via "\$GW" 2>/dev/null
+	    echo "nameserver \$DNS" > /etc/resolv.conf
+	    log "eth0 \$IP via \$GW"
+	else
+	    log "no eth0 — did bcmgenet load? (lsmod, dmesg | grep genet)"
+	fi
+
+	# --- sshd -------------------------------------------------------------
+	if [ -x /usr/sbin/sshd ]; then
+	    mkdir -p /run /var/empty /var/log
+	    # host keys are made on the board, so the image carries no secrets
+	    [ -f /etc/ssh/ssh_host_ed25519_key ] || ssh-keygen -A >/dev/null 2>&1
+	    if /usr/sbin/sshd; then
+	        log "sshd up: ssh root@\${IP%%/*}"
+	    else
+	        log "sshd failed to start"
+	    fi
+	fi
+	EOF
+    chmod +x "${TINY_ROOT}/etc/tiny-board.sh"
+}
+
+# --- Pi Zero 2 W + Waveshare 2.13" V4 e-Paper -----------------------------
+# Same partition layout as the Pi 400 image; what differs is config.txt (this
+# SoC boots bootcode.bin + start.elf, and the HAT needs SPI) and the rootfs
+# extras: modprobe, plus the panel driver that /init calls at boot.
+
+tiny_zero_payload() {
+    need_root; need_cross
+    [[ -x ${TINY_ROOT}/init ]] || die "No rootfs — run: sudo $0 tiny build"
+
+    tiny_net_install
 
     # the font header is generated from the kernel tree in ../src, not committed
     [[ -f ${HERE}/rpi/font8x16.h ]] || "${HERE}/rpi/mkfont.sh"
@@ -629,18 +712,18 @@ tiny_zero_payload() {
         die "eink213 build failed"
     info "e-Paper support ready: /usr/bin/eink213 ($(du -h "${TINY_ROOT}/usr/bin/eink213" | cut -f1))"
 
-    tiny_zero_ssh_config
+    tiny_ssh_config
     tiny_zero_board_hook
     write_tiny_init          # /init runs the hook the two calls above just wrote
 }
 
-tiny_zero_ssh_config() {
+tiny_ssh_config() {
     mkdir -p "${TINY_ROOT}"/{etc/ssh,root/.ssh,var/empty,run}
     chmod 700 "${TINY_ROOT}/root/.ssh"
-    # a lab box on a point-to-point USB link: root logs in directly, there is
-    # no other account and no PAM — sshd reads /etc/shadow itself
+    # a lab box on a private link: root logs in directly, there is no other
+    # account and no PAM — sshd reads /etc/shadow itself
     cat > "${TINY_ROOT}/etc/ssh/sshd_config" <<-EOF
-	# generated by 'xstage tiny image_zero'
+	# generated by xstage (tiny image / image_zero)
 	PermitRootLogin yes
 	PasswordAuthentication yes
 	PermitEmptyPasswords no

@@ -14,3 +14,7 @@ enable_uart=1
 
 # don't wait for a rainbow splash; tiny boots have no display manager anyway
 disable_splash=1
+
+# emit HDMI even when the firmware fails to detect the display at power-on
+# (monitor plugged in late, KVM, quirky EDID) — part of dark-HDMI debugging
+hdmi_force_hotplug=1
