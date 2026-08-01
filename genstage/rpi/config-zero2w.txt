@@ -1,0 +1,26 @@
+# config.txt — Raspberry Pi Zero 2 W (BCM2710A1 / RP3A0, Cortex-A53, 512 MB)
+# Installed on the FAT32 boot partition by: xstage tiny image_zero
+#
+# Boot chain on this SoC (unlike the Pi 4/400, which boots from EEPROM):
+#   boot ROM -> bootcode.bin -> start.elf + fixup.dat -> config.txt
+#   -> kernel8.img + bcm2710-rpi-zero-2-w.dtb (auto-selected) + cmdline.txt
+# All of those files come from sys-kernel/raspberrypi-image (xstage tiny rpi).
+
+arm_64bit=1             # the Zero 2 W is ARMv8 — run the 64-bit kernel8.img
+kernel=kernel8.img
+disable_splash=1
+gpu_mem=16              # headless board: leave the 512 MB to the CPU
+
+enable_uart=1           # serial console on GPIO 14/15 (3V3 TTL, 115200 8N1)
+dtoverlay=disable-bt    # hand the PL011 back to the header: serial0 becomes
+                        # ttyAMA0 with a fixed clock. Without this, serial0 is
+                        # the mini-UART, whose baud follows the core clock.
+
+dtparam=spi=on          # SPI0 (CE0) for the Waveshare 2.13" V4 e-Paper HAT;
+                        # creates /dev/spidev0.0, which bin/eink213 talks to.
+
+dtoverlay=dwc2          # USB controller in peripheral/OTG mode, so /init can
+                        # load g_ether and the board appears to the machine at
+                        # the other end of the cable as a USB network adapter.
+                        # Plug into the USB port (the inner one), not PWR IN.
+

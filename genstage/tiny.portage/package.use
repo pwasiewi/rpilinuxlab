@@ -6,3 +6,10 @@ sys-apps/busybox static make-symlinks -pam -syslog -savedconfig
 # busybox[static] links libcrypt statically — the sysroot copies need .a files
 sys-libs/libxcrypt static-libs
 virtual/libcrypt static-libs
+# 'tiny image_zero' needs modprobe in the rootfs: the Pi kernel ships SPI as
+# xz-compressed modules and nothing in the tiny rootfs runs udev
+sys-apps/kmod tools lzma zstd
+# sshd over the USB-gadget link. No PAM: there is no login stack in this
+# rootfs, so sshd authenticates against /etc/shadow directly. libedit/ldns/
+# security-key/kerberos would only drag in libraries the target never uses.
+net-misc/openssh -pam -kerberos -security-key -ldns -libedit -audit -debug
