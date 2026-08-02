@@ -48,6 +48,15 @@ generated files — only the env/conf variable matters there.
 | zero2w | Pi Zero 2 W + e-Paper | cortex-a53 | tiny rootfs (cross-emerge) | usb0 10.0.0.2 |
 | amd64  | native host | — | catalyst native | — |
 
+## Per-profile build trees
+
+Every board profile owns its rootfs/image tree under `../build/` via
+`PROF_BUILD_SUBDIR` (rpi400 → `arm64sd-rpi400`, rpi3 → `arm64sd-rpi3`;
+zero2w stays on the tiny track's `tinyroot`), so profiles never clobber each
+other's rootfs or `sd.img`. Bare `xstage arm64` (no profile) uses plain
+`arm64sd` as a scratch tree. `xstage clean all` removes `arm64sd*` — all
+variants at once; `xp <profile> xstage arm64 clean` removes just one.
+
 ## Variant profiles
 
 Copy a conf under a new name and change what differs:

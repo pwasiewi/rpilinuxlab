@@ -1466,8 +1466,11 @@ cmd_status_all() {
 }
 
 cmd_clean_all() {
-    confirm "Clean ALL tracks (catalyst tmp + ${TINY_BLD} + $(dirname "${TINY_BLD}")/arm64sd)?"
-    command rm -rf "${STOREDIR}/tmp" "${TINY_BLD}" "$(dirname "${TINY_BLD}")/arm64sd"
+    # arm64sd* covers the default tree plus every per-profile variant
+    # (PROF_BUILD_SUBDIR=arm64sd-<name>)
+    local blddir; blddir="$(dirname "${TINY_BLD}")"
+    confirm "Clean ALL tracks (catalyst tmp + ${TINY_BLD} + ${blddir}/arm64sd*)?"
+    command rm -rf "${STOREDIR}/tmp" "${TINY_BLD}" "${blddir}"/arm64sd*
     info "Cleaned all."
 }
 
