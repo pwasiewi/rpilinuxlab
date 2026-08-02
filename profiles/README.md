@@ -90,5 +90,11 @@ Required for `PROF_KIND=board`: `PROF_TUPLE`, `PROF_PORTAGE_PROFILE`,
 `PROF_CPU`, `PROF_BOARD` (rpi400|rpi3|zero2w), `PROF_QEMU_MACHINE`,
 `PROF_DTB`, `PROF_IP`, `PROF_GW`, `PROF_DNS`, `PROF_IMAGE_CMD`.
 Optional: `PROF_BUILD_SUBDIR`, `PROF_PKGS`.
+Derived: the image root password AND the rootfs partition label both default
+to `<profile>root` (rpi400 → `rpi400root`); override with
+`XSTAGE_ROOT_PASS=…` / `XSTAGE_ROOT_LABEL=…` at `image` time. Bare `xstage`
+(no profile) keeps the old defaults `tiny` / `tinyroot`. The label goes into
+`mkfs.ext4 -L` and the image's fstab together, so it changes only on the next
+`image` run (ext4 labels max 16 chars ⇒ profile names ≤ 12).
 Shared globals (override in env if needed): `LAB_MIRROR`, `LAB_FLAVOR`,
 `LAB_JOBS`, `LAB_DISTCC_PORT`, `LAB_BINHOST_PORT`, `LAB_SSH_FWD_XSTAGE`.
