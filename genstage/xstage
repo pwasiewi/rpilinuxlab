@@ -1227,8 +1227,12 @@ cmd_tiny_sd() {
         info "Done (${board}). Insert into the Pi 400 and power on: console on"
         info "HDMI + built-in keyboard (and serial0 on GPIO 14/15)."
     fi
-    info "To use the whole card later: parted ${dev} resizepart 2 100% &&"
-    info "resize2fs on partition 2."
+    # mmcblk0 -> mmcblk0p2, sdf -> sdf2
+    local part2="${dev}2"; [[ ${dev} == *[0-9] ]] && part2="${dev}p2"
+    info "To use the whole card, grow partition + filesystem:"
+    info "  sudo parted ${dev} resizepart 2 100%"
+    info "  sudo e2fsck -f ${part2}   # resize2fs refuses without a fresh check"
+    info "  sudo resize2fs ${part2}"
 }
 
 tiny_status() {
