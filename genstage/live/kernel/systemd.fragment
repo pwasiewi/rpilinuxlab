@@ -1,0 +1,72 @@
+# Kconfig fragment: kernel symbols systemd needs as PID 1.
+# Merged by 'xstage amd64 kernel' only when the profile's stage3 flavour ends
+# in '-systemd' (see XSTAGE_LIVE_RC). Source: systemd's own README, section
+# "REQUIREMENTS" — the mandatory list plus the recommendations that matter for
+# a live image. Nothing here is OpenRC-hostile, but there is no reason to carry
+# it on an OpenRC image either, hence the separate file.
+#
+# x86_64 defconfig already sets most of these; they are named anyway because
+# 'defconfig' is not the only base (XSTAGE_LIVE_KCONFIG_BASE=host|<path>) and a
+# hand-tuned .config is exactly where they go missing.
+
+# --- mandatory ---------------------------------------------------------------
+CONFIG_DEVTMPFS=y
+CONFIG_CGROUPS=y
+CONFIG_INOTIFY_USER=y
+CONFIG_SIGNALFD=y
+CONFIG_TIMERFD=y
+CONFIG_EPOLL=y
+CONFIG_UNIX=y
+CONFIG_SYSFS=y
+CONFIG_PROC_FS=y
+# open_by_handle_at(): systemd refuses to boot without it
+CONFIG_FHANDLE=y
+CONFIG_CRYPTO_USER_API_HASH=y
+CONFIG_CRYPTO_HMAC=y
+CONFIG_CRYPTO_SHA256=y
+CONFIG_TMPFS_XATTR=y
+CONFIG_SECCOMP=y
+CONFIG_SECCOMP_FILTER=y
+CONFIG_NET=y
+CONFIG_NET_NS=y
+
+# --- namespaces: PrivateTmp=, ProtectSystem= and friends are unit defaults ---
+CONFIG_NAMESPACES=y
+CONFIG_UTS_NS=y
+CONFIG_IPC_NS=y
+CONFIG_PID_NS=y
+CONFIG_USER_NS=y
+
+# --- strongly recommended ----------------------------------------------------
+# .automount units and systemd's own /proc/sys/fs/binfmt_misc handling
+CONFIG_AUTOFS_FS=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_IPV6=y
+CONFIG_CGROUP_BPF=y
+# DMI-based ConditionVirtualization=/hostnamectl chassis detection (x86)
+CONFIG_DMIID=y
+# kcmp() — systemd uses it for fd deduplication; also what sys-process/criu
+# needs. It hangs off CHECKPOINT_RESTORE, which is only offered under EXPERT,
+# so all three have to be named or olddefconfig quietly drops KCMP.
+CONFIG_EXPERT=y
+CONFIG_CHECKPOINT_RESTORE=y
+CONFIG_KCMP=y
+# systemd-boot / bootctl and 'systemctl reboot --firmware-setup'
+CONFIG_EFI=y
+CONFIG_EFI_STUB=y
+CONFIG_EFIVAR_FS=y
+# journald's /dev/kmsg reader and 'systemd.log_target=kmsg'
+CONFIG_PRINTK=y
+CONFIG_DEVMEM=y
+# hostnamectl/localectl talk to the kernel keyring for machine-id sealing
+CONFIG_KEYS=y
+
+# --- must stay OFF -----------------------------------------------------------
+# systemd cannot place its unit cgroups when the RT group scheduler is on:
+# every non-RT cgroup gets rt_runtime 0 and RT services fail to start.
+# CONFIG_RT_GROUP_SCHED is not set
+# the sysfs layout systemd assumes is the modern one
+# CONFIG_SYSFS_DEPRECATED is not set
+# CONFIG_SYSFS_DEPRECATED_V2 is not set
+# udev refuses the in-kernel firmware fallback path
+# CONFIG_FW_LOADER_USER_HELPER is not set

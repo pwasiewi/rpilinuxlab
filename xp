@@ -26,11 +26,21 @@
 #   log [emerge]    follow the running catalyst build: newest package
 #                   log, or the run chroot's emerge.log                [root]
 #   qlop [ARGS]     merge times from the run chroot's emerge.log       [root]
-#   build           make the rootfs: 'arm64 unpack' (stage3 method) or
-#                   'tiny build' (rootfs method)                       [root]
+#   build           make the rootfs: 'arm64 unpack' (stage3 method),
+#                   'tiny build' (rootfs method) or, on a native profile,
+#                   unpack a stage3 into the live tree                  [root]
+#   pkgs            install the profile's package list: cross-emerge into a
+#                   board rootfs, or emerge inside the live chroot      [root]
 #   rpi             Pi boot payload into the rootfs                    [root]
-#   image           build sd.img for the profile's board               [root]
-#   gate            boot sd.img in qemu (output-only boot gate)
+#   image           board: build sd.img — native: master livecd.iso     [root]
+#   gate            boot the result in qemu (board: output-only; native:
+#                   interactive, KVM when available)
+#
+# Live-image verbs (native profiles only — squashfs + isolinux, the layout
+# bin/v builds; run them in this order, or just 'live'):
+#   unpack conf pkgs configure livekernel squash isolinux iso   [root]
+#   live            the whole chain in one go                          [root]
+#   usb DEV         dd livecd.iso onto a removable device      [root,confirm]
 #   run             xlab run for the profile's xlab target
 #   kernel          xlab kernel build
 #   sd DEV          dd sd.img onto a real card                 [root,confirm]
@@ -87,7 +97,7 @@ case "$1" in
 esac
 
 # a profile file named like a verb would shadow it — refuse such confs
-RESERVED=" status setup enter emerge 1by1 pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel sd binhost distcc xarm xstage xlab profiles help "
+RESERVED=" status setup enter emerge 1by1 pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel sd binhost distcc unpack conf configure squash isolinux iso live usb xarm xstage xlab profiles help "
 
 PROF=""
 if [[ -f ${PROFDIR}/$1.conf ]]; then
@@ -113,6 +123,7 @@ T="${PROF_XSTAGE_TARGET}"
 L="${PROF_XLAB_TARGET}"
 is_board() { [[ ${PROF_KIND} == board ]]; }
 need_board() { is_board || die "'${VERB}' needs a board profile — ${PROF} is native (${PROF_KIND})"; }
+need_native() { is_board && die "'${VERB}' is a live-image verb — ${PROF} is a board profile"; return 0; }
 no_args() { [[ $# -eq 0 ]] || die "xp ${PROF} ${VERB}: unexpected arguments: $*"; }
 
 # the profile's own rootfs/build tree (variant-aware)
@@ -129,6 +140,7 @@ status)
     no_args "$@"
     if is_board; then "$(xarm_bin)" status || warn "xarm status failed"; fi
     "${XSTAGE}" "${T}" status || warn "xstage status failed"
+    is_board || "${XSTAGE}" "${T}" live-status || warn "xstage live-status failed"
     "${XLAB}" "${L}" status || warn "xlab status failed"
     ;;
 setup)
@@ -154,7 +166,10 @@ emerge|1by1)
     exec "$(xarm_bin)" "${VERB}" "$@"
     ;;
 pkgs)
-    need_board; no_args "$@"
+    no_args "$@"
+    # native profiles emerge inside the live chroot (xstage owns that);
+    # boards cross-emerge into the rootfs with the crossdev toolchain
+    if ! is_board; then exec "${XSTAGE}" "${T}" pkgs; fi
     [[ -n ${PROF_PKGS:-} ]] || die "Profile ${PROF} sets no PROF_PKGS"
     root="$(prof_build_dir)/rootfs"
     [[ -d ${root} ]] || die "No ${root} — run: sudo xp ${PROF} build"
@@ -164,6 +179,8 @@ pkgs)
         --usepkg --buildpkg --oneshot -q ${PROF_PKGS}
     ;;
 seed|snapshot|spec|stage1|stage2|stage3|all|verify|log|qlop|qlog)
+    # 'seed' on a native profile fetches the flavour the profile asks for
+    # (hardened-openrc for the hardened image, plain openrc otherwise)
     [[ ${VERB} == qlog ]] && VERB=qlop   # common slip of the finger
     exec "${XSTAGE}" "${T}" "${VERB}" "$@"
     ;;
@@ -172,7 +189,10 @@ crossstage)
     exec "${XSTAGE}" "${T}" crossstage "$@"
     ;;
 build)
-    need_board; no_args "$@"
+    no_args "$@"
+    # 'build' means "make the rootfs" on both sides of the lab: unpack a stage3
+    # for the live image, unpack/cross-emerge one for a board
+    if ! is_board; then exec "${XSTAGE}" "${T}" unpack; fi
     if [[ ${T} == tiny ]]; then exec "${XSTAGE}" tiny build; fi
     exec "${XSTAGE}" "${T}" unpack
     ;;
@@ -181,12 +201,30 @@ rpi)
     exec "${XSTAGE}" "${T}" rpi
     ;;
 image)
-    need_board; no_args "$@"
+    no_args "$@"
+    # boards produce sd.img; native profiles produce livecd.iso
+    if ! is_board; then exec "${XSTAGE}" "${T}" iso; fi
     exec "${XSTAGE}" "${T}" "${PROF_IMAGE_CMD}"
     ;;
 gate)
-    need_board; no_args "$@"
+    no_args "$@"
+    if ! is_board; then exec "${XSTAGE}" "${T}" gate; fi
     exec "${XSTAGE}" "${T}" run-rpi
+    ;;
+# --- live-image verbs (native profiles): the squashfs + isolinux pipeline ---
+unpack|conf|configure|squash|isolinux|iso|live)
+    need_native; no_args "$@"
+    exec "${XSTAGE}" "${T}" "${VERB}"
+    ;;
+livekernel)
+    # spelled out, because plain 'kernel' belongs to the xlab QEMU lab
+    need_native; no_args "$@"
+    exec "${XSTAGE}" "${T}" kernel
+    ;;
+usb)
+    need_native
+    [[ $# -eq 1 ]] || die "Usage: sudo xp ${PROF} usb /dev/sdX"
+    exec "${XSTAGE}" "${T}" usb "$1"
     ;;
 run|kernel)
     exec "${XLAB}" "${L}" "${VERB}" "$@"

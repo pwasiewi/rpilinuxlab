@@ -51,9 +51,12 @@ generated files — only the env/conf variable matters there.
 ## Per-profile build trees
 
 Every board profile owns its rootfs/image tree under `../build/` via
-`PROF_BUILD_SUBDIR` (rpi400 → `arm64sd-rpi400`, rpi3 → `arm64sd-rpi3`;
-zero2w stays on the tiny track's `tinyroot`), so profiles never clobber each
-other's rootfs or `sd.img`. Bare `xstage arm64` (no profile) uses plain
+`PROF_BUILD_SUBDIR` (rpi400 → `arm64sd-rpi400-systemd`, rpi400openrc →
+`arm64sd-rpi400`, rpi3 → `arm64sd-rpi3`; zero2w stays on the tiny track's
+`tinyroot`), so profiles never clobber each other's rootfs or `sd.img`. Two
+profiles for one board is exactly what that buys: rpi400 and rpi400openrc
+describe the same hardware with different init systems, and each keeps its own
+card image. Bare `xstage arm64` (no profile) uses plain
 `arm64sd` as a scratch tree. `xstage clean all` removes `arm64sd*` — all
 variants at once; `xp <profile> xstage arm64 clean` removes just one.
 

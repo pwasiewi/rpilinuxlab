@@ -10,6 +10,13 @@ qemu. Downloads are cached in shared `dl/` (legacy `make.*/dl` tarballs are
 reused via symlinks), sources unpack once into shared `src/`, and each
 target builds in `build/<target>/`.
 
+> **Storage note (2026-08-03):** `build/` and `dl/` are symlinks to
+> `/mnt/db5/rpilinuxlab/{build,dl}` — ~15 GB of regenerable/re-downloadable
+> artifacts live on the data HDD (next to genstage/android/openwrt), keeping
+> them out of the home-SSD backups. All scripts resolve paths through the
+> symlinks; builds are CPU-bound (qemu emulation), so the HDD costs nothing
+> measurable.
+
 ```
 ./xlab targets                # aarch64 (RPi3) | armhfp (RPi2) | arm | x86_64 | gentoo
                               #   (xp profiles: rpi3/zero2w -> aarch64,

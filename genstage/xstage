@@ -46,6 +46,27 @@
 #   clean            rm catalyst tmp/ ('clean all': + built stages,
 #                    snapshots and state; seeds and git repos kept)  [confirm]
 #
+# Subcommands (amd64 live half — stage3 -> livecd.squashfs + isolinux ISO,
+# the layout bin/v builds from /etc/liveusb; driven by an xp native profile):
+#   unpack           unpack the newest built stage3 (or the seed) into
+#                    build/<profile>/rootfs                                [root]
+#   conf             make.conf, repos.conf, ::gentoo + overlays seeded from
+#                    the host tree, portage profile, config fragments       [root]
+#   pkgs             emerge PROF_LIVE_PKGS / _TIERS / _SETS in the chroot   [root]
+#   configure        hostname, root password, sshd, default runlevel, motd  [root]
+#   kernel           genkernel with CDROOT=1 inside the chroot; the .config is
+#                    built by merging live/kernel/*.fragment onto a base
+#                    (XSTAGE_LIVE_KCONFIG_BASE: defconfig | host | PATH)   [root]
+#   squash           mksquashfs -> iso/livecd.squashfs + the /livecd marker [root]
+#   isolinux         populate iso/isolinux/ (syslinux + rendered cfg)       [root]
+#   iso              xorriso -> livecd.iso (isohybrid: CD and USB alike)    [root]
+#   live             unpack + conf + pkgs + configure + kernel + squash +
+#                    isolinux + iso, in that order                          [root]
+#   gate             boot the ISO in qemu (interactive, KVM when available)
+#   usb DEV          dd the ISO onto a removable device            [root,confirm]
+#   live-status      rootfs / kernel / squashfs / iso state
+#   live-clean       rm the profile's live build tree                    [confirm]
+#
 # Subcommands (tiny):
 #   status           toolchain / rootfs / squashfs / initrd state
 #   build            REGENERATE from scratch: rm rootfs, cross-emerge
@@ -88,11 +109,13 @@
 #                    override: XSTAGE_ARM64_TARBALL=/path       [root,confirm]
 #   rpi              same Pi boot payload step as 'tiny rpi'             [root]
 #   image            configure the stage3 (root password + invoker's key,
-#                    PermitRootLogin, netifrc eth0 = the board's IP, sshd
-#                    in the default runlevel, fstab by label) and build
-#                    sd.img for XSTAGE_BOARD (rpi400/rpi3) — real OpenRC
-#                    boot, init=/sbin/init                               [root]
-#   run-rpi          qemu -M raspi4b boot gate (output-only), OpenRC boot
+#                    PermitRootLogin, eth0 = the board's IP, sshd enabled,
+#                    fstab by label) and build sd.img for XSTAGE_BOARD
+#                    (rpi400/rpi3). The init system follows the stage3
+#                    flavour: OpenRC gets netifrc + a runlevel symlink and
+#                    init=/sbin/init, systemd gets a .network file, unit
+#                    .wants symlinks and init=/usr/lib/systemd/systemd  [root]
+#   run-rpi          qemu -M raspi4b boot gate (output-only)
 #   sd DEV           dd sd.img onto a real SD card               [root,confirm]
 #   clean            rm ../build/arm64sd                              [confirm]
 #   setup            catalyst dirs + catalyst-arm64.conf (distcc option) +
@@ -201,7 +224,12 @@ MIRROR="${XSTAGE_MIRROR:-https://distfiles.gentoo.org}"
 FLAVOR="${XSTAGE_FLAVOR:-openrc}"
 REL_TYPE="${XSTAGE_REL_TYPE:-lab}"
 SUBARCH=amd64
-PROFILE="default/linux/amd64/23.0"
+# The portage profile catalyst builds @system against. It has to agree with
+# FLAVOR: a spec stamped 'systemd-<date>' but built against the OpenRC profile
+# produces a tarball whose name lies about its contents. The xp profile layer
+# exports the right one (PROF_PORTAGE_PROFILE / PROF_LIVE_PORTAGE_PROFILE);
+# cmd_spec refuses a value that does not match SUBARCH.
+PROFILE="${XSTAGE_PORTAGE_PROFILE:-default/linux/amd64/23.0}"
 AUTOBUILDS="${MIRROR}/releases/${SUBARCH}/autobuilds"
 # per-arch catalyst knobs — amd64 builds natively, so no extra spec keys
 CAT_OPTIONS='"autoresume", "bindist", "pkgcache", "seedcache", "ccache"'
@@ -213,6 +241,44 @@ DISTCC_HOSTS_VAL=""     # non-empty -> distcc offload expected, gate on distccd
 # CCACHE_DIR (set at invocation in run_catalyst) into the chroot at
 # /var/tmp/ccache; one cache per architecture, never shared across arches
 CCACHE_TRACK_DIR="${XDIR}/ccache-amd64"
+
+# live half of the amd64 track — the stage3 does not end on an SD card but in
+# livecd.squashfs plus an isolinux directory, the layout bin/v builds from
+# /etc/liveusb. Own build tree per profile (amd64live, amd64kde, …).
+LIVE_BLD="${REPO}/build/${XSTAGE_LIVE_SUBDIR:-amd64live}"
+LIVE_ROOT="${LIVE_BLD}/rootfs"
+LIVE_ISO_DIR="${LIVE_BLD}/iso"
+LIVE_IMG="${LIVE_BLD}/livecd.iso"
+LIVE_TIERS="${XSTAGE_LIVE_TIERS:-}"
+LIVE_PKGS="${XSTAGE_LIVE_PKGS:-}"
+LIVE_OVERLAY_PKGS="${XSTAGE_LIVE_OVERLAY_PKGS:-}"
+LIVE_REPOS="${XSTAGE_LIVE_REPOS:-}"
+LIVE_SETS="${XSTAGE_LIVE_SETS:-}"
+LIVE_HOSTNAME="${XSTAGE_LIVE_HOSTNAME:-amd64live}"
+LIVE_VOLID="${XSTAGE_LIVE_VOLID:-AMD64LIVE}"
+LIVE_VIDEO_CARDS="${XSTAGE_LIVE_VIDEO_CARDS:-}"
+LIVE_USE="${XSTAGE_LIVE_USE:-}"
+LIVE_PORTAGE_PROFILE="${XSTAGE_LIVE_PORTAGE_PROFILE:-}"
+# squashfs codec: zstd compresses ~4x faster than xz at a few percent size
+# cost — bin/v picks xz because its images are burned once and booted forever
+LIVE_COMP="${XSTAGE_LIVE_COMP:-zstd}"
+SYSLINUX_DIR="${XSTAGE_SYSLINUX_DIR:-/usr/share/syslinux}"
+LIVE_TPL="${HERE}/live"
+# init and service manager follow from the stage3 flavour (the xp profile layer
+# derives them); defaults here keep a bare 'xstage' call working.
+# The XSTAGE_LIVE_* spelling is historical — the live ISO was the first
+# consumer — but the values describe any image, so the arm64 SD track reads
+# them through the neutral aliases below.
+LIVE_INIT="${XSTAGE_LIVE_INIT:-/sbin/init}"
+LIVE_RC="${XSTAGE_LIVE_RC:-openrc}"
+INIT_PATH="${LIVE_INIT}"
+RC_SYSTEM="${LIVE_RC}"
+LIVE_FLAVOR_NAME="${XSTAGE_STAGE3_FLAVOR:-${FLAVOR}}"
+# genkernel's CDROOT initrd finds the media by the /livecd marker, then
+# loop-mounts /livecd.squashfs as the real root — hence no root=<device> here.
+# real_init is what the initrd execs after the switch: /sbin/init on OpenRC,
+# /usr/lib/systemd/systemd on a systemd flavour.
+LIVE_APPEND="${XSTAGE_LIVE_APPEND:-root=/dev/ram0 init=/linuxrc real_init=${LIVE_INIT} dokeymap looptype=squashfs loop=/livecd.squashfs cdroot}"
 
 STOREDIR="${XDIR}/catalyst"
 CONF="${XDIR}/conf/catalyst.conf"
@@ -313,7 +379,10 @@ use_arm64_dirs() {
     TINY_IMG="${TINY_BLD}/sd.img"
     TINY_MNT="${TINY_BLD}/mnt"
     TINY_BOARD_F="${TINY_BLD}/board"
-    TINY_INIT="/sbin/init"
+    # PID 1 on the card. /sbin/init is a symlink to systemd on a systemd
+    # stage3, so it would work either way — but naming the real binary keeps
+    # cmdline.txt honest and survives a stage3 that drops the compat symlink.
+    TINY_INIT="${INIT_PATH}"
     ROOT_HINT="arm64 unpack"
     # a stage3 with the Pi payload is ~2 GB unpacked; still a power of 2
     IMG_MB="${XSTAGE_ARM64_IMG_MB:-4096}"
@@ -326,7 +395,7 @@ use_arm64_dirs() {
 # gentoo.git stay shared with amd64; specs/state/conf/logs get their own dirs.
 use_arm64_stage_conf() {
     SUBARCH=arm64
-    PROFILE="default/linux/arm64/23.0"
+    PROFILE="${XSTAGE_PORTAGE_PROFILE:-default/linux/arm64/23.0}"
     AUTOBUILDS="${ARM64_AUTOBUILDS}"
     REL_TYPE="${XSTAGE_REL_TYPE:-lab-arm64}"
     CONFDIR="${RELENG}/releases/portage/stages-qemu"
@@ -357,6 +426,21 @@ help()    { sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \?//'; }
 
 need_root()     { [[ $EUID -eq 0 ]] || die "Root required: sudo $0 ${TGT:-} ${CMD:-}"; }
 need_catalyst() { command -v catalyst >/dev/null || die "No catalyst — install: emerge -av dev-util/catalyst"; }
+
+# The lab has two halves that must never borrow each other's verbs: ARM boards
+# (cross-compiled, run under qemu) and the native amd64 live image. Both write
+# to build/<subdir>/rootfs, so a mismatched profile is not a harmless typo — it
+# is an offer to overwrite the other half's rootfs. XSTAGE_PROF_KIND comes from
+# the xp profile layer; when no profile is active the check stays quiet, since
+# a bare 'xstage' call has no profile to contradict.
+need_native_profile() {
+    [[ ${XSTAGE_PROF_KIND:-native} != board ]] ||
+        die "'${CMD:-?}' builds the native amd64 live image, but the active profile is ${XSTAGE_PROF_NAME:-?} (an ARM board under qemu). Switch it: XPROFILE=amd64kde $0 ${TGT:-amd64} ${CMD:-?}"
+}
+need_board_profile() {
+    [[ ${XSTAGE_PROF_KIND:-board} != native ]] ||
+        die "'${TGT:-?} ${CMD:-?}' builds an ARM board rootfs, but the active profile is ${XSTAGE_PROF_NAME:-?} (native amd64). Switch it: XPROFILE=rpi400 $0 ${TGT:-?} ${CMD:-?}"
+}
 
 # ---------------------------------------------------------------------------
 # amd64 track — catalyst stage1/2/3
@@ -497,6 +581,17 @@ render_spec() {  # render_spec <stage1|stage2|stage3> <stamp> <tree> <seed_subpa
 }
 
 cmd_spec() {
+    # the profile decides what @system is; the flavour only names the tarball.
+    # Catch a mismatch here, before six hours of catalyst mislabels its output.
+    [[ ${PROFILE} == */${SUBARCH}/* ]] ||
+        die "Portage profile '${PROFILE}' is not a ${SUBARCH} profile — check PROF_PORTAGE_PROFILE in the active xp profile (${XSTAGE_PROF_NAME:-none})"
+    if [[ ${FLAVOR} == *systemd && ${PROFILE} != *systemd* ]]; then
+        die "FLAVOR='${FLAVOR}' but profile '${PROFILE}' is not a systemd profile — the stage3 would be named systemd and built as OpenRC"
+    fi
+    if [[ ${FLAVOR} != *systemd && ${PROFILE} == *systemd* ]]; then
+        die "profile '${PROFILE}' is systemd but FLAVOR='${FLAVOR}' is not — set PROF_STAGE3_FLAVOR to a *-systemd flavour"
+    fi
+    info "Building against profile ${PROFILE} (flavour ${FLAVOR})"
     local tree; tree=$(treeish)
     [[ -n ${tree} ]] || die "No snapshot treeish — run: sudo $0 ${TGT:-amd64} snapshot"
     local seed; seed=$(seed_tarball)
@@ -682,6 +777,513 @@ cmd_clean_amd64() {
         command rm -rf "${STOREDIR}/tmp"
     fi
     info "Cleaned."
+}
+
+# ---------------------------------------------------------------------------
+# live half of the amd64 track — squashfs + isolinux ISO
+# ---------------------------------------------------------------------------
+# The arm64 track turns a stage3 into an SD card; this turns one into a live
+# ISO the way bin/v does for /etc/liveusb, minus v's host-specific profile
+# layout. Everything runs natively (this IS an amd64 host), so the chroot needs
+# no qemu interpreter — that is the ARM half of the lab's problem, not this one.
+
+# resolve the package list: tiers out of the catalogue + the profile's atoms
+live_pkg_list() {
+    local catalogue="${XSTAGE_LIVE_PKGSFILE:-${XP_LAB_DIR:-${REPO}}/profiles/amd64.pkgs}"
+    {
+        if [[ -n ${LIVE_TIERS} ]]; then
+            [[ -f ${catalogue} ]] || die "No package catalogue ${catalogue} — needed by XSTAGE_LIVE_TIERS"
+            local tier
+            for tier in ${LIVE_TIERS}; do
+                # print the atoms between '# @tier <name>' and the next @tier;
+                # strip trailing comments, drop blanks and comment-only lines
+                awk -v want="${tier}" '
+                    /^#[ \t]*@tier[ \t]+/ { in_t = ($3 == want); next }
+                    in_t { sub(/#.*/, ""); gsub(/^[ \t]+|[ \t]+$/, "");
+                           if (length($0)) print }
+                ' "${catalogue}"
+            done
+        fi
+        # shellcheck disable=SC2086 — word splitting of the package list is intended
+        [[ -n ${LIVE_PKGS} ]] && printf '%s\n' ${LIVE_PKGS}
+    } | awk 'NF && !seen[$0]++'
+}
+
+# run a script inside the live rootfs; native amd64, so a plain chroot works
+live_chroot() {  # live_chroot <label>  (script on stdin)
+    local label="$1"
+    [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
+    command cp -f /etc/resolv.conf "${LIVE_ROOT}/etc/resolv.conf"
+    mount -t proc  none "${LIVE_ROOT}/proc"
+    mount --rbind /sys  "${LIVE_ROOT}/sys";  mount --make-rslave "${LIVE_ROOT}/sys"
+    mount --rbind /dev  "${LIVE_ROOT}/dev";  mount --make-rslave "${LIVE_ROOT}/dev"
+    # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
+    trap "live_chroot_umount '${LIVE_ROOT}'" EXIT INT TERM
+    local rc=0
+    chroot "${LIVE_ROOT}" /bin/bash -s <<-EOF || rc=$?
+	set -eo pipefail
+	source /etc/profile >/dev/null 2>&1 || true
+	$(cat)
+	EOF
+    live_chroot_umount "${LIVE_ROOT}"
+    trap - EXIT INT TERM
+    [[ ${rc} -eq 0 ]] || die "chroot step '${label}' failed (exit ${rc})"
+}
+
+live_chroot_umount() {
+    local r="$1"
+    umount -R "${r}/dev"  2>/dev/null || true
+    umount -R "${r}/sys"  2>/dev/null || true
+    umount    "${r}/proc" 2>/dev/null || true
+}
+
+cmd_live_unpack() {
+    need_root
+    # a self-built stage3 wins over the downloaded seed: the point of the
+    # catalyst half is to boot what this lab produced, not what Gentoo shipped
+    local tarball="${XSTAGE_LIVE_TARBALL:-}"
+    if [[ -n ${tarball} ]]; then
+        [[ -f ${tarball} ]] || die "XSTAGE_LIVE_TARBALL not found: ${tarball}"
+        info "Using XSTAGE_LIVE_TARBALL"
+    else
+        # preference order: a stage3 this lab built, then the seed in the
+        # catalyst dirs, then the plain download in dl/ — the last one matters,
+        # because building only a live image needs no catalyst at all, and then
+        # 'seed' never gets a builds/default/ to copy into
+        tarball=$(built_stage stage3)
+        [[ -n ${tarball} ]] || tarball=$(seed_tarball)
+        [[ -n ${tarball} ]] ||
+            tarball=$(ls -1t "${DL_DIR}/stage3-${SUBARCH}-${FLAVOR}"-*.tar.xz 2>/dev/null | head -1 || true)
+        [[ -n ${tarball} ]] ||
+            die "No stage3-${SUBARCH}-${FLAVOR} tarball — fetch one ($0 ${TGT:-amd64} seed) or build it (sudo $0 ${TGT:-amd64} all)"
+    fi
+    if [[ -d ${LIVE_ROOT} && -n $(ls -A "${LIVE_ROOT}" 2>/dev/null) ]]; then
+        confirm "Remove existing ${LIVE_ROOT} and re-unpack?"
+        command rm -rf "${LIVE_ROOT}"
+    fi
+    mkdir -p "${LIVE_ROOT}"
+    info "Unpacking $(basename "${tarball}") (handbook flags: xattrs, numeric owners)"
+    tar xpf "${tarball}" -C "${LIVE_ROOT}" --xattrs-include='*.*' --numeric-owner
+    [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No /bin/bash after unpack — broken tarball?"
+    info "rootfs ready: ${LIVE_ROOT} ($(du -sh "${LIVE_ROOT}" 2>/dev/null | cut -f1 || true))"
+}
+
+# make.conf, ebuild repos and the portage profile — everything 'pkgs' depends on
+cmd_live_conf() {
+    need_root
+    [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
+    mkdir -p "${LIVE_ROOT}/etc/portage/repos.conf" "${LIVE_ROOT}/var/db/repos"
+
+    info "make.conf: MAKEOPTS -j${JOBS}${LIVE_VIDEO_CARDS:+, VIDEO_CARDS ${LIVE_VIDEO_CARDS}}"
+    # appended, not overwritten: the stage3 make.conf carries CHOST/CFLAGS the
+    # tarball was actually built with, and those must survive
+    {
+        echo
+        echo "# --- appended by 'xstage ${TGT:-amd64} conf' (xp profile ${XPROFILE:-none}) ---"
+        echo "MAKEOPTS=\"-j${JOBS}\""
+        echo "EMERGE_DEFAULT_OPTS=\"--jobs=${JOBS} --load-average=$(nproc) --quiet-build=y\""
+        [[ -n ${LIVE_VIDEO_CARDS} ]] && echo "VIDEO_CARDS=\"${LIVE_VIDEO_CARDS}\""
+        [[ -n ${LIVE_USE} ]] && echo "USE=\"\${USE} $(echo "${LIVE_USE}" | tr -s '[:space:]' ' ')\""
+        # a live image is read-only at runtime: no reason to carry build logs
+        echo 'FEATURES="${FEATURES} parallel-install"'
+    } >> "${LIVE_ROOT}/etc/portage/make.conf"
+
+    info "repos.conf: ::gentoo (rsync)"
+    cat > "${LIVE_ROOT}/etc/portage/repos.conf/gentoo.conf" <<-'EOF'
+	[DEFAULT]
+	main-repo = gentoo
+
+	[gentoo]
+	location = /var/db/repos/gentoo
+	sync-type = rsync
+	sync-uri = rsync://rsync.gentoo.org/gentoo-portage
+	auto-sync = yes
+	EOF
+
+    # the host already has a synced tree; copying beats a fresh rsync inside
+    # the chroot, and it pins the image to a tree we know builds
+    local hostrepo; hostrepo=$(portageq get_repo_path / gentoo 2>/dev/null || true)
+    if [[ -n ${hostrepo} && -d ${hostrepo} ]]; then
+        info "Seeding ::gentoo from the host tree ${hostrepo} (rsync, no network)"
+        rsync -a --delete --exclude='/distfiles' --exclude='/packages' \
+            "${hostrepo}/" "${LIVE_ROOT}/var/db/repos/gentoo/"
+    else
+        warn "No host ::gentoo found — the image will have to 'emerge --sync' itself"
+    fi
+
+    local r
+    for r in ${LIVE_REPOS}; do
+        local rp; rp=$(portageq get_repo_path / "${r}" 2>/dev/null || true)
+        if [[ -z ${rp} || ! -d ${rp} ]]; then
+            warn "Overlay '${r}' not on this host — its packages will be skipped"
+            continue
+        fi
+        info "Seeding overlay ::${r} from ${rp}"
+        mkdir -p "${LIVE_ROOT}/var/db/repos/${r}"
+        rsync -a --delete --exclude='/distfiles' --exclude='/packages' \
+            "${rp}/" "${LIVE_ROOT}/var/db/repos/${r}/"
+        cat > "${LIVE_ROOT}/etc/portage/repos.conf/${r}.conf" <<-EOF
+		[${r}]
+		location = /var/db/repos/${r}
+		auto-sync = no
+		EOF
+    done
+
+    if [[ -n ${LIVE_PORTAGE_PROFILE} ]]; then
+        info "Portage profile: ${LIVE_PORTAGE_PROFILE}"
+        [[ -d ${LIVE_ROOT}/var/db/repos/gentoo/profiles/${LIVE_PORTAGE_PROFILE} ]] ||
+            die "No such profile in the image tree: ${LIVE_PORTAGE_PROFILE}"
+        ln -snf "../../var/db/repos/gentoo/profiles/${LIVE_PORTAGE_PROFILE}" \
+            "${LIVE_ROOT}/etc/portage/make.profile"
+    fi
+
+    # config fragments (sysctl/modprobe/auditd rules for the hardened profile)
+    if [[ -n ${XSTAGE_LIVE_OVERLAY_DIR:-} ]]; then
+        local ov="${LIVE_TPL}/${XSTAGE_LIVE_OVERLAY_DIR}"
+        if [[ -d ${ov} ]]; then
+            info "Overlaying config fragments from ${ov}"
+            rsync -a "${ov}/" "${LIVE_ROOT}/"
+        else
+            warn "PROF_LIVE_OVERLAY_DIR='${XSTAGE_LIVE_OVERLAY_DIR}' but ${ov} does not exist"
+        fi
+    fi
+    info "Image configured."
+}
+
+cmd_live_pkgs() {
+    need_root
+    local list; list=$(live_pkg_list)
+    [[ -n ${list} || -n ${LIVE_SETS} ]] ||
+        die "Nothing to install — the profile sets neither PROF_LIVE_PKGS/TIERS nor PROF_LIVE_SETS"
+    [[ -d ${LIVE_ROOT}/var/db/repos/gentoo/profiles ]] ||
+        die "No ebuild tree in the image — run: sudo $0 ${TGT:-amd64} conf"
+    local n; n=$(printf '%s\n' "${list}" | grep -c . || true)
+    info "Merging ${n} top-level packages${LIVE_SETS:+ + sets: ${LIVE_SETS}} (dependencies resolve inside)"
+    # --keep-going: one broken ebuild in a 300-package image should not throw
+    # away hours of work; the summary at the end names what failed
+    live_chroot pkgs <<-EOF
+	emerge --verbose --keep-going --with-bdeps=y \\
+	    ${LIVE_SETS} $(printf '%s ' ${list})
+	EOF
+    if [[ -n ${LIVE_OVERLAY_PKGS} ]]; then
+        local missing=""
+        local r
+        for r in ${LIVE_REPOS}; do
+            [[ -d ${LIVE_ROOT}/var/db/repos/${r} ]] || missing+=" ${r}"
+        done
+        if [[ -n ${missing} ]]; then
+            warn "Skipping overlay packages — missing repos in the image:${missing}"
+        else
+            info "Merging overlay packages: ${LIVE_OVERLAY_PKGS}"
+            live_chroot overlay-pkgs <<-EOF
+		emerge --verbose --keep-going ${LIVE_OVERLAY_PKGS}
+		EOF
+        fi
+    fi
+    info "Package set installed: $(du -sh "${LIVE_ROOT}" | cut -f1) unpacked"
+}
+
+cmd_live_configure() {
+    need_root
+    [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
+    info "hostname ${LIVE_HOSTNAME}, root password '${ZERO_PASS}', sshd + NetworkManager"
+    echo "${LIVE_HOSTNAME}" > "${LIVE_ROOT}/etc/hostname"
+    # /etc/hostname is read by both init systems; /etc/conf.d/hostname is
+    # OpenRC's older spelling and the directory does not exist at all in a
+    # systemd stage3 — writing it unconditionally would abort under set -e
+    [[ -d ${LIVE_ROOT}/etc/conf.d ]] &&
+        echo "hostname=\"${LIVE_HOSTNAME}\"" > "${LIVE_ROOT}/etc/conf.d/hostname"
+
+    # same host-side hash trick as the SD images — no plaintext in the chroot
+    local hash; hash=$(openssl passwd -6 "${ZERO_PASS}") || die "openssl passwd failed"
+    sed -i "s|^root:[^:]*:|root:${hash}:|" "${LIVE_ROOT}/etc/shadow" ||
+        die "could not set the root password in ${LIVE_ROOT}/etc/shadow"
+
+    mkdir -p "${LIVE_ROOT}/etc/ssh/sshd_config.d"
+    echo "PermitRootLogin yes" > "${LIVE_ROOT}/etc/ssh/sshd_config.d/50-xstage.conf"
+
+    # Enabling services differs per flavour, and neither method can simply be
+    # "run the tool": no init system is running in this chroot. OpenRC's
+    # runlevels are plain symlinks, so they are made directly; systemd's
+    # 'systemctl enable' works offline against the unit files, so it is run
+    # inside the chroot rather than symlinked by hand.
+    info "Service manager: ${LIVE_RC} (stage3 flavour ${LIVE_FLAVOR_NAME})"
+    local want=(sshd dbus)
+    if [[ ${LIVE_RC} == systemd ]]; then
+        local units=(sshd.service dbus.service)
+        [[ -e ${LIVE_ROOT}/usr/lib/systemd/system/NetworkManager.service ]] &&
+            units+=(NetworkManager.service)
+        [[ -n ${XSTAGE_LIVE_XSESSION:-} && -e ${LIVE_ROOT}/usr/lib/systemd/system/sddm.service ]] &&
+            units+=(sddm.service)
+        [[ -n ${XSTAGE_LIVE_XSESSION:-} && -e ${LIVE_ROOT}/usr/lib/systemd/system/gdm.service ]] &&
+            units+=(gdm.service)
+        live_chroot enable-units <<-EOF
+		systemctl enable ${units[*]} || true
+		systemctl set-default graphical.target 2>/dev/null || true
+		EOF
+    else
+        local svc
+        for svc in "${want[@]}"; do
+            [[ -e ${LIVE_ROOT}/etc/init.d/${svc} ]] &&
+                ln -snf "/etc/init.d/${svc}" "${LIVE_ROOT}/etc/runlevels/default/${svc}"
+        done
+        if [[ -e ${LIVE_ROOT}/etc/init.d/NetworkManager ]]; then
+            ln -snf /etc/init.d/NetworkManager "${LIVE_ROOT}/etc/runlevels/default/NetworkManager"
+        elif [[ -e ${LIVE_ROOT}/etc/init.d/dhcpcd ]]; then
+            ln -snf /etc/init.d/dhcpcd "${LIVE_ROOT}/etc/runlevels/default/dhcpcd"
+        fi
+        if [[ -n ${XSTAGE_LIVE_XSESSION:-} && -e ${LIVE_ROOT}/etc/init.d/display-manager ]]; then
+            ln -snf /etc/init.d/display-manager \
+                "${LIVE_ROOT}/etc/runlevels/default/display-manager"
+            info "display-manager in the default runlevel (session ${XSTAGE_LIVE_XSESSION})"
+        fi
+    fi
+
+    cat > "${LIVE_ROOT}/etc/motd" <<-EOF
+	${LIVE_VOLID} — Gentoo live image built by xstage (rpilinuxlab)
+	Built $(date -u +%Y-%m-%dT%H:%M:%SZ) from $(basename "$(built_stage stage3 || echo 'a seed stage3')")
+	The system runs from a read-only squashfs; changes live in RAM only.
+	EOF
+    info "Configured."
+}
+
+# genkernel with CDROOT=1: exactly what bin/v does, and the reason the ISO
+# needs no root= — the initrd hunts for the /livecd marker itself
+cmd_live_kernel() {
+    need_root
+    [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
+
+    # The base the fragments are merged onto:
+    #   defconfig  the kernel's own x86_64 defconfig — reproducible, and the
+    #              live fragment adds the breadth an ISO needs (default)
+    #   host       this machine's /usr/src/linux/.config — widest driver set,
+    #              but it is tuned for THIS laptop and carries its quirks
+    #   <path>     any .config file on the host
+    local base="${XSTAGE_LIVE_KCONFIG_BASE:-defconfig}"
+    local frags=("${LIVE_TPL}/kernel/live.fragment")
+    # extra symbols the post-merge check insists on, per flavour
+    local kcheck=""
+    # systemd as PID 1 has its own mandatory Kconfig list (its README); an
+    # OpenRC image has no use for it, so it is a separate fragment
+    if [[ ${LIVE_RC} == systemd ]]; then
+        frags+=("${LIVE_TPL}/kernel/systemd.fragment")
+        kcheck+=" CONFIG_FHANDLE CONFIG_AUTOFS_FS CONFIG_DMIID CONFIG_CGROUPS"
+        info "systemd flavour — adding the systemd kernel fragment"
+    fi
+    # a hardened image needs kernel-side hardening too: the portage 'hardened'
+    # profile only changes the toolchain, never the kernel
+    if [[ ${LIVE_PORTAGE_PROFILE} == *hardened* || -n ${XSTAGE_LIVE_KHARDEN:-} ]]; then
+        frags+=("${LIVE_TPL}/kernel/hardened.fragment")
+        info "Hardened profile detected — adding the KSPP kernel fragment"
+    fi
+    local f
+    for f in "${frags[@]}"; do
+        [[ -f ${f} ]] || die "Missing Kconfig fragment: ${f}"
+    done
+
+    info "Kernel config base: ${base}; fragments: $(basename -a "${frags[@]}" | tr '\n' ' ')"
+    mkdir -p "${LIVE_ROOT}/tmp/xstage-kconfig"
+    local i=0
+    for f in "${frags[@]}"; do
+        command cp -f "${f}" "${LIVE_ROOT}/tmp/xstage-kconfig/$((i++))-$(basename "${f}")"
+    done
+    if [[ ${base} != defconfig && ${base} != host ]]; then
+        [[ -f ${base} ]] || die "XSTAGE_LIVE_KCONFIG_BASE='${base}' is neither 'defconfig', 'host', nor a file"
+        command cp -f "${base}" "${LIVE_ROOT}/tmp/xstage-kconfig/base.config"
+    elif [[ ${base} == host ]]; then
+        [[ -f /usr/src/linux/.config ]] ||
+            die "XSTAGE_LIVE_KCONFIG_BASE=host but this machine has no /usr/src/linux/.config"
+        command cp -f /usr/src/linux/.config "${LIVE_ROOT}/tmp/xstage-kconfig/base.config"
+    fi
+
+    info "Building the live kernel with genkernel (CDROOT=1) — this takes a while"
+    live_chroot kernel <<-EOF
+	command -v genkernel >/dev/null ||
+	    emerge --verbose --oneshot sys-kernel/genkernel
+	[ -e /usr/src/linux ] || emerge --verbose --oneshot sys-kernel/gentoo-sources
+	[ -e /usr/src/linux ] || { echo "no /usr/src/linux symlink" >&2; exit 1; }
+	cd /usr/src/linux
+
+	# 1. the base config
+	if [ -f /tmp/xstage-kconfig/base.config ]; then
+	    cp /tmp/xstage-kconfig/base.config .config
+	else
+	    make defconfig
+	fi
+
+	# 2. merge the fragments. -m keeps the merge in .config without running
+	#    a config target yet; olddefconfig then answers every new symbol with
+	#    its default instead of prompting (a chroot has no one to prompt).
+	./scripts/kconfig/merge_config.sh -m .config /tmp/xstage-kconfig/[0-9]-*
+	make olddefconfig
+
+	# 3. fail loudly if the boot chain did not survive the merge — a live ISO
+	#    without squashfs or loop is a two-hour build that cannot boot
+	for sym in CONFIG_SQUASHFS CONFIG_BLK_DEV_LOOP CONFIG_ISO9660_FS \\
+	           CONFIG_BLK_DEV_INITRD CONFIG_OVERLAY_FS ${kcheck}; do
+	    grep -q "^\${sym}=y" .config ||
+	        { echo "FATAL: \${sym} is not =y after merge — the ISO would not boot" >&2; exit 1; }
+	done
+
+	sed -i 's/CDROOT="0"/CDROOT="1"/' /usr/share/genkernel/defaults/initrd.defaults
+	genkernel --makeopts=-j${JOBS} --kernel-config=/usr/src/linux/.config \\
+	    --luks --lvm --busybox --no-clean all
+	sed -i 's/CDROOT="1"/CDROOT="0"/' /usr/share/genkernel/defaults/initrd.defaults
+	EOF
+    # keep the exact config next to the artifacts: without it a built ISO
+    # cannot be reproduced or bisected later
+    command cp -f "${LIVE_ROOT}/usr/src/linux/.config" "${LIVE_BLD}/kernel.config" 2>/dev/null || true
+    mkdir -p "${LIVE_BLD}"
+    local k i
+    k=$(ls -1t "${LIVE_ROOT}/boot/"{vmlinuz,kernel}-*genkernel* 2>/dev/null | head -1 || true)
+    i=$(ls -1t "${LIVE_ROOT}/boot/"initramfs-*genkernel* "${LIVE_ROOT}/boot/"initr*-genkernel* 2>/dev/null | head -1 || true)
+    [[ -n ${k} ]] || die "genkernel produced no kernel in ${LIVE_ROOT}/boot"
+    [[ -n ${i} ]] || die "genkernel produced no initramfs in ${LIVE_ROOT}/boot"
+    command cp -f "${k}" "${LIVE_BLD}/bzImage"
+    command cp -f "${i}" "${LIVE_BLD}/initrd"
+    info "kernel: $(basename "${k}") ($(du -h "${LIVE_BLD}/bzImage" | cut -f1))"
+    info "initrd: $(basename "${i}") ($(du -h "${LIVE_BLD}/initrd" | cut -f1))"
+}
+
+cmd_live_squash() {
+    need_root
+    [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
+    command -v mksquashfs >/dev/null || die "No mksquashfs — emerge -av sys-fs/squashfs-tools"
+    mkdir -p "${LIVE_ISO_DIR}"
+    info "Compressing the rootfs into livecd.squashfs (-comp ${LIVE_COMP})"
+    # -e: the pseudo-filesystems are mount points inside the image, and the
+    # portage tree we seeded is worth ~1.5 GB of the result on its own
+    local excl=(proc sys dev/pts dev/shm var/tmp/portage var/cache/distfiles)
+    mksquashfs "${LIVE_ROOT}" "${LIVE_ISO_DIR}/livecd.squashfs" \
+        -comp "${LIVE_COMP}" -noappend -no-progress -b 1048576 -no-xattrs \
+        -e "${excl[@]}" || die "mksquashfs failed"
+    # the marker the CDROOT initrd looks for when identifying the boot media
+    touch "${LIVE_ISO_DIR}/livecd"
+    info "livecd.squashfs: $(du -h "${LIVE_ISO_DIR}/livecd.squashfs" | cut -f1)"
+}
+
+cmd_live_isolinux() {
+    need_root
+    [[ -f ${LIVE_BLD}/bzImage ]] || die "No kernel — run: sudo $0 ${TGT:-amd64} kernel"
+    [[ -f ${LIVE_BLD}/initrd ]]  || die "No initrd — run: sudo $0 ${TGT:-amd64} kernel"
+    [[ -f ${SYSLINUX_DIR}/isolinux.bin ]] ||
+        die "No ${SYSLINUX_DIR}/isolinux.bin — emerge -av sys-boot/syslinux"
+    install -d "${LIVE_ISO_DIR}/isolinux"
+    info "Populating ${LIVE_ISO_DIR}/isolinux (legacy BIOS, syslinux)"
+    # ldlinux.c32 is not optional on syslinux 6.x: isolinux.bin refuses to boot
+    # without its companion module in the same directory
+    local f
+    for f in isolinux.bin ldlinux.c32; do
+        command cp -f "${SYSLINUX_DIR}/${f}" "${LIVE_ISO_DIR}/isolinux/" ||
+            die "could not copy ${f} from ${SYSLINUX_DIR}"
+    done
+    command cp -f "${LIVE_BLD}/bzImage" "${LIVE_ISO_DIR}/isolinux/gentoo"
+    command cp -f "${LIVE_BLD}/initrd"  "${LIVE_ISO_DIR}/isolinux/initrd"
+    sed -e "s|@APPEND@|${LIVE_APPEND}|g" -e "s|@VOLID@|${LIVE_VOLID}|g" \
+        "${LIVE_TPL}/isolinux.cfg.in" > "${LIVE_ISO_DIR}/isolinux/isolinux.cfg"
+    sed -e "s|@VOLID@|${LIVE_VOLID}|g" -e "s|@ROOTPASS@|${ZERO_PASS}|g" \
+        "${LIVE_TPL}/boot.msg.in" > "${LIVE_ISO_DIR}/isolinux/boot.msg"
+    info "isolinux ready (kernel 'gentoo', initrd, isolinux.cfg, boot.msg)"
+}
+
+cmd_live_iso() {
+    need_root
+    command -v xorriso >/dev/null || die "No xorriso — emerge -av dev-libs/libisoburn"
+    [[ -f ${LIVE_ISO_DIR}/livecd.squashfs ]] || die "No squashfs — run: sudo $0 ${TGT:-amd64} squash"
+    [[ -f ${LIVE_ISO_DIR}/isolinux/isolinux.bin ]] || die "No isolinux — run: sudo $0 ${TGT:-amd64} isolinux"
+    info "Mastering ${LIVE_IMG} (volid ${LIVE_VOLID})"
+    # -isohybrid-mbr makes the same file work as a CD image and as something
+    # you can dd straight onto a stick; -partition_offset 16 keeps the embedded
+    # partition table addressable after dd
+    xorriso -as mkisofs -quiet \
+        -o "${LIVE_IMG}" \
+        -volid "${LIVE_VOLID}" \
+        -J -joliet-long -rational-rock \
+        -b isolinux/isolinux.bin -c isolinux/boot.cat \
+        -no-emul-boot -boot-load-size 4 -boot-info-table \
+        -isohybrid-mbr "${SYSLINUX_DIR}/isohdpfx.bin" \
+        -partition_offset 16 \
+        "${LIVE_ISO_DIR}" || die "xorriso failed"
+    if [[ -n ${SUDO_UID:-} ]]; then chown "${SUDO_UID}:${SUDO_GID}" "${LIVE_IMG}"; fi
+    info "ISO ready: ${LIVE_IMG} ($(du -h "${LIVE_IMG}" | cut -f1))"
+    info "Boot gate: $0 ${TGT:-amd64} gate     Write to USB: sudo $0 ${TGT:-amd64} usb /dev/sdX"
+}
+
+cmd_live_all() {
+    need_root
+    cmd_live_unpack
+    cmd_live_conf
+    cmd_live_pkgs
+    cmd_live_configure
+    cmd_live_kernel
+    cmd_live_squash
+    cmd_live_isolinux
+    cmd_live_iso
+}
+
+cmd_live_gate() {
+    command -v qemu-system-x86_64 >/dev/null ||
+        die "No qemu-system-x86_64 — emerge qemu with QEMU_SOFTMMU_TARGETS=x86_64"
+    [[ -f ${LIVE_IMG} ]] || die "No ISO — run: sudo $0 ${TGT:-amd64} iso"
+    # unlike the Pi gates this one is fully interactive: KVM on native hardware,
+    # a real serial console, and the ISO attached as a CD-ROM
+    info "Booting ${LIVE_IMG} (-M q35, KVM if available; quit qemu: Ctrl-A X)"
+    local kvm=()
+    [[ -w /dev/kvm ]] && kvm=(-enable-kvm -cpu host)
+    exec qemu-system-x86_64 -M q35 "${kvm[@]}" -m 4096 -smp 4 \
+        -cdrom "${LIVE_IMG}" -boot d \
+        -netdev "user,id=n0,hostfwd=tcp::${SSH_PORT}-:22" \
+        -device virtio-net-pci,netdev=n0 \
+        -nographic
+}
+
+cmd_live_usb() {
+    need_root
+    [[ $# -eq 1 ]] || die "Usage: sudo $0 ${TGT:-amd64} usb /dev/sdX"
+    [[ -f ${LIVE_IMG} ]] || die "No ISO — run: sudo $0 ${TGT:-amd64} iso"
+    local dev="${1%/}"
+    [[ ${dev} =~ ^/dev/(sd[a-z]+|mmcblk[0-9]+)$ ]] ||
+        die "Whole device without partition expected, e.g. /dev/sdb"
+    [[ -b ${dev} ]] || die "Block device not found: ${dev}"
+    local name="${dev#/dev/}"
+    lsblk -no MOUNTPOINTS "${dev}" | grep -qx / &&
+        die "${dev} holds the root filesystem — refusing"
+    local removable idbus model size
+    removable=$(cat "/sys/block/${name}/removable" 2>/dev/null || echo 0)
+    idbus=$(udevadm info --query=property --name="${dev}" | { grep '^ID_BUS=' || true; } | cut -d= -f2)
+    [[ ${removable} == 1 || ${idbus} == usb || ${idbus} == mmc || ${name} == mmcblk* ]] ||
+        die "${dev}: removable=0 and ID_BUS='${idbus:-?}' — refusing to touch an internal disk"
+    [[ $(blockdev --getsize64 "${dev}") -ge $(stat -c%s "${LIVE_IMG}") ]] ||
+        die "${dev} is smaller than ${LIVE_IMG}"
+    model=$(cat "/sys/block/${name}/device/model" 2>/dev/null || echo '?')
+    size=$(lsblk -dno SIZE "${dev}")
+    warn "Target: ${dev}  model:${model% }  size:${size}  removable:${removable}  bus:${idbus:-?}"
+    confirm "Overwrite ${dev} with ${LIVE_IMG} (ALL data on it is lost)?"
+    local p
+    for p in "${dev}"?*; do
+        [[ -b ${p} ]] && umount "${p}" 2>/dev/null || true
+    done
+    dd if="${LIVE_IMG}" of="${dev}" bs=8M conv=fsync status=progress
+    sync; partprobe "${dev}" 2>/dev/null || true
+    lsblk -o NAME,SIZE,FSTYPE,LABEL "${dev}"
+    info "Done. The image is isohybrid: it boots as a USB stick and as a CD."
+}
+
+live_status() {
+    local rootfs="-" sq="-" krn="-" iso="-" n=0
+    [[ -x ${LIVE_ROOT}/bin/bash ]] && rootfs=$(du -sh "${LIVE_ROOT}" 2>/dev/null | cut -f1 || true)
+    [[ -f ${LIVE_ISO_DIR}/livecd.squashfs ]] && sq=$(du -h "${LIVE_ISO_DIR}/livecd.squashfs" | cut -f1)
+    [[ -f ${LIVE_BLD}/bzImage ]] && krn=$(du -h "${LIVE_BLD}/bzImage" | cut -f1)
+    [[ -f ${LIVE_IMG} ]] && iso=$(du -h "${LIVE_IMG}" | cut -f1)
+    n=$(live_pkg_list 2>/dev/null | grep -c . || true)
+    echo "live   profile:${XPROFILE:-none}  stage3:${LIVE_FLAVOR_NAME}  rc:${LIVE_RC}  tree:${LIVE_BLD#"${REPO}"/}  pkgs:${n}"
+    echo "       rootfs:${rootfs}  kernel:${krn}  squashfs:${sq}  iso:${iso}"
+}
+
+cmd_live_clean() {
+    confirm "Remove ${LIVE_BLD}?"
+    command rm -rf "${LIVE_BLD}"
+    info "Cleaned live tree."
 }
 
 # ---------------------------------------------------------------------------
@@ -1322,13 +1924,18 @@ cmd_arm64_stage_setup() {
 cmd_arm64_crossstage() {
     need_root; need_cross
     local cs_root="${XDIR}/crossstage/rootfs"
-    # the sysroot profile decides what @system means — insist on arm64 so the
-    # tarball matches the catalyst/release stage3 flavour; repointing it here
-    # could break xarm, whose setup owns that symlink
+    # The sysroot profile decides what @system means, and the tarball this
+    # writes claims ${PROFILE} in its own make.profile symlink — so the two
+    # must be the SAME profile, not merely both arm64. An openrc sysroot with
+    # a systemd FLAVOR would produce a tarball named systemd, symlinked to the
+    # systemd profile, containing an OpenRC @system. xarm owns that symlink;
+    # this only refuses to build against the wrong one.
     local prof; prof=$(readlink -f "${SYSROOT}/etc/portage/make.profile" 2>/dev/null || true)
     [[ ${prof} == */arm64/* ]] ||
         die "Sysroot profile '${prof:-unset}' is not arm64 — fix ${SYSROOT}/etc/portage/make.profile (sudo xarm setup)"
-    info "Sysroot profile: ${prof#*/profiles/}"
+    [[ ${prof} == */profiles/${PROFILE} ]] ||
+        die "Sysroot profile is '${prof#*/profiles/}' but this build targets '${PROFILE}' (flavour ${FLAVOR}) — run: sudo xarm setup"
+    info "Sysroot profile: ${prof#*/profiles/} (flavour ${FLAVOR})"
 
     if [[ -d ${cs_root} && -n $(ls -A "${cs_root}" 2>/dev/null) ]]; then
         confirm "Regenerate from scratch (rm -rf ${cs_root})?"
@@ -1381,13 +1988,77 @@ cmd_arm64_unpack() {
     mkdir -p "${TINY_ROOT}"
     info "Unpacking $(basename "${tarball}") (handbook flags: xattrs, numeric owners)"
     tar xpf "${tarball}" -C "${TINY_ROOT}" --xattrs-include='*.*' --numeric-owner
-    [[ -x ${TINY_ROOT}/sbin/init ]] || die "No /sbin/init after unpack — broken tarball?"
+    [[ -x ${TINY_ROOT}${TINY_INIT} ]] ||
+        die "No ${TINY_INIT} after unpack — broken tarball, or a stage3 whose flavour is not ${LIVE_FLAVOR_NAME}?"
     info "rootfs ready: ${TINY_ROOT} ($(du -sh "${TINY_ROOT}" 2>/dev/null | cut -f1 || true))"
+}
+
+# The systemd half of arm64_configure. Units are enabled by writing the .wants
+# symlinks directly rather than by running 'systemctl enable' in a qemu-user
+# chroot: 'enable' does exactly this, the symlinks are what the image ships,
+# and doing it host-side keeps 'image' free of any binfmt_misc dependency (the
+# card can be built on a machine that never registered qemu-aarch64).
+arm64_sd_enable() {  # arm64_sd_enable <unit> [target]
+    local unit="$1" target="${2:-multi-user.target}"
+    local src=""
+    local d
+    for d in /usr/lib/systemd/system /lib/systemd/system /etc/systemd/system; do
+        [[ -f ${TINY_ROOT}${d}/${unit} ]] && { src="${d}/${unit}"; break; }
+    done
+    if [[ -z ${src} ]]; then
+        warn "systemd unit '${unit}' is not in the stage3 — not enabled"
+        return 0
+    fi
+    mkdir -p "${TINY_ROOT}/etc/systemd/system/${target}.wants"
+    ln -snf "${src}" "${TINY_ROOT}/etc/systemd/system/${target}.wants/${unit}"
+    # what the closing summary reports — a missing unit must not be summarised
+    # as if it had been enabled
+    SD_ENABLED+="${unit} "
+}
+
+arm64_configure_systemd() {
+    SD_ENABLED=""
+    # A .network file replaces netifrc's /etc/conf.d/net. Match by interface
+    # name, which udev keeps stable per board: bcmgenet gives eth0 on the
+    # BCM2711, the Pi 3's USB NIC also lands on eth0 (see board_eth_vars).
+    mkdir -p "${TINY_ROOT}/etc/systemd/network"
+    cat > "${TINY_ROOT}/etc/systemd/network/10-eth0.network" <<-EOF
+	# generated by 'xstage arm64 image' (board: ${BOARD})
+	[Match]
+	Name=eth0
+
+	[Network]
+	Address=${ETH_IP}
+	Gateway=${ETH_GW}
+	DNS=${ETH_DNS}
+	EOF
+
+    arm64_sd_enable systemd-networkd.service
+    arm64_sd_enable systemd-networkd.socket sockets.target
+    # the D-Bus name networkctl talks to; 'systemctl enable' creates this alias
+    if [[ -f ${TINY_ROOT}/usr/lib/systemd/system/systemd-networkd.service ]]; then
+        ln -snf /usr/lib/systemd/system/systemd-networkd.service \
+            "${TINY_ROOT}/etc/systemd/system/dbus-org.freedesktop.network1.service"
+    fi
+    arm64_sd_enable sshd.service
+
+    # systemd-resolved is deliberately NOT enabled: it would want /etc/resolv.conf
+    # to be a symlink into /run, which is one more moving part on a debug image
+    # whose whole job is to answer ssh at a fixed address. A static file is
+    # enough, and networkd leaves it alone.
+    cat > "${TINY_ROOT}/etc/resolv.conf" <<-EOF
+	# generated by 'xstage arm64 image' — static, systemd-resolved is off
+	nameserver ${ETH_DNS}
+	EOF
+
+    # serial and tty1 gettys need no action: systemd-getty-generator reads the
+    # console= arguments cmdline.txt already carries and spawns them itself.
+    info "eth0 ${ETH_IP} via ${ETH_GW}; units enabled: ${SD_ENABLED:-none}"
 }
 
 arm64_configure() {
     need_root
-    [[ -x ${TINY_ROOT}/sbin/init ]] || die "No rootfs — run: sudo $0 arm64 unpack"
+    [[ -x ${TINY_ROOT}${TINY_INIT} ]] || die "No rootfs — run: sudo $0 arm64 unpack"
 
     # root password: the same host-side hash trick as the tiny ssh images
     local hash
@@ -1412,21 +2083,28 @@ arm64_configure() {
         info "ssh: root password '${ZERO_PASS}' (no pubkey found — set XSTAGE_ZERO_KEY=/path/to/key.pub)"
     fi
 
-    # netifrc fixed address on eth0 — what the tiny image fakes with a board
-    # hook, a stage3 does with the real thing
+    # A fixed address on eth0 — what the tiny image fakes with a board hook, a
+    # stage3 does with the real thing. Which "real thing" depends on the stage3
+    # flavour: netifrc under OpenRC, systemd-networkd under systemd.
     board_eth_vars
-    [[ -e ${TINY_ROOT}/etc/init.d/net.lo ]] || warn "netifrc missing in the stage3?"
-    cat > "${TINY_ROOT}/etc/conf.d/net" <<-EOF
-	# generated by 'xstage arm64 image' (board: ${BOARD})
-	config_eth0="${ETH_IP}"
-	routes_eth0="default via ${ETH_GW}"
-	dns_servers_eth0="${ETH_DNS}"
-	EOF
-    ln -snf net.lo "${TINY_ROOT}/etc/init.d/net.eth0"
-    ln -snf /etc/init.d/net.eth0 "${TINY_ROOT}/etc/runlevels/default/net.eth0"
-    ln -snf /etc/init.d/sshd    "${TINY_ROOT}/etc/runlevels/default/sshd"
+    echo "${BOARD_SD_HOSTNAME}" > "${TINY_ROOT}/etc/hostname"
+    info "Service manager: ${RC_SYSTEM} (stage3 flavour ${LIVE_FLAVOR_NAME})"
 
-    echo "hostname=\"${BOARD_SD_HOSTNAME}\"" > "${TINY_ROOT}/etc/conf.d/hostname"
+    if [[ ${RC_SYSTEM} == systemd ]]; then
+        arm64_configure_systemd
+    else
+        [[ -e ${TINY_ROOT}/etc/init.d/net.lo ]] || warn "netifrc missing in the stage3?"
+        cat > "${TINY_ROOT}/etc/conf.d/net" <<-EOF
+		# generated by 'xstage arm64 image' (board: ${BOARD})
+		config_eth0="${ETH_IP}"
+		routes_eth0="default via ${ETH_GW}"
+		dns_servers_eth0="${ETH_DNS}"
+		EOF
+        ln -snf net.lo "${TINY_ROOT}/etc/init.d/net.eth0"
+        ln -snf /etc/init.d/net.eth0 "${TINY_ROOT}/etc/runlevels/default/net.eth0"
+        ln -snf /etc/init.d/sshd    "${TINY_ROOT}/etc/runlevels/default/sshd"
+        echo "hostname=\"${BOARD_SD_HOSTNAME}\"" > "${TINY_ROOT}/etc/conf.d/hostname"
+    fi
 
     # fstab by label — tiny_make_image labels the partitions exactly so
     cat > "${TINY_ROOT}/etc/fstab" <<-EOF
@@ -1434,7 +2112,7 @@ arm64_configure() {
 	LABEL=RPIBOOT   /boot   vfat    noauto,noatime  0 0
 	LABEL=${ROOT_LABEL}  /       ext4    noatime         0 1
 	EOF
-    info "configured: eth0 ${ETH_IP} via ${ETH_GW}, sshd + net.eth0 in the default runlevel"
+    info "configured: ${BOARD_SD_HOSTNAME}, eth0 ${ETH_IP} via ${ETH_GW}, ssh on, init ${TINY_INIT}"
 }
 
 cmd_arm64_image() {
@@ -1474,6 +2152,7 @@ cmd_arm64_clean() {
 # ---------------------------------------------------------------------------
 cmd_status_all() {
     amd64_status
+    live_status
     tiny_status
     ( use_arm64_dirs; use_arm64_stage_conf; arm64_status )
 }
@@ -1519,17 +2198,32 @@ amd64)
         log)      cmd_log "$@" ;;
         qlop|qlog) cmd_qlop "$@" ;;
         clean)    cmd_clean_amd64 "$@" ;;
+        # the live half: stage3 -> squashfs + isolinux ISO. Every one of these
+        # writes into build/<live subdir>, so they all refuse a board profile.
+        unpack)     need_native_profile; cmd_live_unpack "$@" ;;
+        conf)       need_native_profile; cmd_live_conf "$@" ;;
+        pkgs)       need_native_profile; cmd_live_pkgs "$@" ;;
+        configure)  need_native_profile; cmd_live_configure "$@" ;;
+        kernel)     need_native_profile; cmd_live_kernel "$@" ;;
+        squash)     need_native_profile; cmd_live_squash "$@" ;;
+        isolinux)   need_native_profile; cmd_live_isolinux "$@" ;;
+        iso)        need_native_profile; cmd_live_iso "$@" ;;
+        live)       need_native_profile; cmd_live_all "$@" ;;
+        gate)       need_native_profile; cmd_live_gate "$@" ;;
+        usb)        need_native_profile; cmd_live_usb "$@" ;;
+        live-status) live_status ;;
+        live-clean)  need_native_profile; cmd_live_clean "$@" ;;
         *)        die "Unknown amd64 subcommand: ${CMD} (see: $0 --help)" ;;
     esac ;;
 tiny)
     case "${CMD}" in
         status)   tiny_status ;;
-        build)    cmd_tiny_build "$@" ;;
+        build)    need_board_profile; cmd_tiny_build "$@" ;;
         pack)     cmd_tiny_pack "$@" ;;
         run)      cmd_tiny_run "$@" ;;
-        rpi)        cmd_tiny_rpi "$@" ;;
-        image)      cmd_tiny_image "$@" ;;
-        image_zero) cmd_tiny_image_zero "$@" ;;
+        rpi)        need_board_profile; cmd_tiny_rpi "$@" ;;
+        image)      need_board_profile; cmd_tiny_image "$@" ;;
+        image_zero) need_board_profile; cmd_tiny_image_zero "$@" ;;
         run-rpi)  cmd_tiny_run_rpi "$@" ;;
         sd)       cmd_tiny_sd "$@" ;;
         clean)    cmd_tiny_clean "$@" ;;
@@ -1540,9 +2234,9 @@ arm64)
     case "${CMD}" in
         status)   use_arm64_stage_conf; arm64_status ;;
         seed)     use_arm64_stage_conf; cmd_seed "$@" ;;
-        unpack)   cmd_arm64_unpack "$@" ;;
-        rpi)      cmd_tiny_rpi "$@" ;;
-        image)    cmd_arm64_image "$@" ;;
+        unpack)   need_board_profile; cmd_arm64_unpack "$@" ;;
+        rpi)      need_board_profile; cmd_tiny_rpi "$@" ;;
+        image)    need_board_profile; cmd_arm64_image "$@" ;;
         run-rpi)  cmd_tiny_run_rpi "$@" ;;
         sd)       cmd_tiny_sd "$@" ;;
         clean)    cmd_arm64_clean "$@" ;;
@@ -1557,7 +2251,7 @@ arm64)
         log)      use_arm64_stage_conf; cmd_log "$@" ;;
         qlop|qlog) use_arm64_stage_conf; cmd_qlop "$@" ;;
         crossstage)
-                  use_arm64_stage_conf; cmd_arm64_crossstage "$@" ;;
+                  need_board_profile; use_arm64_stage_conf; cmd_arm64_crossstage "$@" ;;
         *)        die "Unknown arm64 subcommand: ${CMD} (see: $0 --help)" ;;
     esac ;;
 *)  die "Unknown target: ${TGT} (see: $0 targets)" ;;

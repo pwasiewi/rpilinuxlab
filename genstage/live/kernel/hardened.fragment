@@ -1,0 +1,105 @@
+# Kconfig fragment: kernel-side hardening for the amd64kdehardened profile.
+# Merged AFTER live.fragment, so where the two disagree this one wins.
+#
+# WHY THIS FILE EXISTS AT ALL: the 'hardened' portage profile is a USERLAND
+# setting — it changes the toolchain (PIE, SSP, FORTIFY_SOURCE, RELRO, BIND_NOW)
+# and rebuilds userspace with it. It does not touch the kernel. A stage3 built
+# on default/linux/amd64/23.0/hardened therefore boots an ordinary kernel unless
+# something like this fragment is applied. Answering the obvious question: yes,
+# the hardened stage3 needs this, and no, it does not come for free.
+#
+# The options below are the KSPP (Kernel Self Protection Project) recommended
+# settings, minus the ones that would make a rescue image unusable — see the
+# 'deliberately NOT set' note at the bottom.
+
+# --- memory corruption defences ---------------------------------------------
+CONFIG_HARDENED_USERCOPY=y
+CONFIG_FORTIFY_SOURCE=y
+CONFIG_STACKPROTECTOR=y
+CONFIG_STACKPROTECTOR_STRONG=y
+CONFIG_VMAP_STACK=y
+CONFIG_THREAD_INFO_IN_TASK=y
+CONFIG_SCHED_STACK_END_CHECK=y
+CONFIG_SHUFFLE_PAGE_ALLOCATOR=y
+CONFIG_SLAB_FREELIST_RANDOM=y
+CONFIG_SLAB_FREELIST_HARDENED=y
+CONFIG_RANDOM_KMALLOC_CACHES=y
+CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
+CONFIG_INIT_ON_FREE_DEFAULT_ON=y
+CONFIG_ZERO_CALL_USED_REGS=y
+CONFIG_BUG_ON_DATA_CORRUPTION=y
+CONFIG_LIST_HARDENED=y
+CONFIG_DEBUG_LIST=y
+CONFIG_DEBUG_SG=y
+CONFIG_DEBUG_CREDENTIALS=y
+CONFIG_DEBUG_NOTIFIERS=y
+CONFIG_DEBUG_VIRTUAL=y
+
+# --- address-space layout ---------------------------------------------------
+# KASLR: notably OFF in this host's zen config — an image that calls itself
+# hardened must not inherit that.
+CONFIG_RANDOMIZE_BASE=y
+CONFIG_RANDOMIZE_MEMORY=y
+CONFIG_RELOCATABLE=y
+
+# --- read-only / write-execute separation ------------------------------------
+CONFIG_STRICT_KERNEL_RWX=y
+CONFIG_STRICT_MODULE_RWX=y
+CONFIG_DEBUG_WX=y
+CONFIG_STATIC_USERMODEHELPER=y
+
+# --- structure layout randomisation (needs the gcc plugin) -------------------
+CONFIG_GCC_PLUGINS=y
+CONFIG_GCC_PLUGIN_LATENT_ENTROPY=y
+CONFIG_RANDSTRUCT_FULL=y
+
+# --- CPU-level mitigations and isolation ------------------------------------
+CONFIG_PAGE_TABLE_ISOLATION=y
+CONFIG_RETPOLINE=y
+CONFIG_CPU_MITIGATIONS=y
+CONFIG_X86_KERNEL_IBT=y
+CONFIG_X86_USER_SHADOW_STACK=y
+CONFIG_SPECULATION_MITIGATIONS=y
+CONFIG_IOMMU_SUPPORT=y
+CONFIG_INTEL_IOMMU=y
+CONFIG_INTEL_IOMMU_DEFAULT_ON=y
+CONFIG_AMD_IOMMU=y
+CONFIG_IOMMU_DEFAULT_DMA_STRICT=y
+
+# --- LSM stack ---------------------------------------------------------------
+CONFIG_SECURITY=y
+CONFIG_SECURITY_YAMA=y
+CONFIG_SECURITY_LOCKDOWN_LSM=y
+CONFIG_SECURITY_LOCKDOWN_LSM_EARLY=y
+CONFIG_SECURITY_DMESG_RESTRICT=y
+CONFIG_SECURITY_NETWORK=y
+CONFIG_SECURITY_SAFESETID=y
+CONFIG_LSM="landlock,lockdown,yama,integrity,bpf"
+CONFIG_SECURITY_LANDLOCK=y
+CONFIG_BPF_UNPRIV_DEFAULT_OFF=y
+
+# --- legacy interfaces that are pure attack surface -------------------------
+# CONFIG_DEVMEM is not set
+# CONFIG_DEVKMEM is not set
+# CONFIG_DEVPORT is not set
+# CONFIG_PROC_KCORE is not set
+# CONFIG_LEGACY_PTYS is not set
+# CONFIG_LEGACY_TIOCSTI is not set
+# CONFIG_COMPAT_BRK is not set
+# CONFIG_COMPAT_VDSO is not set
+# CONFIG_VIVID is not set
+# CONFIG_ACPI_CUSTOM_METHOD is not set
+# CONFIG_X86_MSR is not set
+#   ^ this one has a cost: sys-apps/msr-tools ships in the package list and
+#     stops working, as does anything reading /dev/cpu/*/msr (some undervolting
+#     and thermal tools). Drop the line if you need them more than you need the
+#     write-anything-to-a-model-specific-register primitive gone.
+
+# --- deliberately NOT set ---------------------------------------------------
+# CONFIG_MODULE_SIG_FORCE: signing needs a key, and a key baked into a public
+#   ISO signs nothing meaningful. Enable it for images you build and keep.
+# CONFIG_IA32_EMULATION off: it is off by default on modern configs, but forcing
+#   it here breaks 32-bit rescue binaries people actually carry on live media.
+# CONFIG_KFENCE / KASAN: sampling allocators cost real performance and this is
+#   a workstation image, not a fuzzing target.
+# CONFIG_MODULES off: a rescue image loads drivers for hardware it has not met.

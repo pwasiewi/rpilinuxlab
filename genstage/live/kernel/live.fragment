@@ -1,0 +1,247 @@
+# Kconfig fragment: what a live ISO cannot boot without.
+#
+# Merged onto the base config by 'xstage amd64 kernel' using the kernel's own
+# scripts/kconfig/merge_config.sh, then closed with 'make olddefconfig'. A
+# fragment is used instead of a full .config on purpose: symbol names survive a
+# kernel version bump, a 10 000-line .config does not.
+#
+# merge_config.sh warns loudly when a value here loses to the base, so a silent
+# drop is not possible — read its output if the image will not boot.
+
+# --- the boot chain: initramfs -> find the media -> loop-mount the squashfs --
+# genkernel builds the initrd with CDROOT=1; these are what it relies on.
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_RD_GZIP=y
+CONFIG_RD_XZ=y
+CONFIG_RD_ZSTD=y
+CONFIG_BLK_DEV_RAM=y
+CONFIG_BLK_DEV_RAM_COUNT=16
+CONFIG_BLK_DEV_RAM_SIZE=65536
+CONFIG_BLK_DEV_LOOP=y
+CONFIG_BLK_DEV_LOOP_MIN_COUNT=8
+
+# The root filesystem itself. Both codecs: LIVE_COMP defaults to zstd, but an
+# older image (or one built with XSTAGE_LIVE_COMP=xz, as bin/v does) must boot
+# on the same kernel.
+CONFIG_SQUASHFS=y
+CONFIG_SQUASHFS_ZSTD=y
+CONFIG_SQUASHFS_XZ=y
+CONFIG_SQUASHFS_ZLIB=y
+CONFIG_SQUASHFS_LZ4=y
+CONFIG_SQUASHFS_FILE_DIRECT=y
+CONFIG_SQUASHFS_DECOMP_MULTI_PERCPU=y
+
+# The boot media: ISO9660 for the CD path, vfat/UDF for the isohybrid USB path.
+CONFIG_ISO9660_FS=y
+CONFIG_JOLIET=y
+CONFIG_ZISOFS=y
+CONFIG_UDF_FS=y
+CONFIG_MSDOS_FS=y
+CONFIG_VFAT_FS=y
+CONFIG_FAT_DEFAULT_UTF8=y
+CONFIG_NLS_CODEPAGE_437=y
+CONFIG_NLS_ISO8859_1=y
+CONFIG_NLS_UTF8=y
+
+# Writable overlay on a read-only root — this is what makes the session usable.
+CONFIG_OVERLAY_FS=y
+CONFIG_TMPFS=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_TMPFS_XATTR=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+
+# --- storage controllers: the image boots on hardware it has never seen -----
+CONFIG_BLK_DEV_NVME=y
+CONFIG_ATA=y
+CONFIG_SATA_AHCI=y
+CONFIG_ATA_PIIX=y
+CONFIG_BLK_DEV_SD=y
+CONFIG_BLK_DEV_SR=y
+CONFIG_CHR_DEV_SG=y
+CONFIG_SCSI=y
+CONFIG_MMC=m
+CONFIG_MMC_BLOCK=m
+CONFIG_MMC_SDHCI=m
+CONFIG_MMC_SDHCI_PCI=m
+
+# USB, including booting from the stick the ISO was dd'ed onto.
+CONFIG_USB=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_EHCI_HCD=y
+CONFIG_USB_OHCI_HCD=y
+CONFIG_USB_UAS=y
+CONFIG_USB_STORAGE=y
+CONFIG_USB_HID=y
+CONFIG_HID_GENERIC=y
+CONFIG_USB_PRINTER=m
+
+# virtio: without these 'xp <profile> gate' boots into a kernel panic.
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_NET=y
+CONFIG_VIRTIO_CONSOLE=y
+CONFIG_VIRTIO_BALLOON=y
+CONFIG_SCSI_VIRTIO=y
+CONFIG_DRM_VIRTIO_GPU=m
+CONFIG_HYPERVISOR_GUEST=y
+CONFIG_PARAVIRT=y
+CONFIG_KVM_GUEST=y
+
+# --- rescue-image filesystems: mount whatever the broken machine has --------
+CONFIG_EXT4_FS=y
+CONFIG_EXT4_FS_POSIX_ACL=y
+CONFIG_EXT4_FS_SECURITY=y
+CONFIG_BTRFS_FS=y
+CONFIG_BTRFS_FS_POSIX_ACL=y
+CONFIG_XFS_FS=m
+CONFIG_F2FS_FS=m
+CONFIG_NTFS3_FS=m
+CONFIG_FUSE_FS=y
+CONFIG_NFS_FS=m
+CONFIG_CIFS=m
+
+# Encrypted and stacked block devices — a rescue image that cannot open a LUKS
+# volume is useless on this lab's own machines.
+CONFIG_MD=y
+CONFIG_BLK_DEV_DM=y
+CONFIG_DM_CRYPT=y
+CONFIG_DM_SNAPSHOT=y
+CONFIG_DM_THIN_PROVISIONING=m
+CONFIG_DM_MIRROR=m
+CONFIG_BLK_DEV_MD=y
+CONFIG_MD_RAID0=m
+CONFIG_MD_RAID1=m
+CONFIG_MD_RAID456=m
+CONFIG_CRYPTO_XTS=y
+CONFIG_CRYPTO_AES_NI_INTEL=y
+CONFIG_CRYPTO_SHA256=y
+CONFIG_CRYPTO_SHA512=y
+CONFIG_CRYPTO_USER_API_SKCIPHER=y
+
+# --- networking: modules, because the driver depends on the machine ---------
+CONFIG_NET=y
+CONFIG_INET=y
+CONFIG_IPV6=y
+CONFIG_PACKET=y
+CONFIG_UNIX=y
+CONFIG_E1000=m
+CONFIG_E1000E=m
+CONFIG_IGB=m
+CONFIG_IXGBE=m
+CONFIG_R8169=m
+CONFIG_ATL1C=m
+CONFIG_TIGON3=m
+CONFIG_CFG80211=m
+CONFIG_MAC80211=m
+CONFIG_IWLWIFI=m
+CONFIG_IWLMVM=m
+CONFIG_ATH9K=m
+CONFIG_ATH10K=m
+CONFIG_ATH11K=m
+CONFIG_RTW88=m
+CONFIG_RTW89=m
+CONFIG_MT76x2U=m
+CONFIG_BT=m
+CONFIG_BT_HCIBTUSB=m
+# firewalling + containers (docker/lxc are in the package list)
+CONFIG_NETFILTER=y
+CONFIG_NF_TABLES=m
+CONFIG_NF_CONNTRACK=m
+CONFIG_BRIDGE=m
+CONFIG_VETH=m
+CONFIG_MACVLAN=m
+CONFIG_TUN=m
+CONFIG_NAMESPACES=y
+CONFIG_USER_NS=y
+CONFIG_CGROUPS=y
+CONFIG_MEMCG=y
+CONFIG_BLK_CGROUP=y
+CONFIG_CGROUP_BPF=y
+
+# --- console and graphics ---------------------------------------------------
+# A live image must always produce a picture: KMS where possible, EFI/VESA
+# framebuffer as the floor (the 'live-nomodeset' boot entry relies on it).
+CONFIG_VT=y
+CONFIG_VT_CONSOLE=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y
+CONFIG_FB=y
+CONFIG_FB_EFI=y
+CONFIG_FB_VESA=y
+CONFIG_SYSFB_SIMPLEFB=y
+CONFIG_DRM=y
+CONFIG_DRM_FBDEV_EMULATION=y
+CONFIG_DRM_SIMPLEDRM=y
+CONFIG_DRM_I915=m
+CONFIG_DRM_XE=m
+CONFIG_DRM_AMDGPU=m
+CONFIG_DRM_RADEON=m
+CONFIG_DRM_NOUVEAU=m
+CONFIG_DRM_BOCHS=m
+CONFIG_DRM_CIRRUS_QEMU=m
+# serial console: how 'xp <profile> gate -nographic' shows anything at all
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+
+# --- firmware and platform --------------------------------------------------
+CONFIG_EFI=y
+CONFIG_EFI_STUB=y
+CONFIG_EFI_VARS_PSTORE=m
+CONFIG_EFIVAR_FS=y
+CONFIG_EFI_PARTITION=y
+CONFIG_MSDOS_PARTITION=y
+CONFIG_MICROCODE=y
+CONFIG_ACPI=y
+CONFIG_X86_MCE=y
+CONFIG_HOTPLUG_CPU=y
+
+# --- audio (the desktop profiles ship pipewire) -----------------------------
+CONFIG_SOUND=m
+CONFIG_SND=m
+CONFIG_SND_HDA_INTEL=m
+CONFIG_SND_HDA_GENERIC=m
+CONFIG_SND_USB_AUDIO=m
+
+# --- userland expectations --------------------------------------------------
+# The image runs OpenRC, but genkernel and several tools want these anyway.
+CONFIG_SYSVIPC=y
+CONFIG_POSIX_MQUEUE=y
+CONFIG_EPOLL=y
+CONFIG_INOTIFY_USER=y
+CONFIG_FANOTIFY=y
+CONFIG_SIGNALFD=y
+CONFIG_TIMERFD=y
+CONFIG_EVENTFD=y
+CONFIG_SECCOMP=y
+CONFIG_SECCOMP_FILTER=y
+CONFIG_BINFMT_ELF=y
+CONFIG_BINFMT_SCRIPT=y
+# binfmt_misc is how the ARM half of this lab runs aarch64 binaries under
+# qemu-user — the amd64 image keeps it so it can host that work too
+CONFIG_BINFMT_MISC=m
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+CONFIG_CONFIGFS_FS=y
+CONFIG_DEBUG_FS=y
+
+# --- observability: eBPF, audit, integrity ----------------------------------
+# dev-util/tracee needs BTF; without CONFIG_DEBUG_INFO_BTF it cannot attach.
+CONFIG_BPF=y
+CONFIG_BPF_SYSCALL=y
+CONFIG_BPF_JIT=y
+CONFIG_DEBUG_INFO=y
+CONFIG_DEBUG_INFO_BTF=y
+CONFIG_FTRACE=y
+CONFIG_KPROBES=y
+CONFIG_UPROBES=y
+CONFIG_AUDIT=y
+CONFIG_AUDITSYSCALL=y
+CONFIG_INTEGRITY=y
+CONFIG_IMA=y
+CONFIG_IMA_APPRAISE=y
+CONFIG_EVM=y
+CONFIG_TCG_TPM=y
+CONFIG_TCG_TIS=y
+CONFIG_HW_RANDOM_TPM=y

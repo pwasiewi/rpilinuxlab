@@ -261,8 +261,13 @@ cmd_setup() {
     # 3. target profile
     local prof_link="${SYSROOT}/etc/portage/make.profile"
     mkdir -p "${SYSROOT}/etc/portage"
-    if [[ ! -e ${prof_link} ]] || ! PORTAGE_CONFIGROOT="${SYSROOT}" eselect profile show 2>/dev/null | grep -q arm64; then
-        info "Setting profile ${PROFILE}"
+    # Compare against the profile we actually want, not merely "is it arm64":
+    # an xp profile switch (openrc -> systemd) keeps the arch and would
+    # otherwise leave the sysroot on the old profile, cross-building OpenRC
+    # packages for a systemd rootfs.
+    local have; have=$(readlink -f "${prof_link}" 2>/dev/null || true)
+    if [[ ${have} != */profiles/${PROFILE} ]]; then
+        info "Setting profile ${PROFILE} (was ${have#*/profiles/})"
         PORTAGE_CONFIGROOT="${SYSROOT}" eselect profile set "${PROFILE}" ||
             die "Profile ${PROFILE} not found — list: PORTAGE_CONFIGROOT=${SYSROOT} eselect profile list"
     fi

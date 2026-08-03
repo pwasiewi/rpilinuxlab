@@ -1,0 +1,590 @@
+# amd64.pkgs — package catalogue for the native (PROF_KIND=native) live
+# profiles: amd64, amd64kde, intelgnome, …
+#
+# Derived from this host's /var/lib/portage/world — top-level packages ONLY.
+# Dependencies are deliberately absent: portage pulls them in anyway, and
+# listing them would freeze today's dependency graph into the profile.
+#
+# FORMAT
+#   # @tier <name>   opens a tier; everything until the next @tier belongs to it
+#   # ...            free comment, ignored
+#   <category/pkg>   one atom per line (slot deps like dev-lang/lua:5.4 are fine)
+#
+# A profile selects tiers with PROF_LIVE_TIERS and may append single atoms with
+# PROF_LIVE_EXTRA_PKGS. Tiers are unioned in the order the profile lists them;
+# xstage deduplicates. Nothing here is mandatory — @system already ships the
+# real base, these are the packages that make the image useful.
+#
+# Sizing note: 'base portage net fs sec arch admin' lands around a 1.5 GB
+# squashfs. Adding 'kde' or 'gnome' roughly doubles it; the host-* tiers and
+# 'office' run to tens of GB and belong on the host, not on a live image.
+
+
+# @tier base
+# Shell, editors, pagers and the handful of tools you want before anything else.
+app-shells/bash
+app-shells/bash-completion
+app-shells/gentoo-bashcomp
+app-editors/nano
+app-editors/vim
+app-misc/mc
+app-misc/jq
+app-misc/rlwrap
+app-misc/fastfetch
+sys-apps/bat
+sys-apps/most
+sys-apps/pv
+sys-apps/texinfo
+app-text/aha
+app-text/pastebinit
+dev-vcs/git
+net-misc/curl
+net-misc/openssh
+net-misc/keychain
+virtual/ssh
+
+
+# @tier portage
+# Portage tooling — a live image that can actually build and debug packages.
+app-portage/eix
+app-portage/gentoolkit
+app-portage/portage-utils
+app-portage/genlop
+app-portage/mirrorselect
+app-portage/ufed
+app-portage/euses
+app-portage/elogv
+app-portage/portpeek
+app-portage/pfl
+app-portage/gemato
+app-portage/cpuid2cpuflags
+app-portage/smart-live-rebuild
+app-admin/eselect
+app-admin/webapp-config
+app-eselect/eselect-repository
+app-eselect/eselect-python
+app-eselect/eselect-ruby
+sys-apps/portage
+sys-apps/pkgcore
+
+
+# @tier admin
+# Day-to-day system administration and hardware inspection.
+app-admin/sudo
+app-admin/doas
+app-admin/logrotate
+app-admin/sysstat
+app-admin/pydf
+app-admin/pwgen
+app-admin/testdisk
+app-admin/usbview
+app-admin/chrpath
+app-admin/eclean-kernel
+sys-apps/inxi
+sys-apps/lshw
+sys-apps/usbutils
+sys-apps/hdparm
+sys-apps/ethtool
+sys-apps/lm-sensors
+sys-apps/msr-tools
+sys-apps/hwloc
+sys-apps/keyutils
+sys-apps/sg3_utils
+sys-apps/dcfldd
+sys-apps/rng-tools
+sys-apps/fwupd
+sys-process/htop
+sys-process/btop
+sys-process/iotop
+sys-process/lsof
+sys-process/criu
+sys-power/acpi
+sys-power/acpid
+sys-power/acpitool
+sys-power/powertop
+sys-power/suspend
+sys-firmware/intel-microcode
+sys-kernel/linux-firmware
+
+
+# @tier fs
+# Filesystems, encryption containers, partitioning, rescue.
+sys-fs/btrfs-progs
+sys-fs/btrfsmaintenance
+sys-fs/compsize
+sys-fs/xfsprogs
+sys-fs/f2fs-tools
+sys-fs/dosfstools
+sys-fs/exfat-utils
+sys-fs/fuse-exfat
+sys-fs/fuse
+sys-fs/cryptsetup
+sys-fs/lvm2
+sys-fs/multipath-tools
+sys-block/thin-provisioning-tools
+sys-fs/squashfs-tools
+sys-fs/inotify-tools
+sys-fs/udisks
+sys-fs/ddrescue
+sys-block/gparted
+sys-block/sedutil
+sys-apps/gptfdisk
+app-admin/btrfs-assistant
+net-fs/nfs-utils
+net-fs/libnfs
+app-backup/restic
+
+
+# @tier arch
+# Archivers and compressors — the parallel/threaded ones matter on 16 cores.
+app-arch/7zip
+app-arch/zstd
+app-arch/lz4
+app-arch/lzop
+app-arch/lrzip
+app-arch/brotli
+app-arch/pigz
+app-arch/pbzip2
+app-arch/lbzip2
+app-arch/pixz
+app-arch/snappy
+app-arch/unzip
+app-arch/unrar
+app-arch/rar
+app-arch/deb2targz
+
+
+# @tier net
+# Networking clients, diagnostics and VPNs.
+net-misc/networkmanager
+net-misc/dhcpcd
+net-misc/bridge-utils
+net-misc/iperf
+net-misc/putty
+net-misc/freerdp
+net-misc/netstat-nat
+net-misc/ntpsec
+net-misc/modemmanager
+net-analyzer/nmap
+net-analyzer/traceroute
+net-analyzer/iftop
+net-analyzer/nload
+net-analyzer/iptraf-ng
+net-analyzer/vnstat
+net-analyzer/arp-scan
+net-analyzer/wireshark
+net-dns/bind
+net-dns/dnsmasq
+net-dns/doggo
+net-firewall/iptables
+net-firewall/ebtables
+net-firewall/firewalld
+net-vpn/openvpn
+net-vpn/openconnect
+net-vpn/openfortivpn
+net-vpn/networkmanager-openvpn
+net-wireless/iw
+net-wireless/wavemon
+net-wireless/bluez
+net-p2p/syncthing
+
+
+# @tier sec
+# Auditing, integrity and forensics — the toolbox from info/intro-hardening.md.
+app-forensics/aide
+app-forensics/lynis
+app-forensics/rkhunter
+app-forensics/yara-x
+sys-process/audit
+sys-apps/usbguard
+sys-apps/bubblewrap
+sys-apps/xdg-dbus-proxy
+app-crypt/tpm2-tools
+app-crypt/ima-evm-utils
+app-crypt/sbsigntools
+app-crypt/efitools
+sys-boot/mokutil
+sys-boot/shim
+sys-boot/efibootmgr
+sys-boot/gnu-efi
+
+
+# @tier crypt
+# Secrets, smartcards and password managers.
+app-crypt/gnupg
+app-crypt/pinentry
+app-crypt/gcr
+app-crypt/libsecret
+app-crypt/paperkey
+app-crypt/ccid
+app-admin/pass
+app-admin/keepassxc
+app-admin/passwordsafe
+sys-apps/pcsc-lite
+sys-apps/pcsc-tools
+sys-auth/libyubikey
+sys-auth/yubico-piv-tool
+app-crypt/yubikey-manager
+sys-auth/pam_u2f
+sys-auth/pam_yubico
+sys-auth/pam_mount
+sys-auth/pambase
+sys-auth/polkit
+sys-auth/rtkit
+gnome-base/gnome-keyring
+
+
+# @tier boot
+# Bootloaders and initramfs generators for the installed target, not the ISO.
+sys-boot/grub
+sys-boot/syslinux
+sys-boot/os-prober
+sys-boot/plymouth
+sys-boot/uefi-mkconfig
+sys-kernel/dracut
+sys-kernel/genkernel
+sys-kernel/installkernel
+sys-kernel/linux-headers
+
+
+# @tier lang
+# Language runtimes. Heavy but expected on anything called a Gentoo live image.
+dev-lang/python
+dev-lang/perl
+dev-lang/ruby
+dev-lang/lua:5.1
+dev-lang/lua:5.4
+dev-lang/tcl
+dev-lang/tk
+dev-lang/go
+dev-lang/rust-bin
+dev-lang/php
+dev-db/sqlite
+dev-python/setuptools
+dev-python/docutils
+dev-python/python-dotenv
+
+
+# @tier dev
+# Compilers, build systems, debuggers, profilers.
+sys-devel/gcc
+sys-devel/binutils
+sys-devel/gettext
+sys-devel/m4
+sys-devel/distcc
+llvm-core/clang
+llvm-core/llvm
+llvm-core/lldb
+dev-build/cmake
+dev-build/scons
+dev-build/autoconf-archive
+dev-debug/gdb
+dev-debug/strace
+dev-debug/valgrind
+dev-debug/bpftrace
+dev-util/perf
+dev-util/patchelf
+dev-util/diffstat
+dev-util/unifdef
+dev-util/pkgconf
+dev-util/github-cli
+virtual/pkgconfig
+
+
+# @tier lint
+# Linters, formatters and static analysis — a tier of its own on purpose.
+dev-util/ruff
+dev-python/black
+dev-util/pkgcheck
+dev-util/pkgdev
+app-forensics/yara
+app-text/doxygen
+
+
+# @tier virt
+# Virtualisation and containers. Note: NO emulator profiles pull qemu from
+# here — the ARM side of the lab installs it on the host, not into an image.
+app-containers/docker
+app-containers/docker-cli
+app-containers/docker-compose
+app-containers/docker-buildx
+app-containers/containerd
+app-containers/runc
+app-containers/lxc
+app-containers/lxc-templates
+app-containers/lxd
+sys-fs/lxcfs
+app-emulation/libvirt
+dev-python/libvirt-python
+app-emulation/spice
+app-emulation/spice-protocol
+www-apps/novnc
+
+
+# @tier x11
+# Xorg server and the input/video drivers that are safe to ship generically.
+x11-base/xorg-server
+x11-base/xorg-drivers
+x11-apps/xrandr
+x11-apps/xdpyinfo
+x11-apps/xhost
+x11-apps/xkill
+x11-apps/xinit
+x11-apps/xkbcomp
+x11-apps/setxkbmap
+x11-apps/mesa-progs
+x11-misc/read-edid
+x11-misc/colord
+x11-misc/shared-mime-info
+x11-misc/xsensors
+x11-misc/x11vnc
+x11-drivers/xf86-input-synaptics
+media-fonts/fonts-meta
+dev-util/clinfo
+dev-util/vulkan-tools
+virtual/opencl
+
+
+# @tier wayland
+# Wayland compositor accessories (the Plasma session itself is in @tier kde).
+gui-apps/wl-clipboard
+gui-apps/waypipe
+gui-apps/waybar
+gui-apps/wofi
+app-misc/wayland-utils
+x11-misc/dunst
+sys-apps/xdg-desktop-portal
+
+
+# @tier term
+# Terminal emulators.
+x11-terms/kitty
+x11-terms/alacritty
+x11-terms/xterm
+
+
+# @tier kde
+# KDE Plasma session — pair with PROF_LIVE_SETS="@kde-baseapps-26.04 …".
+x11-misc/sddm
+media-fonts/oxygen-fonts
+sys-auth/polkit-qt
+app-crypt/qca
+net-irc/konversation
+app-text/qpdfview
+
+
+# @tier gnome
+# GNOME session bits. Intentionally small: the meta-package does the work.
+gnome-base/dconf
+gnome-base/gsettings-desktop-schemas
+gnome-base/librsvg
+gnome-extra/nm-applet
+gnome-extra/polkit-gnome
+x11-themes/gnome-themes-standard
+x11-themes/gtk-engines-adwaita
+
+
+# @tier media
+# Playback, conversion and image handling.
+media-video/ffmpeg
+media-video/vlc
+media-video/mplayer
+media-video/mkvtoolnix
+media-video/pipewire
+media-video/wireplumber
+media-sound/alsa-utils
+media-sound/pavucontrol
+media-sound/sox
+media-sound/audacious
+media-plugins/alsa-plugins
+media-gfx/imagemagick
+media-gfx/feh
+media-gfx/imv
+media-gfx/exiv2
+media-gfx/qrencode
+media-gfx/graphviz
+app-text/poppler
+app-text/ghostscript-gpl
+
+
+# @tier print
+# CUPS and friends.
+net-print/cups
+net-print/cups-filters
+net-print/cups-pdf
+net-print/libcupsfilters
+net-print/foomatic-db-ppds
+
+
+# @tier browser
+# One browser is enough for a live image; profiles can add more.
+www-client/firefox-bin
+
+
+# @tier office
+# Documents and typesetting. Multi-GB — opt in deliberately.
+app-office/libreoffice
+app-office/libreoffice-l10n
+app-text/calibre
+app-text/foliate
+app-text/pandoc-bin
+app-text/texlive
+app-text/texlive-core
+dev-texlive/texlive-langpolish
+dev-texlive/texlive-mathscience
+dev-texlive/texlive-pstricks
+dev-texlive/texlive-xetex
+dev-tex/latexmk
+dev-tex/latex-beamer
+app-text/hunspell
+app-text/nuspell
+app-text/enchant
+
+
+# @tier fun
+# Terminal toys. Tiny, and they make a demo image memorable.
+games-misc/cowsay
+app-misc/sl
+app-misc/cmatrix
+app-misc/figlet
+app-misc/toilet
+app-misc/oneko
+app-misc/linux-logo
+
+
+# @tier overlay
+# NOT in ::gentoo. The host runs these, but a live image needs the overlay
+# enabled before they resolve, so they sit in a tier of their own: select it
+# only together with PROF_LIVE_REPOS. Provider in the trailing comment.
+app-misc/glow                   # guru
+app-admin/gentoo_update         # guru
+gui-apps/rofi-wayland           # guru
+gui-apps/wlogout                # guru
+gui-apps/hyprpicker             # hyproverlay
+games-misc/asciiquarium         # guru
+games-misc/cbonsai              # guru
+sys-fs/encfs                    # mv
+sys-kernel/genkernel-next       # thegreatmcpain
+dev-python/semgrep              # pwr
+dev-util/codeql-bin             # pwr
+dev-util/sqlfluff               # tatsh-overlay
+dev-util/prettier               # tatsh-overlay
+dev-util/semgrep-core-bin       # pentoo
+
+
+# ---------------------------------------------------------------------------
+# Tiers below are HOST-ONLY. They exist so the catalogue stays a faithful
+# record of world(5), but no live profile should select them: they are either
+# machine-specific (out-of-tree modules bound to this exact kernel), enormous
+# (the ML stack alone outweighs everything above), or meaningless off this box.
+# ---------------------------------------------------------------------------
+
+# @tier host-hw
+# Bound to this laptop's hardware and its running kernel.
+x11-drivers/nvidia-drivers
+sys-apps/openrazer
+sys-apps/polychromatic
+app-misc/openrgb
+app-misc/solaar
+app-misc/piper
+app-misc/ddcui
+app-misc/evtest
+sys-kernel/zen-sources:7.1
+sys-kernel/modprobed-db
+sys-power/bbswitch
+x11-misc/bumblebee
+x11-misc/primus
+x11-misc/virtualgl
+app-emulation/virtualbox
+app-emulation/virtualbox-modules
+app-emulation/qemu
+app-emulation/vagrant
+dev-util/packer
+
+# @tier host-ai
+# Local LLM serving and training. Hundreds of GB with dependencies.
+sci-ml/pytorch
+sci-ml/caffe2
+sci-ml/transformers
+sci-ml/accelerate
+sci-ml/peft
+sci-ml/datasets
+sci-ml/huggingface_hub
+sci-ml/unsloth
+sci-ml/unsloth-zoo
+sci-ml/gloo
+sci-ml/lemonade
+sci-misc/llama-cpp
+sci-misc/llama-cpp-cpu
+sci-misc/ik-llama-cpp
+dev-python/vllm
+dev-python/bitsandbytes
+dev-python/triton-bin
+dev-python/liger-kernel
+dev-python/scikit-learn
+dev-python/pandas
+dev-python/matplotlib
+dev-python/pyarrow
+dev-python/nltk
+dev-util/nvidia-cuda-toolkit
+dev-python/nvidia-cudnn-frontend
+app-containers/nvidia-container-toolkit
+app-misc/colibri
+app-misc/nanoeuler
+app-misc/qwen-code
+dev-util/opencode-bin
+
+# @tier host-sci
+# Population-genetics pipelines (AADR/qpAdm, G25).
+sci-biology/admixtools
+sci-biology/eigensoft
+sci-biology/plink
+sci-biology/plink2-bin
+sci-mathematics/gmp-ecm
+dev-lang/R
+virtual/blas
+virtual/lapack
+virtual/lapacke
+
+# @tier host-cross
+# crossdev toolchains — installed by 'xarm setup' on the HOST, never imaged.
+# This is the ARM half of the lab; the amd64 half is what these profiles build.
+cross-aarch64-unknown-linux-gnu/binutils
+cross-aarch64-unknown-linux-gnu/gcc
+cross-aarch64-unknown-linux-gnu/glibc
+cross-aarch64-unknown-linux-gnu/linux-headers
+cross-armv7a-hardfloat-linux-gnueabi/binutils
+cross-armv7a-hardfloat-linux-gnueabi/gcc
+cross-armv7a-hardfloat-linux-gnueabi/glibc
+cross-armv7a-hardfloat-linux-gnueabi/linux-headers
+cross-arm-softfloat-linux-gnueabi/binutils
+cross-arm-softfloat-linux-gnueabi/gcc
+cross-arm-softfloat-linux-gnueabi/glibc
+cross-arm-softfloat-linux-gnueabi/linux-headers
+sys-devel/crossdev
+dev-util/catalyst
+dev-util/android-tools
+app-mobilephone/heimdall
+
+# @tier host-desktop
+# Proprietary / account-bound desktop apps from this workstation.
+net-im/slack
+net-im/discord
+net-im/teams-for-linux
+media-sound/spotify
+www-client/google-chrome
+www-client/brave-bin
+app-editors/vscode
+app-editors/vscodium
+dev-util/pycharm-community
+dev-db/dbeaver-bin
+dev-db/sqldeveloper
+dev-db/oracle-instantclient
+dev-util/postman
+app-admin/awscli-bin
+app-admin/aws-session-manager-plugin
+app-admin/bitwarden-desktop-bin
+games-util/steam-launcher
+games-util/lutris
+games-util/gamemode
+games-util/mangohud

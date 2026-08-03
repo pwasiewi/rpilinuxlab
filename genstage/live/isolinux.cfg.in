@@ -1,0 +1,25 @@
+## isolinux.cfg for the xstage live image — rendered by 'xstage amd64 isolinux'
+## Placeholders: @APPEND@ (kernel cmdline), @VOLID@ (ISO volume id)
+##
+## Legacy BIOS only, like the /etc/liveusb layout bin/v builds. The initrd is a
+## genkernel one built with CDROOT=1: it scans the boot media for the marker
+## file /livecd, then loop-mounts /livecd.squashfs as the real root, which is
+## why no root=UUID appears below.
+
+default live
+timeout 100
+prompt 1
+display boot.msg
+F1 boot.msg
+
+label live
+	kernel gentoo
+	append initrd=initrd @APPEND@
+
+label live-nomodeset
+	kernel gentoo
+	append initrd=initrd @APPEND@ nomodeset
+
+label live-single
+	kernel gentoo
+	append initrd=initrd @APPEND@ single

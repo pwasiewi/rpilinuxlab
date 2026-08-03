@@ -1,0 +1,9 @@
+
+  @VOLID@ — Gentoo live image built by xstage (rpilinuxlab)
+
+  live             boot the squashfs system      (default, 10 s)
+  live-nomodeset   same, without KMS             (blank screen? try this)
+  live-single      same, single-user
+
+  root password: @ROOTPASS@
+
