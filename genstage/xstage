@@ -1849,8 +1849,12 @@ cmd_tiny_sd() {
 tiny_status() {
     local tc=ok rootfs="-" sq="-" ird="-" pkgs="-"
     if ! command -v "${CROSS_EMERGE}" >/dev/null 2>&1; then tc=MISSING; fi
-    if [[ -d ${SYSROOT}/var/cache/binpkgs ]]; then
-        pkgs=$({ find "${SYSROOT}/var/cache/binpkgs" -name '*.gpkg.tar' -o -name '*.tbz2' 2>/dev/null || true; } | wc -l)
+    # xarm splits the binpkg cache per portage profile (binpkgs-<profile>);
+    # count the one this profile would actually use, not every cache present
+    local pkgdir="${SYSROOT}/var/cache/binpkgs-$(echo "${PROFILE#default/linux/}" | tr '/' '-')"
+    [[ -d ${pkgdir} ]] || pkgdir="${SYSROOT}/var/cache/binpkgs"   # pre-split layout
+    if [[ -d ${pkgdir} ]]; then
+        pkgs=$({ find "${pkgdir}" -name '*.gpkg.tar' -o -name '*.tbz2' 2>/dev/null || true; } | wc -l)
     fi
     # du exits non-zero on subdirs unreadable without root but still prints
     # the total — don't let pipefail+set -e turn that into a dead status

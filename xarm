@@ -71,6 +71,13 @@ TARGET="${XARM_TARGET:-aarch64-unknown-linux-gnu}"
 PROFILE="${XARM_PROFILE:-default/linux/arm64/23.0}"
 CPU="${XARM_CPU:-cortex-a72}"
 SYSROOT="/usr/${TARGET}"
+# Binary packages are only valid for the profile that built them — USE, and
+# whatever else the profile settles, is baked into the tarball. One cache per
+# PORTAGE profile (not per xp profile: two xp profiles on the same portage
+# profile can safely share), so an openrc <-> systemd switch cannot serve
+# stale packages. default/linux/arm64/23.0/systemd -> binpkgs-arm64-23.0-systemd
+PKGDIR_NAME="binpkgs-$(echo "${PROFILE#default/linux/}" | tr '/' '-')"
+PKGDIR_PATH="${SYSROOT}/var/cache/${PKGDIR_NAME}"
 XEMERGE="emerge-${TARGET}"
 LOGDIR="/var/tmp/xarm"
 QEMU_BIN="/usr/bin/qemu-aarch64"
@@ -132,6 +139,28 @@ binfmt_register() {
 # (the old "# xarm settings" block was append-once, which made XARM_CPU a
 # silent no-op after the first setup)
 # ---------------------------------------------------------------------------
+# Rename the pre-split 'binpkgs' to the per-profile name of the profile that
+# actually produced it — read from the sysroot symlink as it stands, BEFORE
+# setup repoints it. Nothing is deleted: an OpenRC cache stays fully usable by
+# an OpenRC profile, it just stops being visible to the others.
+migrate_legacy_pkgdir() {
+    local legacy="${SYSROOT}/var/cache/binpkgs"
+    [[ -d ${legacy} ]] || return 0
+    local cur; cur=$(readlink -f "${SYSROOT}/etc/portage/make.profile" 2>/dev/null || true)
+    if [[ ${cur} != */profiles/* ]]; then
+        warn "Legacy ${legacy} exists but the sysroot has no readable profile symlink — cannot tell which profile built it. Rename it by hand or delete it; leaving it untouched."
+        return 0
+    fi
+    local from="${cur#*/profiles/}"
+    local name="binpkgs-$(echo "${from#default/linux/}" | tr '/' '-')"
+    if [[ -e ${SYSROOT}/var/cache/${name} ]]; then
+        warn "Both ${legacy} and ${name} exist — merge them by hand; leaving both."
+        return 0
+    fi
+    info "Migrating legacy binpkgs/ -> ${name}/ (built by profile ${from})"
+    mv "${legacy}" "${SYSROOT}/var/cache/${name}"
+}
+
 sysroot_write_makeconf() {
     local mc="${SYSROOT}/etc/portage/make.conf"
     mkdir -p "${SYSROOT}/etc/portage"
@@ -153,8 +182,9 @@ sysroot_write_makeconf() {
 	FCFLAGS="\${COMMON_FLAGS}"
 	FFLAGS="\${COMMON_FLAGS}"
 	MAKEOPTS="-j$(nproc) -l$(nproc)"
-	# binpkgs for the Pi: ROOT-relative, served by 'xarm binhost'
-	PKGDIR="\${ROOT}var/cache/binpkgs"
+	# binpkgs for the Pi: ROOT-relative, served by 'xarm binhost'. The name
+	# carries the profile (${PROFILE}) — see PKGDIR_NAME in xarm.
+	PKGDIR="\${ROOT}var/cache/${PKGDIR_NAME}"
 	FEATURES="buildpkg -news"
 	# qemu-user chroot cannot take the namespace sandboxes (Embedded Handbook)
 	FEATURES="\${FEATURES} -pid-sandbox -ipc-sandbox -network-sandbox"
@@ -258,6 +288,13 @@ cmd_setup() {
 	EOF
     fi
 
+    # 2b. One-time migration to the per-profile binpkg cache. It MUST run
+    # before step 3 repoints the profile symlink: the packages in the legacy
+    # 'binpkgs' belong to the profile that is still active right now, not to
+    # the one we are about to switch to. Renaming after the switch would label
+    # an OpenRC cache as systemd — the exact confusion the split prevents.
+    migrate_legacy_pkgdir
+
     # 3. target profile
     local prof_link="${SYSROOT}/etc/portage/make.profile"
     mkdir -p "${SYSROOT}/etc/portage"
@@ -290,7 +327,7 @@ cmd_setup() {
     fi
 
     # 5. dirs shared with chroot builds
-    mkdir -p "${SYSROOT}/var/cache/binpkgs" "${SYSROOT}/var/cache/distfiles" "${LOGDIR}"
+    mkdir -p "${PKGDIR_PATH}" "${SYSROOT}/var/cache/distfiles" "${LOGDIR}"
 
     # 6. binfmt for qemu chroot fallback
     binfmt_register
@@ -470,8 +507,10 @@ cmd_1by1() {
 # ---------------------------------------------------------------------------
 cmd_binhost() {
     local port="${1:-${BINHOST_PORT_DEFAULT}}"
-    local pkgdir="${SYSROOT}/var/cache/binpkgs"
-    [[ -d ${pkgdir} ]] || die "No ${pkgdir} — build something first (FEATURES=buildpkg)"
+    # the cache of the ACTIVE profile: serving a systemd Pi from an openrc
+    # cache is exactly what the per-profile split exists to prevent
+    local pkgdir="${PKGDIR_PATH}"
+    [[ -d ${pkgdir} ]] || die "No ${pkgdir} (profile ${PROFILE}) — build something first (FEATURES=buildpkg), or check you are on the intended xp profile"
     local ip; ip=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || echo "HOST_IP")
     info "Serving ${pkgdir} on http://${ip}:${port}/"
     echo
