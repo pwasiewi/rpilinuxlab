@@ -19,7 +19,8 @@
 #   enter [sysroot|PATH] [CMD]  board: qemu-user chroot into the profile's
 #                   build rootfs (default), the crossdev sysroot, or PATH,
 #                   native: an interactive shell in the live image tree [root]
-#   emerge ARGS     cross-emerge into the sysroot (xarm emerge)        [root]
+#   emerge ARGS     board: cross-emerge into the sysroot (xarm emerge),
+#                   native: emerge inside the live image chroot        [root]
 #   1by1 ARGS       xarm 1by1                                          [root]
 #   pkgs            cross-emerge $PROF_PKGS into the profile rootfs    [root]
 #   seed snapshot spec stage1 stage2 stage3 all verify crossstage
@@ -165,6 +166,12 @@ enter)
     XARM_CHROOT_ROOT="${root}" exec "$(xarm_bin)" chroot "$@"
     ;;
 emerge|1by1)
+    # native profiles have no cross-toolchain: 'emerge' means emerge inside the
+    # live image, with the same bind mounts (distfiles, build dir, ccache) that
+    # 'pkgs' runs with
+    if ! is_board && [[ ${VERB} == emerge ]]; then
+        exec "${XSTAGE}" "${T}" live-emerge "$@"
+    fi
     need_board
     exec "$(xarm_bin)" "${VERB}" "$@"
     ;;

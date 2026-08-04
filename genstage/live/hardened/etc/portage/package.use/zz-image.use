@@ -58,3 +58,24 @@ dev-qt/qtbase -tslib
 # builds the TurboJPEG Java wrapper, which drags a whole JDK into the graph.
 # Nothing in this image loads JPEGs through Java.
 media-libs/libjpeg-turbo -java
+
+# Breaks pillow -> harfbuzz -> glib -> docutils -> pillow, the one cycle in
+# this image that portage can suggest no cut for: dev-libs/glib BDEPENDs
+# dev-python/docutils unconditionally, and docutils BDEPENDs pillow the same
+# way, so neither edge has a flag to turn off. Only pillow[truetype] does.
+#
+# Chosen over a two-pass build (merge pillow once without truetype, let the
+# main run rebuild it with it) to keep the pipeline single-pass.
+#
+# What it costs: PIL/Pillow's ImageFont TrueType rendering, and with it
+# app-text/calibre, which USE-depends on pillow[truetype] and is therefore
+# dropped from PROF_LIVE_PKGS. matplotlib is unaffected — it carries its own
+# freetype. Re-enable the flag and rebuild in the running system if needed.
+dev-python/pillow -truetype
+
+# Breaks zziplib -> libsdl2 -> libpulse -> gtk+:3 -> cups -> xdg-utils
+# -> xmlto -> texlive-formatsextra -> texlive-core -> zziplib.
+# zziplib[sdl] adds an SDL_rwops shim for reading zip archives through SDL.
+# Nothing in this image reads zips that way, and the flag is only set because
+# 'sdl' is global.
+dev-libs/zziplib -sdl

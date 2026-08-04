@@ -267,8 +267,9 @@ LIVE_FEATURES="${XSTAGE_LIVE_FEATURES:-}"
 LIVE_CCACHE_DIR="${XSTAGE_LIVE_CCACHE_DIR:-}"
 LIVE_CCACHE_MNT="/var/cache/ccache"    # where LIVE_CCACHE_DIR is bind-mounted
 LIVE_DISTFILES_DIR="${XSTAGE_LIVE_DISTFILES_DIR:-}"
-LIVE_CYCLE_BREAKERS="${XSTAGE_LIVE_CYCLE_BREAKERS:-}"
-LIVE_DISTFILES_MNT="/var/cache/distfiles"
+LIVE_DISTFILES_MNT="/var/tmp/distfiles"   # same path as the host, so DISTDIR reads alike
+LIVE_BUILDDIR="${XSTAGE_LIVE_BUILDDIR:-}"
+LIVE_BUILDDIR_MNT="/var/tmp/portage"      # PORTAGE_TMPDIR stays /var/tmp
 LIVE_PYTHON_SINGLE_TARGET="${XSTAGE_LIVE_PYTHON_SINGLE_TARGET:-}"
 LIVE_PORTAGE_PROFILE="${XSTAGE_LIVE_PORTAGE_PROFILE:-}"
 # squashfs codec: zstd compresses ~4x faster than xz at a few percent size
@@ -839,6 +840,23 @@ live_distfiles_mount() {
     info "distfiles: ${LIVE_DISTFILES_DIR} -> ${LIVE_DISTFILES_MNT} (bind)"
 }
 
+# PORTAGE_TMPDIR/portage, shared with the host. Build trees for a 700-package
+# run are tens of GB; keeping them out of the image rootfs means the tree stays
+# the size of the installed system, and the host's filesystem absorbs the churn.
+# 'squash' excludes /var/tmp/portage regardless, so this changes where the churn
+# lands, not what ships.
+#
+# Caveat worth knowing: portage does not lock across chroots. Do not run a host
+# emerge and an image 'pkgs' at the same time with this shared.
+live_builddir_mount() {
+    [[ -n ${LIVE_BUILDDIR} ]] || return 0
+    [[ -d ${LIVE_BUILDDIR} ]] ||
+        { warn "XSTAGE_LIVE_BUILDDIR=${LIVE_BUILDDIR} does not exist — building inside the image tree"; return 0; }
+    mkdir -p "${LIVE_ROOT}${LIVE_BUILDDIR_MNT}"
+    mount --bind "${LIVE_BUILDDIR}" "${LIVE_ROOT}${LIVE_BUILDDIR_MNT}"
+    info "build dir: ${LIVE_BUILDDIR} -> ${LIVE_BUILDDIR_MNT} (bind)"
+}
+
 live_ccache_mount() {
     [[ -n ${LIVE_CCACHE_DIR} ]] || return 0
     [[ -d ${LIVE_CCACHE_DIR} ]] ||
@@ -857,6 +875,7 @@ live_chroot() {  # live_chroot <label>  (script on stdin)
     mount --rbind /dev  "${LIVE_ROOT}/dev";  mount --make-rslave "${LIVE_ROOT}/dev"
     live_ccache_mount
     live_distfiles_mount
+    live_builddir_mount
     # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
     trap "live_chroot_umount '${LIVE_ROOT}'" EXIT INT TERM
     local rc=0
@@ -876,6 +895,7 @@ live_chroot_umount() {
     local r="$1"
     umount "${r}${LIVE_CCACHE_MNT}" 2>/dev/null || true
     umount "${r}${LIVE_DISTFILES_MNT}" 2>/dev/null || true
+    umount "${r}${LIVE_BUILDDIR_MNT}" 2>/dev/null || true
     umount -R "${r}/dev"  2>/dev/null || true
     umount -R "${r}/sys"  2>/dev/null || true
     umount    "${r}/proc" 2>/dev/null || true
@@ -1064,32 +1084,6 @@ cmd_live_conf() {
         [[ -d ${LIVE_ROOT}/usr/lib/ccache/bin ]] ||
             warn "dev-util/ccache did not install — FEATURES=ccache will be inert this run"
     fi
-    # Build-time dependency cycles, broken the way portage itself suggests:
-    # "this change can be reverted once the package has been installed". Each
-    # entry is 'atom:USE-overrides'; the package is merged once with the flag
-    # off, which breaks the cycle, and the main 'pkgs' run then rebuilds it
-    # with the profile's real USE (--newuse makes that automatic) now that the
-    # rest of the loop exists.
-    #
-    # The alternative — leaving the flag off in package.use — would cost the
-    # feature permanently in the shipped image, which for the cycles this lab
-    # hits (pillow[truetype], harfbuzz[introspection] and therefore pango's
-    # GObject-Introspection) is a real loss for a one-off ordering problem.
-    # Scoped through a temporary package.use, never through the USE env var:
-    # env USE applies to every package in the graph, so 'USE=-truetype' to
-    # settle pillow also strips truetype from media-libs/gd and the run dies
-    # on a package that was never part of the cycle.
-    local spec
-    for spec in ${LIVE_CYCLE_BREAKERS}; do
-        local atom="${spec%%:*}" flags="${spec#*:}"
-        info "Cycle breaker: ${atom} ${flags//,/ } (rebuilt with real USE by 'pkgs')"
-        printf '%s %s\n' "${atom}" "${flags//,/ }" \
-            > "${LIVE_ROOT}/etc/portage/package.use/zz-cycle-break"
-        live_chroot "cycle-break-${atom//\//-}" <<-EOF
-		EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet ${atom} || true
-		EOF
-        command rm -f "${LIVE_ROOT}/etc/portage/package.use/zz-cycle-break"
-    done
     info "Image configured."
 }
 
@@ -1296,7 +1290,7 @@ cmd_live_squash() {
     info "Compressing the rootfs into livecd.squashfs (-comp ${LIVE_COMP})"
     # -e: the pseudo-filesystems are mount points inside the image, and the
     # portage tree we seeded is worth ~1.5 GB of the result on its own
-    local excl=(proc sys dev/pts dev/shm var/tmp/portage var/cache/distfiles var/cache/ccache)
+    local excl=(proc sys dev/pts dev/shm var/tmp/portage var/tmp/distfiles var/cache/distfiles var/cache/ccache)
     mksquashfs "${LIVE_ROOT}" "${LIVE_ISO_DIR}/livecd.squashfs" \
         -comp "${LIVE_COMP}" -noappend -no-progress -b 1048576 -no-xattrs \
         -e "${excl[@]}" || die "mksquashfs failed"
@@ -1429,6 +1423,20 @@ cmd_live_clean() {
     info "Cleaned live tree."
 }
 
+# emerge inside the live image, with the same bind mounts 'pkgs' gets.
+# For fixing one package by hand without re-running the whole set, and for
+# 'emerge -p' probes that need the image's real config rather than the host's.
+cmd_live_emerge() {
+    need_root
+    [[ $# -gt 0 ]] || die "Usage: $0 ${TGT:-amd64} live-emerge <emerge args...>"
+    local args="" a
+    for a in "$@"; do args+=" $(printf '%q' "${a}")"; done
+    info "emerge${args} (inside ${LIVE_ROOT})"
+    live_chroot emerge <<-EOF
+	emerge${args}
+	EOF
+}
+
 # Interactive shell in the live rootfs — for inspecting what 'conf' actually
 # wrote (make.conf, package.accept_keywords, repos.conf) and for trying an
 # 'emerge -p' by hand before committing to a multi-hour 'pkgs'.
@@ -1445,6 +1453,7 @@ cmd_live_enter() {
     mount --rbind /dev  "${LIVE_ROOT}/dev";  mount --make-rslave "${LIVE_ROOT}/dev"
     live_ccache_mount
     live_distfiles_mount
+    live_builddir_mount
     # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
     trap "live_chroot_umount '${LIVE_ROOT}'" EXIT INT TERM
     info "Entering ${LIVE_ROOT} — 'exit' to leave (mounts are undone on the way out)"
@@ -2394,6 +2403,7 @@ amd64)
         gate)       need_native_profile; cmd_live_gate "$@" ;;
         usb)        need_native_profile; cmd_live_usb "$@" ;;
         live-enter) need_native_profile; cmd_live_enter "$@" ;;
+        live-emerge) need_native_profile; cmd_live_emerge "$@" ;;
         live-status) live_status ;;
         live-clean)  need_native_profile; cmd_live_clean "$@" ;;
         *)        die "Unknown amd64 subcommand: ${CMD} (see: $0 --help)" ;;
