@@ -258,6 +258,18 @@ LIVE_HOSTNAME="${XSTAGE_LIVE_HOSTNAME:-amd64live}"
 LIVE_VOLID="${XSTAGE_LIVE_VOLID:-AMD64LIVE}"
 LIVE_VIDEO_CARDS="${XSTAGE_LIVE_VIDEO_CARDS:-}"
 LIVE_USE="${XSTAGE_LIVE_USE:-}"
+LIVE_ACCEPT_LICENSE="${XSTAGE_LIVE_ACCEPT_LICENSE:-}"
+LIVE_PYTHON_TARGETS="${XSTAGE_LIVE_PYTHON_TARGETS:-}"
+LIVE_EMERGE_OPTS="${XSTAGE_LIVE_EMERGE_OPTS:-}"
+LIVE_CFLAGS="${XSTAGE_LIVE_CFLAGS:-}"
+LIVE_CPU_FLAGS_X86="${XSTAGE_LIVE_CPU_FLAGS_X86:-}"
+LIVE_FEATURES="${XSTAGE_LIVE_FEATURES:-}"
+LIVE_CCACHE_DIR="${XSTAGE_LIVE_CCACHE_DIR:-}"
+LIVE_CCACHE_MNT="/var/cache/ccache"    # where LIVE_CCACHE_DIR is bind-mounted
+LIVE_DISTFILES_DIR="${XSTAGE_LIVE_DISTFILES_DIR:-}"
+LIVE_CYCLE_BREAKERS="${XSTAGE_LIVE_CYCLE_BREAKERS:-}"
+LIVE_DISTFILES_MNT="/var/cache/distfiles"
+LIVE_PYTHON_SINGLE_TARGET="${XSTAGE_LIVE_PYTHON_SINGLE_TARGET:-}"
 LIVE_PORTAGE_PROFILE="${XSTAGE_LIVE_PORTAGE_PROFILE:-}"
 # squashfs codec: zstd compresses ~4x faster than xz at a few percent size
 # cost — bin/v picks xz because its images are burned once and booted forever
@@ -810,6 +822,32 @@ live_pkg_list() {
 }
 
 # run a script inside the live rootfs; native amd64, so a plain chroot works
+# ccache is shared with the host on purpose: object files are keyed on the
+# compiler binary and the full command line, so the hardened toolchain in the
+# image and the host's non-hardened one never collide in the cache. The first
+# hardened build therefore misses everywhere; the payoff is on re-runs.
+# The host's DISTDIR, shared rather than re-downloaded. A fresh image resolves
+# to ~12 GB of source tarballs, most of which this host already has; the mount
+# is read-write so anything new lands in the host cache too. 'squash' already
+# excludes /var/cache/distfiles, so none of it reaches the ISO.
+live_distfiles_mount() {
+    [[ -n ${LIVE_DISTFILES_DIR} ]] || return 0
+    [[ -d ${LIVE_DISTFILES_DIR} ]] ||
+        { warn "XSTAGE_LIVE_DISTFILES_DIR=${LIVE_DISTFILES_DIR} does not exist — the image will download its own"; return 0; }
+    mkdir -p "${LIVE_ROOT}${LIVE_DISTFILES_MNT}"
+    mount --bind "${LIVE_DISTFILES_DIR}" "${LIVE_ROOT}${LIVE_DISTFILES_MNT}"
+    info "distfiles: ${LIVE_DISTFILES_DIR} -> ${LIVE_DISTFILES_MNT} (bind)"
+}
+
+live_ccache_mount() {
+    [[ -n ${LIVE_CCACHE_DIR} ]] || return 0
+    [[ -d ${LIVE_CCACHE_DIR} ]] ||
+        { warn "XSTAGE_LIVE_CCACHE_DIR=${LIVE_CCACHE_DIR} does not exist — building without ccache"; return 0; }
+    mkdir -p "${LIVE_ROOT}${LIVE_CCACHE_MNT}"
+    mount --bind "${LIVE_CCACHE_DIR}" "${LIVE_ROOT}${LIVE_CCACHE_MNT}"
+    info "ccache: ${LIVE_CCACHE_DIR} -> ${LIVE_CCACHE_MNT} (bind)"
+}
+
 live_chroot() {  # live_chroot <label>  (script on stdin)
     local label="$1"
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
@@ -817,10 +855,14 @@ live_chroot() {  # live_chroot <label>  (script on stdin)
     mount -t proc  none "${LIVE_ROOT}/proc"
     mount --rbind /sys  "${LIVE_ROOT}/sys";  mount --make-rslave "${LIVE_ROOT}/sys"
     mount --rbind /dev  "${LIVE_ROOT}/dev";  mount --make-rslave "${LIVE_ROOT}/dev"
+    live_ccache_mount
+    live_distfiles_mount
     # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
     trap "live_chroot_umount '${LIVE_ROOT}'" EXIT INT TERM
     local rc=0
-    chroot "${LIVE_ROOT}" /bin/bash -s <<-EOF || rc=$?
+    # LC_ALL=C.UTF-8: the host's pl_PL.utf8 is not generated inside a stage3,
+    # and every step otherwise opens with two setlocale warnings
+    LC_ALL=C.UTF-8 chroot "${LIVE_ROOT}" /bin/bash -s <<-EOF || rc=$?
 	set -eo pipefail
 	source /etc/profile >/dev/null 2>&1 || true
 	$(cat)
@@ -832,6 +874,8 @@ live_chroot() {  # live_chroot <label>  (script on stdin)
 
 live_chroot_umount() {
     local r="$1"
+    umount "${r}${LIVE_CCACHE_MNT}" 2>/dev/null || true
+    umount "${r}${LIVE_DISTFILES_MNT}" 2>/dev/null || true
     umount -R "${r}/dev"  2>/dev/null || true
     umount -R "${r}/sys"  2>/dev/null || true
     umount    "${r}/proc" 2>/dev/null || true
@@ -874,19 +918,74 @@ cmd_live_conf() {
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
     mkdir -p "${LIVE_ROOT}/etc/portage/repos.conf" "${LIVE_ROOT}/var/db/repos"
 
-    info "make.conf: MAKEOPTS -j${JOBS}${LIVE_VIDEO_CARDS:+, VIDEO_CARDS ${LIVE_VIDEO_CARDS}}"
+    info "make.conf: MAKEOPTS -j${JOBS}${LIVE_VIDEO_CARDS:+, VIDEO_CARDS ${LIVE_VIDEO_CARDS}}${LIVE_ACCEPT_LICENSE:+, extra licences}"
     # appended, not overwritten: the stage3 make.conf carries CHOST/CFLAGS the
-    # tarball was actually built with, and those must survive
+    # tarball was actually built with, and those must survive.
+    #
+    # Idempotent, because 'conf' gets re-run every time the profile changes and
+    # a blind append left one stale copy of the block per run. Both formats are
+    # dropped first: the current marker-delimited one, and the older headline-
+    # only one, which was always written last and so can be cut to EOF.
+    local mc="${LIVE_ROOT}/etc/portage/make.conf"
+    if [[ -f ${mc} ]]; then
+        sed -i '/^# --- BEGIN xstage-managed block/,/^# --- END xstage-managed block/d' "${mc}"
+        sed -i '/^# --- appended by .xstage .* conf./,$d' "${mc}"
+    fi
     {
         echo
-        echo "# --- appended by 'xstage ${TGT:-amd64} conf' (xp profile ${XPROFILE:-none}) ---"
+        echo "# --- BEGIN xstage-managed block ('xstage ${TGT:-amd64} conf', xp profile ${XPROFILE:-none}) ---"
         echo "MAKEOPTS=\"-j${JOBS}\""
-        echo "EMERGE_DEFAULT_OPTS=\"--jobs=${JOBS} --load-average=$(nproc) --quiet-build=y\""
+        # a profile that sets its own opts replaces these wholesale: portage
+        # does not merge EMERGE_DEFAULT_OPTS, the last assignment wins, and
+        # this block is appended last — so a line the user wrote earlier in
+        # make.conf would be silently overridden instead of taking effect
+        if [[ -n ${LIVE_EMERGE_OPTS} ]]; then
+            echo "EMERGE_DEFAULT_OPTS=\"$(echo "${LIVE_EMERGE_OPTS}" | tr -s '[:space:]' ' ')\""
+        else
+            echo "EMERGE_DEFAULT_OPTS=\"--jobs=${JOBS} --load-average=$(nproc) --quiet-build=y\""
+        fi
         [[ -n ${LIVE_VIDEO_CARDS} ]] && echo "VIDEO_CARDS=\"${LIVE_VIDEO_CARDS}\""
+        # Replaces the stage3's COMMON_FLAGS-derived CFLAGS. Only worth setting
+        # when the image is built for the machine that builds it: '-march=native'
+        # resolves against THIS cpu, and an ISO carrying it will SIGILL on any
+        # other. CXXFLAGS follows CFLAGS, as in every stage3 make.conf.
+        if [[ -n ${LIVE_CFLAGS} ]]; then
+            echo "CFLAGS=\"$(echo "${LIVE_CFLAGS}" | tr -s '[:space:]' ' ')\""
+            echo 'CXXFLAGS="${CFLAGS}"'
+            echo 'FCFLAGS="${CFLAGS}"'
+            echo 'FFLAGS="${CFLAGS}"'
+        fi
+        [[ -n ${LIVE_CPU_FLAGS_X86} ]] &&
+            echo "CPU_FLAGS_X86=\"$(echo "${LIVE_CPU_FLAGS_X86}" | tr -s '[:space:]' ' ')\""
         [[ -n ${LIVE_USE} ]] && echo "USE=\"\${USE} $(echo "${LIVE_USE}" | tr -s '[:space:]' ' ')\""
+        # incremental, like USE: this adds to the profile's ACCEPT_LICENSE
+        # rather than replacing it, so '@FREE' stays in effect either way
+        [[ -n ${LIVE_ACCEPT_LICENSE} ]] &&
+            echo "ACCEPT_LICENSE=\"\${ACCEPT_LICENSE} $(echo "${LIVE_ACCEPT_LICENSE}" | tr -s '[:space:]' ' ')\""
+        # The ::gentoo profile default is a single python (python3_14 as of
+        # 2026-08). Packages that upstream has not ported yet carry a
+        # REQUIRED_USE naming only the older slots — sys-process/criu-4.1 wants
+        # any-of ( python3_12 python3_13 ) — and an unsatisfiable REQUIRED_USE
+        # is a resolver error, so it aborts the whole 'pkgs' run rather than
+        # skipping the package. Naming a second target is what the host does.
+        [[ -n ${LIVE_PYTHON_TARGETS} ]] &&
+            echo "PYTHON_TARGETS=\"$(echo "${LIVE_PYTHON_TARGETS}" | tr -s '[:space:]' ' ')\""
+        [[ -n ${LIVE_PYTHON_SINGLE_TARGET} ]] &&
+            echo "PYTHON_SINGLE_TARGET=\"${LIVE_PYTHON_SINGLE_TARGET}\""
         # a live image is read-only at runtime: no reason to carry build logs
         echo 'FEATURES="${FEATURES} parallel-install"'
-    } >> "${LIVE_ROOT}/etc/portage/make.conf"
+        [[ -n ${LIVE_FEATURES} ]] &&
+            echo "FEATURES=\"\${FEATURES} $(echo "${LIVE_FEATURES}" | tr -s '[:space:]' ' ')\""
+        # ccache lives outside the image: live_chroot bind-mounts the host
+        # directory here, and 'squash' excludes the path so a multi-GB cache
+        # never reaches the ISO
+        if [[ -n ${LIVE_CCACHE_DIR} ]]; then
+            echo 'FEATURES="${FEATURES} ccache"'
+            echo "CCACHE_DIR=\"${LIVE_CCACHE_MNT}\""
+        fi
+        [[ -n ${LIVE_DISTFILES_DIR} ]] && echo "DISTDIR=\"${LIVE_DISTFILES_MNT}\""
+        echo "# --- END xstage-managed block ---"
+    } >> "${mc}"
 
     info "repos.conf: ::gentoo (rsync)"
     cat > "${LIVE_ROOT}/etc/portage/repos.conf/gentoo.conf" <<-'EOF'
@@ -947,6 +1046,50 @@ cmd_live_conf() {
             warn "PROF_LIVE_OVERLAY_DIR='${XSTAGE_LIVE_OVERLAY_DIR}' but ${ov} does not exist"
         fi
     fi
+    # FEATURES=ccache does nothing without the masquerade symlinks in
+    # /usr/lib/ccache/bin, and those come from dev-util/ccache being installed
+    # INSIDE the image. Merging it here rather than listing it in the package
+    # set matters: by 'pkgs' time the very first compile should already be
+    # going through the cache.
+    if [[ -n ${LIVE_CCACHE_DIR} ]] && [[ ! -d ${LIVE_ROOT}/usr/lib/ccache/bin ]]; then
+        info "Installing dev-util/ccache in the image (masquerade dir for FEATURES=ccache)"
+        # EMERGE_DEFAULT_OPTS is cleared for this one call: the profile's
+        # '--update --newuse --deep' would turn a single-package bootstrap into
+        # the whole world rebuild that 'pkgs' is for.
+        # '|| true' inside the script, because live_chroot die()s on a non-zero
+        # exit and a missing ccache is a warning, not a reason to stop.
+        live_chroot ccache-bootstrap <<-'EOF'
+		EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet --jobs=4 dev-util/ccache || true
+		EOF
+        [[ -d ${LIVE_ROOT}/usr/lib/ccache/bin ]] ||
+            warn "dev-util/ccache did not install — FEATURES=ccache will be inert this run"
+    fi
+    # Build-time dependency cycles, broken the way portage itself suggests:
+    # "this change can be reverted once the package has been installed". Each
+    # entry is 'atom:USE-overrides'; the package is merged once with the flag
+    # off, which breaks the cycle, and the main 'pkgs' run then rebuilds it
+    # with the profile's real USE (--newuse makes that automatic) now that the
+    # rest of the loop exists.
+    #
+    # The alternative — leaving the flag off in package.use — would cost the
+    # feature permanently in the shipped image, which for the cycles this lab
+    # hits (pillow[truetype], harfbuzz[introspection] and therefore pango's
+    # GObject-Introspection) is a real loss for a one-off ordering problem.
+    # Scoped through a temporary package.use, never through the USE env var:
+    # env USE applies to every package in the graph, so 'USE=-truetype' to
+    # settle pillow also strips truetype from media-libs/gd and the run dies
+    # on a package that was never part of the cycle.
+    local spec
+    for spec in ${LIVE_CYCLE_BREAKERS}; do
+        local atom="${spec%%:*}" flags="${spec#*:}"
+        info "Cycle breaker: ${atom} ${flags//,/ } (rebuilt with real USE by 'pkgs')"
+        printf '%s %s\n' "${atom}" "${flags//,/ }" \
+            > "${LIVE_ROOT}/etc/portage/package.use/zz-cycle-break"
+        live_chroot "cycle-break-${atom//\//-}" <<-EOF
+		EMERGE_DEFAULT_OPTS="" emerge --oneshot --quiet ${atom} || true
+		EOF
+        command rm -f "${LIVE_ROOT}/etc/portage/package.use/zz-cycle-break"
+    done
     info "Image configured."
 }
 
@@ -1153,7 +1296,7 @@ cmd_live_squash() {
     info "Compressing the rootfs into livecd.squashfs (-comp ${LIVE_COMP})"
     # -e: the pseudo-filesystems are mount points inside the image, and the
     # portage tree we seeded is worth ~1.5 GB of the result on its own
-    local excl=(proc sys dev/pts dev/shm var/tmp/portage var/cache/distfiles)
+    local excl=(proc sys dev/pts dev/shm var/tmp/portage var/cache/distfiles var/cache/ccache)
     mksquashfs "${LIVE_ROOT}" "${LIVE_ISO_DIR}/livecd.squashfs" \
         -comp "${LIVE_COMP}" -noappend -no-progress -b 1048576 -no-xattrs \
         -e "${excl[@]}" || die "mksquashfs failed"
@@ -1284,6 +1427,41 @@ cmd_live_clean() {
     confirm "Remove ${LIVE_BLD}?"
     command rm -rf "${LIVE_BLD}"
     info "Cleaned live tree."
+}
+
+# Interactive shell in the live rootfs — for inspecting what 'conf' actually
+# wrote (make.conf, package.accept_keywords, repos.conf) and for trying an
+# 'emerge -p' by hand before committing to a multi-hour 'pkgs'.
+#
+# Separate from live_chroot() because that one feeds a script on stdin, which
+# leaves the chroot's own stdin unusable for a terminal. Here /dev is rbound
+# and no heredoc is in the way, so bash gets a real tty.
+cmd_live_enter() {
+    need_root
+    [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
+    command cp -f /etc/resolv.conf "${LIVE_ROOT}/etc/resolv.conf"
+    mount -t proc  none "${LIVE_ROOT}/proc"
+    mount --rbind /sys  "${LIVE_ROOT}/sys";  mount --make-rslave "${LIVE_ROOT}/sys"
+    mount --rbind /dev  "${LIVE_ROOT}/dev";  mount --make-rslave "${LIVE_ROOT}/dev"
+    live_ccache_mount
+    live_distfiles_mount
+    # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
+    trap "live_chroot_umount '${LIVE_ROOT}'" EXIT INT TERM
+    info "Entering ${LIVE_ROOT} — 'exit' to leave (mounts are undone on the way out)"
+    local rc=0
+    # PS1 so a root shell inside the image is never mistaken for the host's.
+    # Start in /root, not /: chroot always lands on the new root, and that is
+    # both a worse place to work and easy to mistake for the host's /.
+    LC_ALL=C.UTF-8 chroot "${LIVE_ROOT}" /bin/bash -c \
+        'source /etc/profile >/dev/null 2>&1 || true
+         cd /root 2>/dev/null || cd /
+         export HOME=/root
+         export PS1="(${XPROFILE:-live}) \w \\\$ "
+         exec /bin/bash --norc -i' "$@" || rc=$?
+    live_chroot_umount "${LIVE_ROOT}"
+    trap - EXIT INT TERM
+    info "Left the image chroot (exit ${rc})"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -2215,6 +2393,7 @@ amd64)
         live)       need_native_profile; cmd_live_all "$@" ;;
         gate)       need_native_profile; cmd_live_gate "$@" ;;
         usb)        need_native_profile; cmd_live_usb "$@" ;;
+        live-enter) need_native_profile; cmd_live_enter "$@" ;;
         live-status) live_status ;;
         live-clean)  need_native_profile; cmd_live_clean "$@" ;;
         *)        die "Unknown amd64 subcommand: ${CMD} (see: $0 --help)" ;;

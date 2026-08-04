@@ -1,0 +1,66 @@
+# package.use entries the DESKTOP/PLASMA profile target ships and the HARDENED
+# profile does not.
+#
+# The gap that made this file necessary: kde-plasma/kwin has 'lock' in IUSE
+# without a '+', so the screen locker is OFF unless something turns it on, and
+# what turns it on upstream is profiles/targets/desktop/plasma/package.use —
+# a file the hardened profile never inherits. plasma-meta then requires
+# kwin[lock] and the whole run aborts.
+#
+# This is the same shape as host.use next door and as the USE block in the xp
+# profile: a KDE image built on a non-desktop profile has to supply, by hand,
+# everything the desktop profile would have supplied. USE defaults were the
+# first half of that; these per-package entries are the second.
+#
+# Copied verbatim from ::gentoo, 2026-08-04:
+#   profiles/targets/desktop/package.use
+#   profiles/targets/desktop/plasma/package.use
+
+# --- targets/desktop/package.use ---
+dev-libs/uriparser -qt6
+media-libs/libwebp -tiff
+media-video/pipewire sound-server
+media-libs/freetype harfbuzz
+net-p2p/bitcoin-core qrcode
+app-text/doxygen -gui
+dev-qt/qtbase libproxy
+app-text/poppler nss boost
+x11-base/xwayland libei
+dev-build/cmake -gui
+media-libs/clutter egl
+media-libs/cogl gles2
+media-libs/libsdl2 gles2
+media-fonts/fonts-meta emoji
+dev-lang/python -bluetooth
+media-gfx/exiv2 xmp
+dev-lang/python sqlite
+net-fs/samba client
+dev-libs/xmlsec nss
+app-arch/unzip natspec
+kde-apps/k3b taglib
+kde-frameworks/kfilemetadata taglib
+dev-lang/php -exif -truetype
+media-video/mpv -sdl
+app-text/xmlto text
+x11-libs/libxcb xkb
+dev-libs/libgudev introspection
+xfce-base/xfdesktop thunar
+net-nds/openldap minimal
+
+# --- targets/desktop/plasma/package.use ---
+net-dns/avahi mdnsresponder-compat
+app-emulation/fuse -pulseaudio
+dev-libs/libjcat gpg pkcs7
+dev-python/pyqt6 webchannel
+dev-python/pyside webchannel
+dev-util/ostree curl
+kde-apps/yakuake absolute-position
+media-libs/gd fontconfig
+media-libs/mlt ffmpeg frei0r rubberband
+media-libs/opencv features2d
+media-libs/opencv contrib contribdnn
+net-firewall/nftables json python xtables
+sys-libs/zlib minizip
+virtual/zlib minizip
+kde-plasma/kwin lock
+kde-plasma/kwin-x11 lock

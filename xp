@@ -16,8 +16,9 @@
 # Verbs:
 #   status          xarm + xstage + xlab status for the profile
 #   setup           xarm setup (board only), then xstage setup          [root]
-#   enter [sysroot|PATH] [CMD]  qemu-user chroot into the profile's build
-#                   rootfs (default), the crossdev sysroot, or PATH    [root]
+#   enter [sysroot|PATH] [CMD]  board: qemu-user chroot into the profile's
+#                   build rootfs (default), the crossdev sysroot, or PATH,
+#                   native: an interactive shell in the live image tree [root]
 #   emerge ARGS     cross-emerge into the sysroot (xarm emerge)        [root]
 #   1by1 ARGS       xarm 1by1                                          [root]
 #   pkgs            cross-emerge $PROF_PKGS into the profile rootfs    [root]
@@ -149,7 +150,9 @@ setup)
     exec "${XSTAGE}" "${T}" setup
     ;;
 enter)
-    need_board
+    # native profiles have exactly one rootfs — the live image tree — and
+    # xstage owns its bind mounts, so hand the whole verb over
+    if ! is_board; then no_args "$@"; exec "${XSTAGE}" "${T}" live-enter; fi
     root="$(prof_build_dir)/rootfs"
     case "${1:-}" in
         sysroot) root="/usr/${PROF_TUPLE}"; shift ;;
