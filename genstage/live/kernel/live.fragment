@@ -79,6 +79,9 @@ CONFIG_HID_GENERIC=y
 # leaves it off unless named here. evdev (the Wayland/libinput path) IS a
 # defconfig default and needs no entry.
 CONFIG_INPUT_MOUSEDEV=y
+# /dev/hidraw*: pam_u2f security keys (the target laptop's /etc/u2f_mappings)
+# and openrazer both talk raw HID
+CONFIG_HIDRAW=y
 CONFIG_USB_PRINTER=m
 
 # virtio: without these 'xp <profile> gate' boots into a kernel panic.
@@ -201,6 +204,17 @@ CONFIG_MICROCODE=y
 CONFIG_ACPI=y
 CONFIG_X86_MCE=y
 CONFIG_HOTPLUG_CPU=y
+# the installed system's grub cmdline uses 'iommu=pt amd_iommu=on' — both
+# vendors named so one image serves Intel and AMD targets
+CONFIG_AMD_IOMMU=y
+CONFIG_INTEL_IOMMU=y
+CONFIG_IRQ_REMAP=y
+# hwmon the deployed configs load via modules-load.d (jc42 = DIMM sensors,
+# nct6775 = desktop super-I/O); k10temp autoloads by PCI id on any AMD box
+CONFIG_HWMON=y
+CONFIG_SENSORS_JC42=m
+CONFIG_SENSORS_NCT6775=m
+CONFIG_SENSORS_K10TEMP=m
 
 # --- audio (the desktop profiles ship pipewire) -----------------------------
 CONFIG_SOUND=m
@@ -243,6 +257,18 @@ CONFIG_KPROBES=y
 CONFIG_UPROBES=y
 CONFIG_AUDIT=y
 CONFIG_AUDITSYSCALL=y
+# the deployed sysctl hardening set expects these on EVERY image, not just the
+# hardened flavour: yama for kernel.yama.ptrace_scope (inert at scope 0 until
+# sysctl raises it; the default CONFIG_LSM string already lists yama), kexec
+# for kernel.kexec_load_disabled=1 (the lock needs kexec compiled in to have
+# anything to lock — and a rescue image can kexec into an installed kernel).
+# SECURITY itself is named because plain defconfig does not guarantee it and
+# the IMA/EVM block below quietly depends on it.
+CONFIG_SECURITY=y
+CONFIG_SECURITYFS=y
+CONFIG_SECURITY_YAMA=y
+CONFIG_KEXEC=y
+CONFIG_KEXEC_FILE=y
 CONFIG_INTEGRITY=y
 CONFIG_IMA=y
 CONFIG_IMA_APPRAISE=y

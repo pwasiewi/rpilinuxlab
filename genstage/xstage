@@ -55,7 +55,8 @@
 #   pkgs             prepare /usr/src/linux + merged .config (so linux-info
 #                    pre-merge checks audit the image, not the host), then
 #                    emerge PROF_LIVE_PKGS / _TIERS / _SETS in the chroot   [root]
-#   configure        hostname, root password, sshd, default runlevel, motd  [root]
+#   configure        hostname, root password, live user + autologin, sshd,
+#                    default runlevel, motd  [root]
 #   kernel           genkernel with CDROOT=1 inside the chroot; the .config is
 #                    built by merging live/kernel/*.fragment onto a base
 #                    (XSTAGE_LIVE_KCONFIG_BASE: defconfig | host | PATH),
@@ -66,7 +67,8 @@
 #   live             unpack + conf + pkgs + configure + kernel + squash +
 #                    isolinux + iso, in that order                          [root]
 #   gate             boot the ISO in qemu (interactive, KVM when available)
-#   usb DEV          dd the ISO onto a removable device            [root,confirm]
+#   usb DEV [--wipe] the deliverable: build-usb layout (ESP+GRUB p1, LIVE p2),
+#                    kernel + UUID-initrd on p1, squashfs on p2    [root,confirm]
 #   live-status      rootfs / kernel / squashfs / iso state
 #   live-clean       rm the profile's live build tree                    [confirm]
 #
@@ -291,10 +293,18 @@ LIVE_PORTAGE_PROFILE="${XSTAGE_LIVE_PORTAGE_PROFILE:-}"
 # package list ships another sources package (zen-sources, say) should name it
 # here too, or the image ends up carrying both trees
 LIVE_KERNEL_PKG="${XSTAGE_LIVE_KERNEL_PKG:-sys-kernel/gentoo-sources}"
+# unprivileged live user, autologged-in on console and display manager; sddm
+# refuses root, so without one a desktop image boots to a dead login screen.
+# '-' not ':-' on purpose: XSTAGE_LIVE_USER="" disables the account entirely
+LIVE_USER="${XSTAGE_LIVE_USER-guest}"
 # squashfs codec: zstd compresses ~4x faster than xz at a few percent size
 # cost — bin/v picks xz because its images are burned once and booted forever
 LIVE_COMP="${XSTAGE_LIVE_COMP:-zstd}"
 SYSLINUX_DIR="${XSTAGE_SYSLINUX_DIR:-/usr/share/syslinux}"
+# host scripts owning the USB stick contract (bin/ sibling of the lab repo):
+# build-usb partitions + installs GRUB, build-initrd-uuid-next builds the
+# busybox initrd that finds the LIVE partition by UUID
+USB_TOOLS="${XSTAGE_USB_TOOLS_DIR:-$(dirname "${REPO}")/bin}"
 LIVE_TPL="${HERE}/live"
 # init and service manager follow from the stage3 flavour (the xp profile layer
 # derives them); defaults here keep a bare 'xstage' call working.
@@ -1091,7 +1101,11 @@ cmd_live_conf() {
     if [[ -n ${XSTAGE_LIVE_OVERLAY_DIR:-} ]]; then
         local ovdir
         for ovdir in ${XSTAGE_LIVE_OVERLAY_DIR}; do
+            # absolute entries are personal payload trees that live OUTSIDE
+            # this repo (e.g. ~/Claude/secure/live-overlay: install scripts,
+            # the target laptop's /etc snapshot) — same rsync-onto-/ contract
             local ov="${LIVE_TPL}/${ovdir}"
+            [[ ${ovdir} == /* ]] && ov="${ovdir}"
             if [[ -d ${ov} ]]; then
                 info "Overlaying config fragments from ${ov}"
                 rsync -a "${ov}/" "${LIVE_ROOT}/"
@@ -1252,6 +1266,23 @@ cmd_live_pkgs() {
 	    --update --deep --newuse @world @installed
 	EOF
     fi
+    # A gcc merged as a NEW slot stays unselected — gcc-config keeps the seed
+    # stage3's compiler, so without this step pass 2 (the entire payload) would
+    # silently build with the old gcc while the tree's sits installed and idle.
+    # binutils-config, in contrast, auto-selects on install. No-op when seed
+    # and tree agree on the slot, or when a profile masks the newer one (as
+    # amd64kde does: nvcc caps its host compiler at gcc-15).
+    live_chroot toolchain-select <<-EOF
+	latest=\$(gcc-config -l | awk '/^ *\[/{p=\$2} END{print p}')
+	current=\$(gcc-config -c)
+	if [ "\${latest}" != "\${current}" ]; then
+	    gcc-config "\${latest}"
+	    env-update
+	    # libtool bakes the selected compiler's paths into its script
+	    emerge --ignore-default-opts --oneshot --quiet dev-build/libtool
+	fi
+	echo "gcc-config: \$(gcc-config -c)"
+	EOF
     info "Pass 2/2: merging ${n} top-level packages${LIVE_SETS:+ + sets: ${LIVE_SETS}} (dependencies resolve inside)"
     # --keep-going: one broken ebuild in a 300-package image should not throw
     # away hours of work; the summary at the end names what failed
@@ -1295,6 +1326,46 @@ cmd_live_configure() {
 
     mkdir -p "${LIVE_ROOT}/etc/ssh/sshd_config.d"
     echo "PermitRootLogin yes" > "${LIVE_ROOT}/etc/ssh/sshd_config.d/50-xstage.conf"
+
+    # Live user (the gap the old v-pipeline image filled with a hand-edited
+    # passwd): created by useradd IN the chroot so passwd/shadow/group stay
+    # consistent — never overlaid as files. Password = the same hash as root's
+    # (host-side, no plaintext enters the chroot); single-quoted so the $6$
+    # salt survives the unquoted heredoc.
+    if [[ -n ${LIVE_USER} ]]; then
+        info "Live user '${LIVE_USER}' (password '${ZERO_PASS}', autologin)"
+        live_chroot live-user <<-EOF
+	id -u ${LIVE_USER} >/dev/null 2>&1 ||
+	    useradd -m -c "Live user" -s /bin/bash -p '${hash}' ${LIVE_USER}
+	for g in wheel users video audio input plugdev usb portage; do
+	    getent group \${g} >/dev/null && usermod -aG \${g} ${LIVE_USER} || true
+	done
+	EOF
+        if [[ -n ${XSTAGE_LIVE_XSESSION:-} ]]; then
+            # Session= left out: sddm falls back to the only/default session,
+            # which stays correct whatever the profile ships
+            mkdir -p "${LIVE_ROOT}/etc/sddm.conf.d"
+            cat > "${LIVE_ROOT}/etc/sddm.conf.d/10-xstage-autologin.conf" <<-EOF
+		[Autologin]
+		User=${LIVE_USER}
+		EOF
+        fi
+        if [[ ${LIVE_RC} == systemd ]]; then
+            mkdir -p "${LIVE_ROOT}/etc/systemd/system/getty@tty1.service.d"
+            cat > "${LIVE_ROOT}/etc/systemd/system/getty@tty1.service.d/autologin.conf" <<-EOF
+		[Service]
+		ExecStart=
+		ExecStart=-/sbin/agetty --autologin ${LIVE_USER} --noclear %I \$TERM
+		EOF
+        fi
+        # standard live-medium convenience; the installed system's sudoers
+        # comes from the /root/* payload kits, not from here
+        if [[ -d ${LIVE_ROOT}/etc/sudoers.d ]]; then
+            echo "%wheel ALL=(ALL:ALL) NOPASSWD: ALL" \
+                > "${LIVE_ROOT}/etc/sudoers.d/95-xstage-live"
+            chmod 0440 "${LIVE_ROOT}/etc/sudoers.d/95-xstage-live"
+        fi
+    fi
 
     # Enabling services differs per flavour, and neither method can simply be
     # "run the tool": no init system is running in this chroot. OpenRC's
@@ -1437,7 +1508,7 @@ cmd_live_iso() {
         "${LIVE_ISO_DIR}" || die "xorriso failed"
     if [[ -n ${SUDO_UID:-} ]]; then chown "${SUDO_UID}:${SUDO_GID}" "${LIVE_IMG}"; fi
     info "ISO ready: ${LIVE_IMG} ($(du -h "${LIVE_IMG}" | cut -f1))"
-    info "Boot gate: $0 ${TGT:-amd64} gate     Write to USB: sudo $0 ${TGT:-amd64} usb /dev/sdX"
+    info "Boot gate: $0 ${TGT:-amd64} gate     USB deliverable: sudo $0 ${TGT:-amd64} usb /dev/sdX"
 }
 
 cmd_live_all() {
@@ -1468,36 +1539,84 @@ cmd_live_gate() {
         -nographic
 }
 
+# the deliverable for the amd64 profiles: a USB stick in the build-usb layout
+# (p1 = ESP with GRUB --removable, p2 = ext4 GENTOO_LIVE, p3+ = the user's
+# DATA partitions). p1 gets the kernel as /gentoo plus a busybox initrd keyed
+# to p2's filesystem UUID; p2 gets livecd.squashfs. Boots UEFI-only via GRUB —
+# the isohybrid ISO stays around as the qemu-gate artifact and is not needed
+# here. An already-prepared stick is reused (DATA partitions survive, p2 UUID
+# is stable so a rebuilt squashfs only needs re-copying); --wipe repartitions.
 cmd_live_usb() {
     need_root
-    [[ $# -eq 1 ]] || die "Usage: sudo $0 ${TGT:-amd64} usb /dev/sdX"
-    [[ -f ${LIVE_IMG} ]] || die "No ISO — run: sudo $0 ${TGT:-amd64} iso"
-    local dev="${1%/}"
-    [[ ${dev} =~ ^/dev/(sd[a-z]+|mmcblk[0-9]+)$ ]] ||
-        die "Whole device without partition expected, e.g. /dev/sdb"
+    local wipe=0 dev="" a
+    for a in "$@"; do
+        case "${a}" in
+            --wipe) wipe=1 ;;
+            *)      dev="${a%/}" ;;
+        esac
+    done
+    [[ -n ${dev} ]] || die "Usage: sudo $0 ${TGT:-amd64} usb /dev/sdX [--wipe]"
+    [[ -f ${LIVE_ISO_DIR}/livecd.squashfs ]] || die "No squashfs — run: sudo $0 ${TGT:-amd64} squash"
+    [[ -f ${LIVE_BLD}/bzImage ]] || die "No kernel — run: sudo $0 ${TGT:-amd64} kernel"
+    [[ ${dev} =~ ^/dev/sd[a-z]+$ ]] ||
+        die "Whole device without partition expected, e.g. /dev/sdb (build-usb layout is sdX-only)"
     [[ -b ${dev} ]] || die "Block device not found: ${dev}"
+    [[ -x ${USB_TOOLS}/build-usb ]] || die "No ${USB_TOOLS}/build-usb"
+    [[ -x ${USB_TOOLS}/build-initrd-uuid-next ]] || die "No ${USB_TOOLS}/build-initrd-uuid-next"
     local name="${dev#/dev/}"
     lsblk -no MOUNTPOINTS "${dev}" | grep -qx / &&
         die "${dev} holds the root filesystem — refusing"
-    local removable idbus model size
+    local removable idbus
     removable=$(cat "/sys/block/${name}/removable" 2>/dev/null || echo 0)
     idbus=$(udevadm info --query=property --name="${dev}" | { grep '^ID_BUS=' || true; } | cut -d= -f2)
-    [[ ${removable} == 1 || ${idbus} == usb || ${idbus} == mmc || ${name} == mmcblk* ]] ||
+    [[ ${removable} == 1 || ${idbus} == usb ]] ||
         die "${dev}: removable=0 and ID_BUS='${idbus:-?}' — refusing to touch an internal disk"
-    [[ $(blockdev --getsize64 "${dev}") -ge $(stat -c%s "${LIVE_IMG}") ]] ||
-        die "${dev} is smaller than ${LIVE_IMG}"
-    model=$(cat "/sys/block/${name}/device/model" 2>/dev/null || echo '?')
-    size=$(lsblk -dno SIZE "${dev}")
-    warn "Target: ${dev}  model:${model% }  size:${size}  removable:${removable}  bus:${idbus:-?}"
-    confirm "Overwrite ${dev} with ${LIVE_IMG} (ALL data on it is lost)?"
-    local p
-    for p in "${dev}"?*; do
-        [[ -b ${p} ]] && umount "${p}" 2>/dev/null || true
-    done
-    dd if="${LIVE_IMG}" of="${dev}" bs=8M conv=fsync status=progress
-    sync; partprobe "${dev}" 2>/dev/null || true
-    lsblk -o NAME,SIZE,FSTYPE,LABEL "${dev}"
-    info "Done. The image is isohybrid: it boots as a USB stick and as a CD."
+
+    local p1="${dev}1" p2="${dev}2"
+    # desktop automount grabs the stick on plug-in; DATA partitions stay put
+    umount "${p1}" "${p2}" 2>/dev/null || true
+    if [[ ${wipe} == 1 || $(lsblk -no FSTYPE "${p1}" 2>/dev/null) != vfat \
+          || $(lsblk -no FSTYPE "${p2}" 2>/dev/null) != ext4 ]]; then
+        # build-usb shows the device, asks its own 'yes', partitions, formats
+        # and installs GRUB + grub.cfg (kernel /gentoo, initrd.uuid.cpio.gz)
+        "${USB_TOOLS}/build-usb" "${dev}" || die "build-usb failed"
+        partprobe "${dev}" 2>/dev/null || true; sleep 1
+    else
+        info "Reusing existing ESP+LIVE layout on ${dev} (--wipe repartitions, wiping DATA too)"
+    fi
+    [[ -b ${p1} && -b ${p2} ]] || die "Missing ${p1}/${p2} after layout step"
+
+    local uuid
+    uuid=$(lsblk -no UUID "${p2}" | head -n1)
+    [[ -n ${uuid} ]] || die "No filesystem UUID on ${p2}"
+    info "LIVE partition ${p2}: UUID=${uuid}"
+    # the initrd is rebuilt per stick (UUID is baked in); the static busybox
+    # it embeds caches in dl/ and survives across profiles and sticks
+    mkdir -p "${DL_DIR}/uuid-initrd"
+    ( cd "${DL_DIR}/uuid-initrd" &&
+      "${USB_TOOLS}/build-initrd-uuid-next" --uuid "${uuid}" \
+          --init "${LIVE_INIT}" --tmpfs-mb 8192 ) ||
+        die "build-initrd-uuid-next failed"
+
+    local mnt
+    mnt=$(mktemp -d /tmp/xstage-usb-XXXXXX)
+    trap 'umount "${mnt}" 2>/dev/null || true; rmdir "${mnt}" 2>/dev/null || true' EXIT
+    mount "${p1}" "${mnt}" || die "mount ${p1} failed"
+    [[ -f ${mnt}/boot/grub/grub.cfg ]] ||
+        die "No GRUB on ${p1} — rerun with --wipe"
+    info "ESP ${p1}: kernel -> /gentoo, initrd.uuid.cpio.gz"
+    command cp -f "${LIVE_BLD}/bzImage" "${mnt}/gentoo"
+    command cp -f "${DL_DIR}/uuid-initrd/initrd.uuid.cpio.gz" "${mnt}/initrd.uuid.cpio.gz"
+    umount "${mnt}"
+    mount "${p2}" "${mnt}" || die "mount ${p2} failed"
+    info "LIVE ${p2}: livecd.squashfs ($(du -h "${LIVE_ISO_DIR}/livecd.squashfs" | cut -f1))"
+    command cp -f "${LIVE_ISO_DIR}/livecd.squashfs" "${mnt}/livecd.squashfs"
+    sync
+    umount "${mnt}"
+    trap - EXIT
+    rmdir "${mnt}"
+    lsblk -o NAME,SIZE,FSTYPE,LABEL,UUID "${dev}"
+    info "USB ready: UEFI GRUB on ${p1}, initrd finds ${p2} by UUID=${uuid}."
 }
 
 live_status() {

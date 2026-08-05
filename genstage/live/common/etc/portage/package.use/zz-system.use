@@ -1,0 +1,5 @@
+# Autounmask landing zone — ships empty on purpose.
+# emerge --autounmask-write appends to whichever file sorts LAST in this
+# directory; without this file that would be zz-image.use and machine-local
+# noise would pile up in the image's documented decisions. Name nothing after
+# zz-system.*. Manual per-package flags belong in host.use (ve use "...").

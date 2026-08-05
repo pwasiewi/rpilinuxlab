@@ -1,0 +1,15 @@
+# nvcc from nvidia-cuda-toolkit-13.3.1 (::pwr) refuses host compilers newer
+# than gcc-15 (GCC_MAX_VER=15, DEPEND '<sys-devel/gcc-16_pre[cxx]'), and gcc-16
+# went stable in the tree — without this mask the image gets gcc-16 as the
+# selected compiler and every CUDA consumer (caffe2, vllm, flash-attn,
+# bitsandbytes, the whole unsloth chain) either breaks or silently depends on
+# cuda.eclass redirecting nvcc to a second gcc the ::pwr ebuilds never test
+# against. One compiler, the one CUDA supports — this also matches the gen2db
+# binhost, whose binpkgs are all built with gcc-15 (the host never installed
+# gcc-16 at all).
+#
+# This layer is amd64kde-only (PROF_LIVE_OVERLAY_DIR="common nvidia"); the
+# hardened image has no CUDA and builds gcc-16 as the tree intends.
+# Drop the mask when the toolkit in ::pwr moves to a CUDA release that
+# supports gcc-16.
+>=sys-devel/gcc-16

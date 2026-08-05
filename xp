@@ -42,7 +42,8 @@
 # bin/v builds; run them in this order, or just 'live'):
 #   unpack conf pkgs configure livekernel squash isolinux iso   [root]
 #   live            the whole chain in one go                          [root]
-#   usb DEV         dd livecd.iso onto a removable device      [root,confirm]
+#   usb DEV [--wipe] USB deliverable: build-usb layout, kernel +
+#                   UUID-initrd on p1, squashfs on p2           [root,confirm]
 #   run             xlab run for the profile's xlab target
 #   kernel          xlab kernel build
 #   sd DEV          dd sd.img onto a real card                 [root,confirm]
@@ -233,8 +234,8 @@ livekernel)
     ;;
 usb)
     need_native
-    [[ $# -eq 1 ]] || die "Usage: sudo xp ${PROF} usb /dev/sdX"
-    exec "${XSTAGE}" "${T}" usb "$1"
+    [[ $# -ge 1 ]] || die "Usage: sudo xp ${PROF} usb /dev/sdX [--wipe]"
+    exec "${XSTAGE}" "${T}" usb "$@"
     ;;
 run|kernel)
     exec "${XLAB}" "${L}" "${VERB}" "$@"

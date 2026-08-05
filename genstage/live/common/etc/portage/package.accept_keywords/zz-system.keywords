@@ -1,0 +1,5 @@
+# Autounmask landing zone — ships empty on purpose.
+# emerge --autounmask-write appends keyword changes to whichever file sorts
+# LAST in this directory; this file keeps them out of host.keywords and
+# image.keywords. Name nothing after zz-system.*. Manual entries belong in
+# host.keywords (ve kw "...").
