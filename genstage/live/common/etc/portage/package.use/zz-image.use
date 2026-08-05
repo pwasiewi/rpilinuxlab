@@ -73,6 +73,13 @@ media-libs/libjpeg-turbo -java
 # freetype. Re-enable the flag and rebuild in the running system if needed.
 dev-python/pillow -truetype
 
+# sysbench only supports LuaJIT: its REQUIRED_USE is literally
+# 'exactly-one-of ( lua_single_target_luajit )'. The image make.conf sets
+# LUA_SINGLE_TARGET="lua5-4" globally (host copy), which makes the ebuild
+# unresolvable — a hard 'pkgs' abort, not a warning. luajit is not use-masked
+# on the hardened profile, so a per-package target is the whole fix.
+app-benchmarks/sysbench LUA_SINGLE_TARGET: -* luajit
+
 # Breaks zziplib -> libsdl2 -> libpulse -> gtk+:3 -> cups -> xdg-utils
 # -> xmlto -> texlive-formatsextra -> texlive-core -> zziplib.
 # zziplib[sdl] adds an SDL_rwops shim for reading zip archives through SDL.

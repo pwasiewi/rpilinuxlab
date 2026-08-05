@@ -12,6 +12,10 @@ Two experiments driven by one script, [`xstage`](xstage):
    Gentoo base packages by default (bash, coreutils, util-linux & friends);
    `XSTAGE_TINY_BASE=busybox` builds the truly tiny static-busybox variant.
 
+The `xstage` live-image verbs (`live-unpack … squash/iso/usb`) build on the
+amd64 track; their payload lives in [`live/`](live/). Signed-binpkg setup for
+the build host and image trust seeding: [`live/binpkg-signing.md`](live/binpkg-signing.md).
+
 ```
 sudo ./xstage amd64 setup          # catalyst conf + releng + gentoo.git on /mnt/db5
 ./xstage amd64 seed                # latest official amd64 stage3 = the seed

@@ -46,8 +46,9 @@
 #   clean            rm catalyst tmp/ ('clean all': + built stages,
 #                    snapshots and state; seeds and git repos kept)  [confirm]
 #
-# Subcommands (amd64 live half — stage3 -> livecd.squashfs + isolinux ISO,
-# the layout bin/v builds from /etc/liveusb; driven by an xp native profile):
+# Subcommands (amd64 live half — stage3 -> livecd.squashfs; the deliverable
+# is the USB stick ('usb'), the isolinux ISO is optional (qemu 'gate' only);
+# layout as bin/v builds from /etc/liveusb; driven by an xp native profile):
 #   unpack           unpack the newest built stage3 (or the seed) into
 #                    build/<profile>/rootfs                                [root]
 #   conf             make.conf, repos.conf, ::gentoo + overlays seeded from
@@ -62,13 +63,18 @@
 #                    (XSTAGE_LIVE_KCONFIG_BASE: defconfig | host | PATH),
 #                    re-merged here even if 'pkgs' already staged it        [root]
 #   squash           mksquashfs -> iso/livecd.squashfs + the /livecd marker [root]
-#   isolinux         populate iso/isolinux/ (syslinux + rendered cfg)       [root]
-#   iso              xorriso -> livecd.iso (isohybrid: CD and USB alike)    [root]
-#   live             unpack + conf + pkgs + configure + kernel + squash +
-#                    isolinux + iso, in that order                          [root]
+#   isolinux         populate iso/isolinux/ (optional — only 'iso' needs it) [root]
+#   iso              xorriso -> livecd.iso (optional: the qemu-gate artifact;
+#                    isohybrid, dd-able; not needed for 'usb')              [root]
+#   live             unpack + conf + pkgs + configure + kernel + squash, in
+#                    that order (no ISO — 'usb' is next; 'isolinux'+'iso'
+#                    only if you want the qemu gate)                        [root]
 #   gate             boot the ISO in qemu (interactive, KVM when available)
-#   usb DEV [--wipe] the deliverable: build-usb layout (ESP+GRUB p1, LIVE p2),
-#                    kernel + UUID-initrd on p1, squashfs on p2    [root,confirm]
+#   usb DEV [--wipe] the deliverable. Existing build-usb stick: just copies
+#                    kernel + UUID-initrd -> p1 and squashfs -> p2 (DATA
+#                    partitions untouched). --wipe or no ESP+LIVE layout:
+#                    wipes the WHOLE stick — build-usb repartitions, installs
+#                    GRUB, then the same copies                    [root,confirm]
 #   live-status      rootfs / kernel / squashfs / iso state
 #   live-clean       rm the profile's live build tree                    [confirm]
 #
@@ -275,6 +281,11 @@ LIVE_DISTFILES_DIR="${XSTAGE_LIVE_DISTFILES_DIR:-}"
 LIVE_DISTFILES_MNT="/var/tmp/distfiles"   # same path as the host, so DISTDIR reads alike
 LIVE_BUILDDIR="${XSTAGE_LIVE_BUILDDIR:-}"
 LIVE_BUILDDIR_MNT="/var/tmp/portage"      # PORTAGE_TMPDIR stays /var/tmp
+# host binpkg cache shared with the image: getbinpkg reads it, buildpkg fills
+# it — and the packages persist across image rebuilds instead of being thrown
+# away with the rootfs
+LIVE_BINPKGS_DIR="${XSTAGE_LIVE_BINPKGS_DIR:-}"
+LIVE_BINPKGS_MNT="/var/cache/binpkgs"     # portage's default PKGDIR
 # raw make.conf lines, newline-separated, appended last inside the managed
 # block. This is how a profile sets a USE_EXPAND variable (LLVM_SLOT,
 # LUA_SINGLE_TARGET, RUBY_TARGETS, …). Writing 'llvm_slot_21' into USE instead
@@ -575,6 +586,26 @@ cmd_seed() {
     (cd "${DL_DIR}" && grep -E "\s${tarball}\$" "${tarball}.sha256" | sha256sum -c --quiet) ||
         die "SHA256 mismatch on ${tarball} — delete it from dl/ and retry"
 
+    # origin, not just transport: the .sha256 rides the same mirror as the
+    # tarball. Verify releng's detached signature against the packaged keyring.
+    local keyring=/usr/share/openpgp-keys/gentoo-release.asc
+    if [[ -f ${keyring} ]]; then
+        if [[ ! -f ${DL_DIR}/${tarball}.asc ]]; then
+            wget -qO "${DL_DIR}/${tarball}.asc" "${AUTOBUILDS}/${relpath}.asc" ||
+                { command rm -f "${DL_DIR}/${tarball}.asc"; die "asc download failed"; }
+        fi
+        info "Verifying releng GPG signature"
+        local gtmp; gtmp=$(mktemp -d)
+        GNUPGHOME="${gtmp}" gpg -q --import "${keyring}" 2>/dev/null
+        GNUPGHOME="${gtmp}" gpg -q --trust-model always \
+            --verify "${DL_DIR}/${tarball}.asc" "${DL_DIR}/${tarball}" 2>/dev/null ||
+            { command rm -rf "${gtmp}"; die "GPG verification FAILED on ${tarball}"; }
+        command rm -rf "${gtmp}"
+        info "GPG signature good (Gentoo Release Engineering)"
+    else
+        warn "No ${keyring} — stage3 origin NOT verified: emerge -av sec-keys/openpgp-keys-gentoo-release"
+    fi
+
     # without the catalyst dirs the seed still serves 'arm64 unpack' from dl/
     if [[ -d ${STOREDIR}/builds/default ]]; then
         if [[ ! -f ${STOREDIR}/builds/default/${tarball} ]]; then
@@ -869,6 +900,16 @@ live_distfiles_mount() {
     info "distfiles: ${LIVE_DISTFILES_DIR} -> ${LIVE_DISTFILES_MNT} (bind)"
 }
 
+# PKGDIR shared with the host. Unlike distfiles an empty directory is a valid
+# starting point (buildpkg fills it), so it is created rather than skipped.
+# 'squash' excludes /var/cache/binpkgs, so nothing binary reaches the image.
+live_binpkgs_mount() {
+    [[ -n ${LIVE_BINPKGS_DIR} ]] || return 0
+    mkdir -p "${LIVE_BINPKGS_DIR}" "${LIVE_ROOT}${LIVE_BINPKGS_MNT}"
+    mount --bind "${LIVE_BINPKGS_DIR}" "${LIVE_ROOT}${LIVE_BINPKGS_MNT}"
+    info "binpkgs: ${LIVE_BINPKGS_DIR} -> ${LIVE_BINPKGS_MNT} (bind)"
+}
+
 # PORTAGE_TMPDIR/portage, shared with the host. Build trees for a 700-package
 # run are tens of GB; keeping them out of the image rootfs means the tree stays
 # the size of the installed system, and the host's filesystem absorbs the churn.
@@ -905,6 +946,7 @@ live_chroot() {  # live_chroot <label>  (script on stdin)
     live_ccache_mount
     live_distfiles_mount
     live_builddir_mount
+    live_binpkgs_mount
     # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
     trap "live_chroot_umount '${LIVE_ROOT}'" EXIT INT TERM
     local rc=0
@@ -925,6 +967,7 @@ live_chroot_umount() {
     umount "${r}${LIVE_CCACHE_MNT}" 2>/dev/null || true
     umount "${r}${LIVE_DISTFILES_MNT}" 2>/dev/null || true
     umount "${r}${LIVE_BUILDDIR_MNT}" 2>/dev/null || true
+    umount "${r}${LIVE_BINPKGS_MNT}" 2>/dev/null || true
     umount -R "${r}/dev"  2>/dev/null || true
     umount -R "${r}/sys"  2>/dev/null || true
     umount    "${r}/proc" 2>/dev/null || true
@@ -958,6 +1001,10 @@ cmd_live_unpack() {
     info "Unpacking $(basename "${tarball}") (handbook flags: xattrs, numeric owners)"
     tar xpf "${tarball}" -C "${LIVE_ROOT}" --xattrs-include='*.*' --numeric-owner
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No /bin/bash after unpack — broken tarball?"
+    # provenance marker for /etc/image-release, written at squash time
+    { echo "stage3=$(basename "${tarball}")"
+      echo "stage3_sha256=$(sha256sum "${tarball}" | cut -d' ' -f1)"
+    } > "${LIVE_BLD}/stage3.provenance"
     info "rootfs ready: ${LIVE_ROOT} ($(du -sh "${LIVE_ROOT}" 2>/dev/null | cut -f1 || true))"
 }
 
@@ -1048,6 +1095,10 @@ cmd_live_conf() {
 	sync-type = rsync
 	sync-uri = rsync://rsync.gentoo.org/gentoo-portage
 	auto-sync = yes
+	# gemato: verify the MetaManifest against the releng key on every sync —
+	# needs sec-keys/openpgp-keys-gentoo-release installed (in the pkg lists)
+	sync-rsync-verify-metamanifest = yes
+	sync-openpgp-key-path = /usr/share/openpgp-keys/gentoo-release.asc
 	EOF
 
     # the host already has a synced tree; copying beats a fresh rsync inside
@@ -1078,6 +1129,25 @@ cmd_live_conf() {
 		auto-sync = no
 		EOF
     done
+
+    # binpkg verification trust: seed the image's portage keyring from the
+    # host's working one — getuto's Gentoo binhost anchors plus the gen2db
+    # signing key — so a binpkg-request-signature image can verify packages
+    # from its very first merge. Public material only: private keys, the
+    # passphrase file and revocation certs stay on the host.
+    if [[ " ${LIVE_FEATURES} " == *binpkg-request-signature* ]]; then
+        if [[ -f /etc/portage/gnupg/pubring.kbx ]]; then
+            info "Seeding /etc/portage/gnupg (binpkg trust anchors, public only)"
+            mkdir -p "${LIVE_ROOT}/etc/portage/gnupg"
+            rsync -a --delete \
+                --exclude='private-keys-v1.d' --exclude='pass' \
+                --exclude='openpgp-revocs.d' --exclude='.#*' \
+                --exclude='*~' --exclude='tofu.db' --exclude='S.*' \
+                /etc/portage/gnupg/ "${LIVE_ROOT}/etc/portage/gnupg/"
+        else
+            warn "binpkg-request-signature is set but the host has no /etc/portage/gnupg — run getuto first"
+        fi
+    fi
 
     if [[ -n ${LIVE_PORTAGE_PROFILE} ]]; then
         info "Portage profile: ${LIVE_PORTAGE_PROFILE}"
@@ -1447,21 +1517,90 @@ cmd_live_kernel() {
     info "initrd: $(basename "${i}") ($(du -h "${LIVE_BLD}/initrd" | cut -f1))"
 }
 
+# /etc/image-release: every input of this build, machine-readable — the
+# auditable "what went in" record the security policy's chain-of-trust
+# section promises. The package inventory sits beside it.
+live_write_release() {
+    local rel="${LIVE_ROOT}/etc/image-release"
+    local treestamp pwrhead labhead kver="" kcfg="" rp
+    treestamp=$(cat "${LIVE_ROOT}/var/db/repos/gentoo/metadata/timestamp.chk" 2>/dev/null || true)
+    rp=$(portageq get_repo_path / pwr 2>/dev/null || true)
+    pwrhead=$([[ -n ${rp} ]] && git -C "${rp}" rev-parse --short HEAD 2>/dev/null || true)
+    labhead=$(git -C "${REPO}" describe --always --dirty 2>/dev/null || true)
+    kver=$(readlink "${LIVE_ROOT}/usr/src/linux" 2>/dev/null | sed 's/^linux-//' || true)
+    [[ -f ${LIVE_ROOT}/usr/src/linux/.config ]] &&
+        kcfg=$(sha256sum "${LIVE_ROOT}/usr/src/linux/.config" | cut -d' ' -f1)
+    {
+        echo "# xstage image provenance — the inputs of this build"
+        echo "profile=${XPROFILE:-none}"
+        echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "builder=$(hostname)"
+        echo "rpilinuxlab=${labhead}"
+        [[ -f ${LIVE_BLD}/stage3.provenance ]] && cat "${LIVE_BLD}/stage3.provenance"
+        echo "gentoo_tree=${treestamp}"
+        echo "pwr=${pwrhead}"
+        echo "kernel=${kver}"
+        echo "kernel_config_sha256=${kcfg}"
+    } > "${rel}"
+    (cd "${LIVE_ROOT}/var/db/pkg" && ls -d ./*/* 2>/dev/null | sed 's|^\./||' | sort) \
+        > "${LIVE_ROOT}/etc/image-release.packages"
+    info "Provenance: /etc/image-release + .packages ($(grep -c . "${LIVE_ROOT}/etc/image-release.packages") packages)"
+}
+
 cmd_live_squash() {
     need_root
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
     command -v mksquashfs >/dev/null || die "No mksquashfs — emerge -av sys-fs/squashfs-tools"
     mkdir -p "${LIVE_ISO_DIR}"
+
+    live_write_release
+
+    # /etc under git from before first boot — the installed system inherits
+    # an audit trail that starts at the build, and etckeeper's hooks keep it
+    # growing with every emerge
+    if [[ -x ${LIVE_ROOT}/usr/bin/etckeeper ]]; then
+        info "etckeeper: baseline commit of /etc"
+        live_chroot etckeeper <<-EOF
+	git config --system user.name  "xstage"
+	git config --system user.email "root@${LIVE_HOSTNAME}"
+	[ -d /etc/.git ] || etckeeper init
+	etckeeper commit "image build ${XPROFILE:-} $(date -u +%Y-%m-%d)" || true
+	EOF
+    fi
+
+    # AIDE baseline from BEFORE first boot — strictly stronger than one made
+    # after installation (predates any network exposure). The copy inside the
+    # image is convenience; the one exported here is authoritative and must
+    # move to the encrypted volume.
+    if [[ -x ${LIVE_ROOT}/usr/bin/aide ]]; then
+        info "AIDE: initializing pristine baseline (this hashes the whole rootfs)"
+        live_chroot aide-init <<-EOF
+	aide --init || aide -i || echo "AIDE-INIT-FAILED"
+	EOF
+        local adb
+        adb=$(ls -1t "${LIVE_ROOT}"/var/lib/aide/aide.db.new* 2>/dev/null | head -1 || true)
+        if [[ -n ${adb} ]]; then
+            command cp -f "${adb}" "${LIVE_BLD}/aide-baseline-$(date -u +%Y%m%d).db"
+            info "AIDE baseline exported: ${LIVE_BLD}/aide-baseline-*.db — move to the encrypted volume"
+        else
+            warn "aide produced no database under /var/lib/aide — no baseline this build"
+        fi
+    fi
     info "Compressing the rootfs into livecd.squashfs (-comp ${LIVE_COMP})"
     # -e: the pseudo-filesystems are mount points inside the image, and the
     # portage tree we seeded is worth ~1.5 GB of the result on its own
-    local excl=(proc sys dev/pts dev/shm var/tmp/portage var/tmp/distfiles var/cache/distfiles var/cache/ccache)
+    local excl=(proc sys dev/pts dev/shm var/tmp/portage var/tmp/distfiles var/cache/distfiles var/cache/ccache var/cache/binpkgs)
     mksquashfs "${LIVE_ROOT}" "${LIVE_ISO_DIR}/livecd.squashfs" \
         -comp "${LIVE_COMP}" -noappend -no-progress -b 1048576 -no-xattrs \
         -e "${excl[@]}" || die "mksquashfs failed"
     # the marker the CDROOT initrd looks for when identifying the boot media
     touch "${LIVE_ISO_DIR}/livecd"
-    info "livecd.squashfs: $(du -h "${LIVE_ISO_DIR}/livecd.squashfs" | cut -f1)"
+    # recorded OUTSIDE the iso tree: the artifact's own fingerprint, for the
+    # provenance record and for verifying whatever lands on a stick later
+    sha256sum "${LIVE_ISO_DIR}/livecd.squashfs" | sed "s|${LIVE_ISO_DIR}/||" \
+        > "${LIVE_BLD}/livecd.squashfs.sha256"
+    info "livecd.squashfs: $(du -h "${LIVE_ISO_DIR}/livecd.squashfs" | cut -f1)  (sha256 in ${LIVE_BLD})"
+    info "Next: sudo $0 ${TGT:-amd64} usb /dev/sdX   (ISO only for the qemu gate: isolinux + iso)"
 }
 
 cmd_live_isolinux() {
@@ -1519,8 +1658,8 @@ cmd_live_all() {
     cmd_live_configure
     cmd_live_kernel
     cmd_live_squash
-    cmd_live_isolinux
-    cmd_live_iso
+    info "Deliverable: sudo $0 ${TGT:-amd64} usb /dev/sdX"
+    info "Optional qemu-gate ISO: sudo $0 ${TGT:-amd64} isolinux && sudo $0 ${TGT:-amd64} iso"
 }
 
 cmd_live_gate() {
@@ -1667,6 +1806,7 @@ cmd_live_enter() {
     live_ccache_mount
     live_distfiles_mount
     live_builddir_mount
+    live_binpkgs_mount
     # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
     trap "live_chroot_umount '${LIVE_ROOT}'" EXIT INT TERM
     info "Entering ${LIVE_ROOT} — 'exit' to leave (mounts are undone on the way out)"

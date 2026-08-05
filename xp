@@ -34,16 +34,20 @@
 #   pkgs            install the profile's package list: cross-emerge into a
 #                   board rootfs, or emerge inside the live chroot      [root]
 #   rpi             Pi boot payload into the rootfs                    [root]
-#   image           board: build sd.img — native: master livecd.iso     [root]
+#   image           board: build sd.img — native: master livecd.iso
+#                   (optional; 'usb' is the native deliverable)      [root]
 #   gate            boot the result in qemu (board: output-only; native:
 #                   interactive, KVM when available)
 #
-# Live-image verbs (native profiles only — squashfs + isolinux, the layout
-# bin/v builds; run them in this order, or just 'live'):
-#   unpack conf pkgs configure livekernel squash isolinux iso   [root]
-#   live            the whole chain in one go                          [root]
-#   usb DEV [--wipe] USB deliverable: build-usb layout, kernel +
-#                   UUID-initrd on p1, squashfs on p2           [root,confirm]
+# Live-image verbs (native profiles only — squashfs, the layout bin/v
+# builds; run them in this order, or just 'live'; isolinux+iso are optional,
+# only the qemu gate needs them):
+#   unpack conf pkgs configure livekernel squash [isolinux iso]  [root]
+#   live            the chain through squash (no ISO)                  [root]
+#   usb DEV [--wipe] the deliverable: kernel + UUID-initrd -> p1,
+#                   squashfs -> p2 of an existing build-usb stick;
+#                   --wipe (or no layout) first wipes the whole stick,
+#                   repartitions and installs GRUB              [root,confirm]
 #   run             xlab run for the profile's xlab target
 #   kernel          xlab kernel build
 #   sd DEV          dd sd.img onto a real card                 [root,confirm]
@@ -213,7 +217,8 @@ rpi)
     ;;
 image)
     no_args "$@"
-    # boards produce sd.img; native profiles produce livecd.iso
+    # boards produce sd.img; native profiles produce livecd.iso (optional
+    # qemu-gate artifact — the native deliverable is 'usb')
     if ! is_board; then exec "${XSTAGE}" "${T}" iso; fi
     exec "${XSTAGE}" "${T}" "${PROF_IMAGE_CMD}"
     ;;

@@ -157,6 +157,15 @@ CONFIG_BT_HCIBTUSB=m
 CONFIG_NETFILTER=y
 CONFIG_NF_TABLES=m
 CONFIG_NF_CONNTRACK=m
+# legacy xtables path too: the hardened layer ships a default-deny
+# iptables-restore ruleset, and eselect iptables may point either way
+CONFIG_NETFILTER_XTABLES=m
+CONFIG_NETFILTER_XT_MATCH_CONNTRACK=m
+CONFIG_NETFILTER_XT_MATCH_STATE=m
+CONFIG_IP_NF_IPTABLES=m
+CONFIG_IP_NF_FILTER=m
+CONFIG_IP6_NF_IPTABLES=m
+CONFIG_IP6_NF_FILTER=m
 CONFIG_BRIDGE=m
 CONFIG_VETH=m
 CONFIG_MACVLAN=m
@@ -257,6 +266,10 @@ CONFIG_KPROBES=y
 CONFIG_UPROBES=y
 CONFIG_AUDIT=y
 CONFIG_AUDITSYSCALL=y
+# the running kernel can prove its own configuration (/proc/config.gz) —
+# closes the loop with kernel_config_sha256 in /etc/image-release
+CONFIG_IKCONFIG=y
+CONFIG_IKCONFIG_PROC=y
 # the deployed sysctl hardening set expects these on EVERY image, not just the
 # hardened flavour: yama for kernel.yama.ptrace_scope (inert at scope 0 until
 # sysctl raises it; the default CONFIG_LSM string already lists yama), kexec
