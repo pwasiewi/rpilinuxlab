@@ -270,6 +270,18 @@ LIVE_DISTFILES_DIR="${XSTAGE_LIVE_DISTFILES_DIR:-}"
 LIVE_DISTFILES_MNT="/var/tmp/distfiles"   # same path as the host, so DISTDIR reads alike
 LIVE_BUILDDIR="${XSTAGE_LIVE_BUILDDIR:-}"
 LIVE_BUILDDIR_MNT="/var/tmp/portage"      # PORTAGE_TMPDIR stays /var/tmp
+# raw make.conf lines, newline-separated, appended last inside the managed
+# block. This is how a profile sets a USE_EXPAND variable (LLVM_SLOT,
+# LUA_SINGLE_TARGET, RUBY_TARGETS, …). Writing 'llvm_slot_21' into USE instead
+# looks equivalent and is not: USE only ADDS the flag, while the variable
+# REPLACES the profile's whole set. With USE the profile's own default stays
+# on beside it, and mesa's 'exactly-one-of ( llvm_slot_18 … llvm_slot_22 )'
+# then fails — a resolver error, so it aborts the entire run.
+LIVE_MAKECONF_EXTRA="${XSTAGE_LIVE_MAKECONF_EXTRA:-}"
+# 'pkgs' updates the stage3 to the tree before merging the package list; see
+# cmd_live_pkgs for why the two cannot share one resolver graph. Set to 'no'
+# only to reproduce a seed-era build.
+LIVE_UPDATE_FIRST="${XSTAGE_LIVE_UPDATE_FIRST:-yes}"
 LIVE_PYTHON_SINGLE_TARGET="${XSTAGE_LIVE_PYTHON_SINGLE_TARGET:-}"
 LIVE_PORTAGE_PROFILE="${XSTAGE_LIVE_PORTAGE_PROFILE:-}"
 # squashfs codec: zstd compresses ~4x faster than xz at a few percent size
@@ -1004,6 +1016,8 @@ cmd_live_conf() {
             echo "CCACHE_DIR=\"${LIVE_CCACHE_MNT}\""
         fi
         [[ -n ${LIVE_DISTFILES_DIR} ]] && echo "DISTDIR=\"${LIVE_DISTFILES_MNT}\""
+        # last, so a profile can override anything the block set above it
+        [[ -n ${LIVE_MAKECONF_EXTRA} ]] && printf '%s\n' "${LIVE_MAKECONF_EXTRA}"
         echo "# --- END xstage-managed block ---"
     } >> "${mc}"
 
@@ -1108,7 +1122,32 @@ cmd_live_pkgs() {
     [[ -d ${LIVE_ROOT}/var/db/repos/gentoo/profiles ]] ||
         die "No ebuild tree in the image — run: sudo $0 ${TGT:-amd64} conf"
     local n; n=$(printf '%s\n' "${list}" | grep -c . || true)
-    info "Merging ${n} top-level packages${LIVE_SETS:+ + sets: ${LIVE_SETS}} (dependencies resolve inside)"
+    # Pass 1: bring the stage3 up to the tree BEFORE adding the package list.
+    #
+    # Not an optimisation — the two do not fit in one resolver graph. A stage3
+    # is a snapshot, so the tree has usually moved a language runtime under it,
+    # and dev-lang/perl is the reliable offender: 5.42 -> 5.44 changes the
+    # subslot, the ~60 dev-perl modules the stage3 ships pin ':0/5.42=', and the
+    # fresh virtual/perl-* the tree offers demand '=dev-lang/perl-5.44*'.
+    # Resolving that transition at the same time as several hundred new atoms
+    # made portage give up after 23 backtracks and 220 s (measured, amd64kde
+    # 2026-08-05). Alone it takes 30 s and 3 backtracks.
+    #
+    # This costs no extra build time: '--update --newuse --deep' rebuilds that
+    # part of the stage3 either way, because the image's USE and CFLAGS differ
+    # from the seed's. It only fixes the ORDER.
+    #
+    # @installed alongside @world on purpose: the packages holding the old
+    # subslot are stage3 leaves that nothing in @world reaches, so without it
+    # they stay outside the graph and portage never schedules their rebuild.
+    if [[ ${LIVE_UPDATE_FIRST} == yes ]]; then
+        info "Pass 1/2: updating the stage3 to the tree (@world @installed)"
+        live_chroot update-seed <<-EOF
+	emerge --verbose --keep-going --with-bdeps=y \\
+	    --update --deep --newuse @world @installed
+	EOF
+    fi
+    info "Pass 2/2: merging ${n} top-level packages${LIVE_SETS:+ + sets: ${LIVE_SETS}} (dependencies resolve inside)"
     # --keep-going: one broken ebuild in a 300-package image should not throw
     # away hours of work; the summary at the end names what failed
     live_chroot pkgs <<-EOF

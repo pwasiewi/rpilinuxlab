@@ -1,0 +1,81 @@
+# Image-specific per-package USE decisions.
+
+# Breaks the sys-libs/libcap-ng <-> sys-process/audit build-time cycle.
+# The cycle exists only because this profile sets 'bpf' globally: libcap-ng[bpf]
+# build-depends on audit, and audit build-depends on libcap-ng. This is
+# portage's own suggested cut, and it costs nothing here — libcap-ng's bpf
+# support is for its capability-set parser, not for anything audit needs.
+sys-libs/libcap-ng -bpf
+
+# Breaks the media-libs/freetype <-> gnome-base/librsvg cycle.
+# Portage offers '-svg' or '-utils'; '-utils' is the right cut. freetype's
+# dependency is literally 'utils? ( svg? ( librsvg ) )' — librsvg is needed
+# only to build the demo programs (ftview, ftbench, ftdump), not for the
+# library's OT-SVG support. '-svg' would have cost colour-font rendering for
+# nothing. Both flags are on globally: 'svg' from the graphics group, 'utils'
+# from 'extras tools utils contrib extra'.
+media-libs/freetype -utils
+
+# Breaks the whole family of X -> pipewire -> ffmpeg -> X build cycles in one
+# cut, rather than one ffmpeg flag per cycle. Every one of them routes through
+# the same edge: openal -> pipewire -> ffmpeg -> openal, then
+# libsdl2 -> pipewire -> ffmpeg -> libsdl2, and so on for anything ffmpeg
+# build-depends on that also offers a pipewire backend.
+#
+# It is also the cheapest of the three cuts portage offers each time. From the
+# pipewire ebuild itself:
+#     # - ffmpeg is only used for pw-cat. We don't build the spa plugin ...
+#     -Dffmpeg=disabled # Disabled by upstream and no major developments to
+#                       # spa/plugins/ffmpeg/ since May 2020
+# So the flag buys compressed-format support in the pw-cat CLI tool and
+# nothing else; the SPA plugin it sounds like it enables is off upstream
+# regardless. The alternatives each cost a real audio path: '-sdl' on ffmpeg
+# drops ffplay, '-pipewire' on libsdl2 or openal drops their native backend.
+media-video/pipewire -ffmpeg
+
+# Overrides host.use, which carries 'x11-libs/libxcb doc' from this host's own
+# package.use. That single entry re-enables doc against the profile's global
+# '-doc' and builds a cycle out of nothing:
+#   doxygen -> graphviz -> libX11 -> libxcb -> doxygen
+# libxcb[doc] exists to generate its own API HTML with doxygen. A live image
+# has no use for it, and dropping it also takes doxygen and graphviz out of
+# the graph entirely.
+# (This file sorts after host.use, so it wins; portage reads package.use/* in
+# alphabetical order and the last matching entry applies.)
+x11-libs/libxcb -doc
+
+# Breaks tslib -> libsdl2 -> pipewire -> libv4l -> qtbase -> tslib.
+# x11-libs/tslib is a resistive-touchscreen input library from the embedded
+# world; a T14's touchscreen goes through libinput/evdev and never touches it.
+# The flag reached qtbase through rare-flags.use, which is where the census
+# moved it — this file is named 'zz-' so image decisions sort last and win
+# over both host.use and rare-flags.use.
+dev-qt/qtbase -tslib
+
+# Breaks libjpeg-turbo -> virtual/jdk -> openjdk-bin -> harfbuzz -> glib
+# -> docutils -> pillow -> libjpeg-turbo.
+# The global 'java' flag reaching a low-level image codec: libjpeg-turbo[java]
+# builds the TurboJPEG Java wrapper, which drags a whole JDK into the graph.
+# Nothing in this image loads JPEGs through Java.
+media-libs/libjpeg-turbo -java
+
+# Breaks pillow -> harfbuzz -> glib -> docutils -> pillow, the one cycle in
+# this image that portage can suggest no cut for: dev-libs/glib BDEPENDs
+# dev-python/docutils unconditionally, and docutils BDEPENDs pillow the same
+# way, so neither edge has a flag to turn off. Only pillow[truetype] does.
+#
+# Chosen over a two-pass build (merge pillow once without truetype, let the
+# main run rebuild it with it) to keep the pipeline single-pass.
+#
+# What it costs: PIL/Pillow's ImageFont TrueType rendering, and with it
+# app-text/calibre, which USE-depends on pillow[truetype] and is therefore
+# dropped from PROF_LIVE_PKGS. matplotlib is unaffected — it carries its own
+# freetype. Re-enable the flag and rebuild in the running system if needed.
+dev-python/pillow -truetype
+
+# Breaks zziplib -> libsdl2 -> libpulse -> gtk+:3 -> cups -> xdg-utils
+# -> xmlto -> texlive-formatsextra -> texlive-core -> zziplib.
+# zziplib[sdl] adds an SDL_rwops shim for reading zip archives through SDL.
+# Nothing in this image reads zips that way, and the flag is only set because
+# 'sdl' is global.
+dev-libs/zziplib -sdl

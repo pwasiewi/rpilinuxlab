@@ -1,0 +1,54 @@
+# Keyword exceptions the image needs but the host file does not supply.
+#
+# host.keywords is a copy of this host's list, and the host's entry for
+# picom-jonaburg is a bare atom, i.e. ~amd64. That was enough here because the
+# installed copy is x11-misc/picom-jonaburg-8, an orphan left over from before
+# ::guru deleted the release ebuild. Only -9999 exists now, and its KEYWORDS
+# sits in the non-live branch of the ebuild:
+#
+#   if [[ ${PV} == *9999 ]]; then EGIT_REPO_URI=...
+#   else ... KEYWORDS="~amd64"; fi
+#
+# so at PV=9999 KEYWORDS is empty and nothing short of '**' accepts it.
+#
+# All four atoms below are live ebuilds: 'pkgs' will git-clone upstream HEAD at
+# build time. That is unreviewed code entering the image and it makes the build
+# non-reproducible — pin them (EGIT_COMMIT in ::pwr) or drop them from
+# PROF_LIVE_OVERLAY_PKGS if that matters more than having them.
+x11-misc/picom-jonaburg **
+dev-util/tracee **
+# amd64kde only (::pwr): same shape, KEYWORDS empty at PV=9999.
+app-misc/dezkvm **
+dev-util/opencode-bin **
+
+# Testing-only, keyworded ~amd64, listed by amd64kde and not by the host's own
+# package.accept_keywords. Found by keyword-checking every listed atom against
+# the repo rather than by hitting them one failed run at a time.
+dev-util/catalyst
+app-misc/qwen-code
+
+# Testing-only DEPENDENCIES, found by resolving the whole graph rather than by
+# hitting them one failed run at a time. The host's list could not cover these:
+# they are pulled by versions the image resolves to and the host does not.
+#   feedparser-sgmllib  <- dev-python/feedparser <- app-text/calibre
+#   the perl virtuals   <- dev-lang/perl-5.44, which the stage3 upgrades into
+# Unversioned on purpose; autounmask suggests '=<exact version>', which rots
+# at the next bump.
+dev-python/feedparser-sgmllib
+virtual/perl-Text-Balanced
+virtual/perl-Time-HiRes
+virtual/perl-Math-BigInt
+#   protobuf   <- dev-ruby/google-protobuf <- googleapis-common-protos-types
+#                 <- dev-ruby/grpc
+# (dev-python/pyqtgraph was here for net-wireless/gqrx; both dropped from
+#  amd64kde on 2026-08-05 — the ~amd64 pyqtgraph caps numpy <2.5.0.)
+dev-libs/protobuf
+
+# host.keywords lists 'dev-util/shaderc', but shaderc lives in media-libs — the
+# package moved category and the host's entry has silently matched nothing
+# since. It does not bite the host, which simply never re-resolved; it is fatal
+# here. dev-util/glslang IS keyworded, so the image sees glslang-1.4.350.0
+# (subslot 16.3), while the newest VISIBLE shaderc stays at the stable 2026.1,
+# which wants ':0/16.2='. Only shaderc-2026.2 accepts 16.3 and it is ~amd64.
+# Result: an unsolvable glslang/spirv-tools/spirv-headers slot conflict.
+media-libs/shaderc

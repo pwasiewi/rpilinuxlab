@@ -1,0 +1,178 @@
+# package.use for the amd64kdehardened live image.
+#
+# Verbatim copy of this host's /etc/portage/package.use/{moje,systemowe}.use,
+# taken 2026-08-04, for the same reason as host.keywords next door:
+# PROF_LIVE_PKGS is this host's world(5), so the USE-dependency constraints
+# that world needs are this host's too. sys-power/suspend[crypt] requiring
+# dev-libs/libgcrypt[static-libs] is the shape of it — an unsatisfiable USE
+# dependency is a resolver error, so it aborts the whole 'pkgs' run.
+#
+# Checked against the hardened profile before copying: nothing here touches
+# hardened/pie/ssp/pic, and the flags it does set in that area — caps,
+# filecaps, seccomp, -suid — all point the same way the profile does.
+#
+# Regenerate with:
+#   cat /etc/portage/package.use/{moje,systemowe}.use
+
+*/* PYTHON_TARGETS: -* python3_13 python3_14
+*/* PYTHON_SINGLE_TARGET: -* python3_14
+net-firewall/ufw PYTHON_SINGLE_TARGET: -* python3_13
+sys-apps/polychromatic PYTHON_SINGLE_TARGET: -* python3_13
+sys-devel/distcc PYTHON_SINGLE_TARGET: -* python3_13
+dev-util/gtk-builder-convert PYTHON_SINGLE_TARGET: -* python3_13
+media-libs/libffado PYTHON_SINGLE_TARGET: -* python3_13
+net-mail/mailutils PYTHON_SINGLE_TARGET: -* python3_13
+app-misc/fastfetch lua_single_target_lua5-4
+app-crypt/tpm2-tss -gcrypt
+dev-lang/ruby -rdoc
+sys-apps/portage gentoo-dev -rsync-verify
+sys-fs/cryptsetup -gcrypt
+gnome-base/gnome-keyring -pam
+dev-util/nvidia-cuda-toolkit examples -debugger
+x11-drivers/nvidia-drivers kernel-open -strip
+media-video/vlc lua_single_target_lua5-1
+net-misc/vde -ssl
+media-libs/libva -egl
+app-crypt/gnupg user-socket
+sys-apps/rng-tools -jitterentropy nistbeacon
+dev-libs/gmp static-libs
+dev-libs/libbpf static-libs
+app-admin/keepassxc yubikey autotype browser keeshare
+app-admin/passwordsafe qr xvkbd yubikey
+app-emulation/wine-staging -mingw -wow64
+media-libs/libsdl2 haptic gles2
+app-crypt/pinentry gnome-keyring
+app-containers/lxc examples
+net-vpn/openvpn examples
+sci-misc/llama-cpp examples
+www-client/firefox gmp-autoupdate screenshot startup-notification -custom-cflags -custom-optimization -debug -eme-free hwaccel -jack -neon -selinux -pgo -system-av1 -system-harfbuzz -system-icu -system-jpeg -system-libevent -system-libvpx -system-sqlite -system-webp
+media-plugins/audacious-plugins adplug cdda gtk -gtk3 -libnotify nls -bs2b -cue -fluidsynth -http -jack lame -libsamplerate -lirc mms -scrobbler -sid sndfile wavpack
+app-emulation/qemu -accessibility bzip2 caps curl -debug fdt filecaps glusterfs gtk2 -infiniband -iscsi ncurses nfs nls numa pin-upstream-blobs -sasl sdl2 seccomp -selinux -smartcard snappy spice ssh -static -static-softmmu static-user -tci -test -usbredir -uuid vde vhost-net virgl -virtfs vte -xen -rbd
+x11-base/xorg-server -xnest -debug -ipv6 -libressl -minimal -unwind -xcsecurity -xephyr -suid -tslib libglvnd classic
+dev-java/openjdk gentoo-vm
+dev-java/openjfx -media
+app-office/libreoffice -mariadb
+app-office/libreoffice-l10n offlinehelp
+dev-util/pycharm-community bundled-jdk
+app-emulation/libvirt glusterfs -virtualbox -xen
+sys-boot/grub mount
+app-misc/ddcutil user-permissions
+kde-plasma/plasma-vault networkmanager
+dev-util/vulkan-tools cube
+app-admin/sudo -gcrypt
+sys-libs/glibc hash-sysv-compat
+dev-libs/libevent debug malloc-replacement
+net-misc/ntpsec smear ntpviz
+dev-libs/xmlsec nss
+media-libs/opencv -gtk3 -lapack
+net-misc/curl adns -gnutls
+sys-apps/systemd gnuefi
+media-video/ffmpeg libass libdrm libaom libcaca
+dev-db/unixODBC -minimal odbcmanual
+gui-apps/rofi-wayland drun windowmode
+media-libs/avidemux-core -nvenc
+media-libs/avidemux-plugins -nvenc
+app-crypt/johntheripper-jumbo opencl
+dev-qt/qtwebengine -jumbo-build qml -system-icu
+kde-plasma/plasma-nm -openconnect
+kde-plasma/kdeplasma-addons -webengine
+kde-plasma/plasma-desktop -webengine
+dev-python/pyqt6 -pdfium
+kde-frameworks/purpose -webengine
+net-libs/nodejs npm corepack
+media-gfx/gimp heif webp
+sys-kernel/installkernel efistub
+net-misc/freerdp server
+virtual/zlib static-libs
+app-text/poppler nss
+sys-process/lsof rpc
+sci-libs/openblas -openmp pthread
+net-firewall/iptables nftables
+app-editors/vscode webkit
+app-editors/vscodium webkit
+x11-libs/libxcb doc
+dev-db/oracle-instantclient jdbc
+media-sound/bluez-alsa aptx ldac
+dev-libs/uriparser doc
+app-arch/7zip rar symlink uasm
+dev-qt/qttools qdoc designer
+net-libs/libwebsockets client
+net-analyzer/suricata -lua
+net-analyzer/wireshark lua_single_target_lua5-4
+dev-python/pyside positioning uitools webengine
+dev-qt/qtdeclarative qmlls
+dev-qt/qtpositioning geoclue
+dev-util/bcc lua_single_target_luajit
+app-arch/xz-utils extra-filters nls -pgo static-libs
+sci-ml/caffe2 distributed numpy flash memefficient cusparselt gloo
+dev-python/vllm humming rust
+dev-python/mistral-common image
+dev-libs/cutlass -headers-only cublas cudnn
+
+>=dev-libs/libgpg-error-1.19 static-libs
+>=dev-libs/lzo-2.08 static-libs
+>=dev-libs/libgcrypt-1.7.3 static-libs
+>=sys-apps/attr-2.4.47-r2 static-libs
+>=dev-libs/glib-2.48.2 static-libs
+>=app-arch/bzip2-1.0.6-r7 static-libs
+>=sys-libs/zlib-1.2.8-r1 static-libs
+>=dev-libs/libpcre-8.38-r1 static-libs
+>=sys-process/tini-0.13.0 static
+>=media-libs/libjpeg-turbo-1.5.0 static-libs
+>=dev-libs/openssl-1.0.2k static-libs
+>=net-misc/curl-7.53.0 static-libs
+>=sys-libs/libcap-ng-0.7.8 static-libs
+>=media-libs/libpng-1.6.27 static-libs
+>=media-libs/opus-1.1.3-r1 static-libs
+>=media-libs/libsdl2-2.0.4 static-libs
+>=dev-libs/libaio-0.3.110 static-libs
+>=dev-libs/nettle-3.3-r1 static-libs
+>=net-libs/gnutls-3.3.26 static-libs
+>=app-arch/snappy-1.1.3-r1 static-libs
+>=sys-apps/dtc-1.4.1 static-libs
+>=virtual/jpeg-0-r2:0 static-libs
+>=sys-fs/xfsprogs-4.5.0 static-libs
+>=x11-libs/pixman-0.34.0 static-libs
+>=media-libs/virglrenderer-0.2.0 static-libs
+>=net-libs/libssh2-1.7.0 static-libs
+>=net-misc/vde-2.3.2-r2 static-libs
+>=app-emulation/spice-0.12.7-r1 static-libs
+>=net-fs/libnfs-1.9.7 static-libs
+>=dev-libs/elfutils-0.169-r1 static-libs
+>=dev-lang/orc-0.4.28-r1 static-libs
+>=app-arch/lz4-1.8.3 static-libs
+>=dev-lang/php-7.3.11 soap fpm
+>=x11-drivers/nvidia-drivers-440.44-r1 compat
+>=sys-apps/util-linux-2.35.1 caps
+>=virtual/libcrypt-1 static-libs
+>=app-arch/xz-utils-5.2.4-r2 static-libs
+>=dev-db/postgresql-12.2 kerberos
+>=dev-libs/libjcat-0.1.2 pkcs7
+>=sys-libs/libseccomp-2.4.3 static-libs
+>=net-dialup/ppp-2.4.8 eap-tls
+>=net-nds/openldap-2.4.50 static-libs
+>=net-misc/curl-7.71.1 http2
+>=dev-python/qtpy-1.9.0-r2 printsupport gui
+>=app-arch/zstd-1.4.5 static-libs
+>=sys-apps/file-5.39-r3 -python
+>=app-eselect/eselect-php-0.9.7 fpm
+>=www-client/w3m-0.5.3_p20180125 imlib
+>=media-libs/freetype-2.11.0 harfbuzz
+>=sys-libs/libxcrypt-4.4.23-r2 static-libs
+>=sys-apps/openrazer-3.12.3 client
+>=sys-libs/libcap-2.65 static-libs
+>=dev-libs/libpcre2-10.40 static-libs
+>=dev-python/pillow-9.2.0 webp
+>=media-video/ffmpeg-4.4.2 chromium opus libass
+>=dev-python/pyqt6-6.5.3 quick
+>=sys-fs/lvm2-2.03.22-r2 thin
+>=x11-base/xwayland-23.2.2 libei
+>=net-libs/zeromq-4.3.5-r1 -drafts
+>=sci-libs/lapack-3.12.0-r1 lapacke
+>=app-text/poppler-24.09.0 qt5
+>=app-crypt/qca-2.3.9 qt5
+>=sys-auth/polkit-qt-0.200.0 qt5
+>=x11-drivers/nvidia-drivers-560.35.03-r1 static-libs
+>=media-plugins/gst-plugins-meta-1.20.6 http opus vpx
+>=net-dns/bind-9.18.29-r2 gssapi
+>=media-libs/libsdl3-3.2.2 gles2
