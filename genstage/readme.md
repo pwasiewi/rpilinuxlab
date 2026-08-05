@@ -405,7 +405,7 @@ sits on `/mnt/db5` outside the repo.
   the Pi).
 - **UEFI boot in qemu** (separate task): boot the built artifacts through an
   OVMF/AAVMF firmware instead of `-kernel`, reusing the host's
-  `efi-boot` / `build-initrd-uuid-next` patterns (`~/Claude/bin`) — squashfs
+  `efi-boot` / `build-initrd-uuid-next`   — squashfs
   root located by UUID, switch_root from a busybox initrd.
 - **musl tiny variant**: a second crossdev toolchain
   (`aarch64-…-linux-musl`) for the truly smallest images (5–10 MB squashfs).

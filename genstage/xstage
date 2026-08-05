@@ -10,7 +10,7 @@
 #  * tiny  — the Gentoo analog of Buildroot: a minimal aarch64 rootfs emerged
 #    into a directory with --root= (no portage inside), regenerated from
 #    scratch on the host instead of updated on the target.
-# Recipe/background: ~/Claude/rpilinuxlab/genstage/readme.md
+# Recipe/background: rpilinuxlab/genstage/readme.md
 #
 # Usage: xstage <target> <subcommand> [args]
 #        xstage targets | status | clean
@@ -1056,15 +1056,28 @@ cmd_live_conf() {
             "${LIVE_ROOT}/etc/portage/make.profile"
     fi
 
-    # config fragments (sysctl/modprobe/auditd rules for the hardened profile)
+    # Config fragments: portage keyword/USE files, sysctl/modprobe/auditd rules.
+    #
+    # A space-separated LIST, applied left to right, so a profile can stack a
+    # shared layer under its own: 'common hardened' gives every image the host
+    # transplant (host.keywords, host.use, the cycle cuts) and the hardened one
+    # its extra desktop-profile.use and sysctl rules on top. Later dirs win,
+    # which is also why image decisions are named zz-*.use — portage reads
+    # package.use/* alphabetically and the last match wins.
+    #
+    # rsync here is additive by design: renaming or deleting a fragment leaves
+    # the old file behind in an image tree that has already been configured.
     if [[ -n ${XSTAGE_LIVE_OVERLAY_DIR:-} ]]; then
-        local ov="${LIVE_TPL}/${XSTAGE_LIVE_OVERLAY_DIR}"
-        if [[ -d ${ov} ]]; then
-            info "Overlaying config fragments from ${ov}"
-            rsync -a "${ov}/" "${LIVE_ROOT}/"
-        else
-            warn "PROF_LIVE_OVERLAY_DIR='${XSTAGE_LIVE_OVERLAY_DIR}' but ${ov} does not exist"
-        fi
+        local ovdir
+        for ovdir in ${XSTAGE_LIVE_OVERLAY_DIR}; do
+            local ov="${LIVE_TPL}/${ovdir}"
+            if [[ -d ${ov} ]]; then
+                info "Overlaying config fragments from ${ov}"
+                rsync -a "${ov}/" "${LIVE_ROOT}/"
+            else
+                warn "PROF_LIVE_OVERLAY_DIR names '${ovdir}' but ${ov} does not exist"
+            fi
+        done
     fi
     # FEATURES=ccache does nothing without the masquerade symlinks in
     # /usr/lib/ccache/bin, and those come from dev-util/ccache being installed
