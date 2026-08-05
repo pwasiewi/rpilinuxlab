@@ -74,6 +74,11 @@ CONFIG_USB_UAS=y
 CONFIG_USB_STORAGE=y
 CONFIG_USB_HID=y
 CONFIG_HID_GENERIC=y
+# /dev/input/mice for sys-libs/gpm (console mouse; its pre-merge check flags
+# this). No longer in defconfig and carries no 'default y', so the merge
+# leaves it off unless named here. evdev (the Wayland/libinput path) IS a
+# defconfig default and needs no entry.
+CONFIG_INPUT_MOUSEDEV=y
 CONFIG_USB_PRINTER=m
 
 # virtio: without these 'xp <profile> gate' boots into a kernel panic.

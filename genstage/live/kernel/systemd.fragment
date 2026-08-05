@@ -43,6 +43,9 @@ CONFIG_AUTOFS_FS=y
 CONFIG_TMPFS_POSIX_ACL=y
 CONFIG_IPV6=y
 CONFIG_CGROUP_BPF=y
+# RestrictNetworkInterfaces= and the other bpf-lsm unit knobs; also the exact
+# symbol systemd's linux-info pre-merge check warns about when absent
+CONFIG_BPF_LSM=y
 # DMI-based ConditionVirtualization=/hostnamectl chassis detection (x86)
 CONFIG_DMIID=y
 # kcmp() — systemd uses it for fd deduplication; also what sys-process/criu

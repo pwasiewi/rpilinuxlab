@@ -76,6 +76,10 @@ CONFIG_SECURITY_NETWORK=y
 CONFIG_SECURITY_SAFESETID=y
 CONFIG_LSM="landlock,lockdown,yama,integrity,bpf"
 CONFIG_SECURITY_LANDLOCK=y
+# 'bpf' in CONFIG_LSM is inert without the LSM itself — olddefconfig defaults
+# it to n, and systemd's pre-merge check flags the miss (it wants it for
+# RestrictNetworkInterfaces= and friends)
+CONFIG_BPF_LSM=y
 CONFIG_BPF_UNPRIV_DEFAULT_OFF=y
 
 # --- legacy interfaces that are pure attack surface -------------------------

@@ -52,11 +52,14 @@
 #                    build/<profile>/rootfs                                [root]
 #   conf             make.conf, repos.conf, ::gentoo + overlays seeded from
 #                    the host tree, portage profile, config fragments       [root]
-#   pkgs             emerge PROF_LIVE_PKGS / _TIERS / _SETS in the chroot   [root]
+#   pkgs             prepare /usr/src/linux + merged .config (so linux-info
+#                    pre-merge checks audit the image, not the host), then
+#                    emerge PROF_LIVE_PKGS / _TIERS / _SETS in the chroot   [root]
 #   configure        hostname, root password, sshd, default runlevel, motd  [root]
 #   kernel           genkernel with CDROOT=1 inside the chroot; the .config is
 #                    built by merging live/kernel/*.fragment onto a base
-#                    (XSTAGE_LIVE_KCONFIG_BASE: defconfig | host | PATH)   [root]
+#                    (XSTAGE_LIVE_KCONFIG_BASE: defconfig | host | PATH),
+#                    re-merged here even if 'pkgs' already staged it        [root]
 #   squash           mksquashfs -> iso/livecd.squashfs + the /livecd marker [root]
 #   isolinux         populate iso/isolinux/ (syslinux + rendered cfg)       [root]
 #   iso              xorriso -> livecd.iso (isohybrid: CD and USB alike)    [root]
@@ -284,6 +287,10 @@ LIVE_MAKECONF_EXTRA="${XSTAGE_LIVE_MAKECONF_EXTRA:-}"
 LIVE_UPDATE_FIRST="${XSTAGE_LIVE_UPDATE_FIRST:-yes}"
 LIVE_PYTHON_SINGLE_TARGET="${XSTAGE_LIVE_PYTHON_SINGLE_TARGET:-}"
 LIVE_PORTAGE_PROFILE="${XSTAGE_LIVE_PORTAGE_PROFILE:-}"
+# the kernel sources /usr/src/linux/.config is built against; a profile whose
+# package list ships another sources package (zen-sources, say) should name it
+# here too, or the image ends up carrying both trees
+LIVE_KERNEL_PKG="${XSTAGE_LIVE_KERNEL_PKG:-sys-kernel/gentoo-sources}"
 # squashfs codec: zstd compresses ~4x faster than xz at a few percent size
 # cost — bin/v picks xz because its images are burned once and booted forever
 LIVE_COMP="${XSTAGE_LIVE_COMP:-zstd}"
@@ -1114,6 +1121,103 @@ cmd_live_conf() {
     info "Image configured."
 }
 
+# Kernel sources + merged .config inside the image: emerge gentoo-sources if
+# /usr/src/linux is absent, stage the per-flavour Kconfig fragments, merge them
+# onto the base, run 'make olddefconfig', and verify the boot chain survived.
+#
+# Called from TWO verbs, and the order is the point:
+#   - 'pkgs' runs it BEFORE the first emerge. Every linux-info pre-merge check
+#     (systemd's CONFIG_BPF_LSM, libfido2, bpftrace, ...) reads
+#     /usr/src/linux/.config inside the chroot; without one the eclass falls
+#     back to the HOST's running kernel and audits the wrong config — its
+#     warnings then describe this laptop, not the image being built.
+#   - 'kernel' runs it again before genkernel: cheap and idempotent, and it
+#     picks up fragment edits made after 'pkgs' already ran.
+live_prep_kconfig() {
+    # The base the fragments are merged onto:
+    #   defconfig  the kernel's own x86_64 defconfig — reproducible, and the
+    #              live fragment adds the breadth an ISO needs (default)
+    #   host       this machine's /usr/src/linux/.config — widest driver set,
+    #              but it is tuned for THIS laptop and carries its quirks
+    #   <path>     any .config file on the host
+    local base="${XSTAGE_LIVE_KCONFIG_BASE:-defconfig}"
+    local frags=("${LIVE_TPL}/kernel/live.fragment")
+    # extra symbols the post-merge check insists on, per flavour
+    local kcheck=""
+    # systemd as PID 1 has its own mandatory Kconfig list (its README); an
+    # OpenRC image has no use for it, so it is a separate fragment
+    if [[ ${LIVE_RC} == systemd ]]; then
+        frags+=("${LIVE_TPL}/kernel/systemd.fragment")
+        kcheck+=" CONFIG_FHANDLE CONFIG_AUTOFS_FS CONFIG_DMIID CONFIG_CGROUPS"
+        info "systemd flavour — adding the systemd kernel fragment"
+    fi
+    # a hardened image needs kernel-side hardening too: the portage 'hardened'
+    # profile only changes the toolchain, never the kernel
+    if [[ ${LIVE_PORTAGE_PROFILE} == *hardened* || -n ${XSTAGE_LIVE_KHARDEN:-} ]]; then
+        frags+=("${LIVE_TPL}/kernel/hardened.fragment")
+        info "Hardened profile detected — adding the KSPP kernel fragment"
+    fi
+    local f
+    for f in "${frags[@]}"; do
+        [[ -f ${f} ]] || die "Missing Kconfig fragment: ${f}"
+    done
+
+    info "Kernel config base: ${base}; fragments: $(basename -a "${frags[@]}" | tr '\n' ' ')"
+    mkdir -p "${LIVE_ROOT}/tmp/xstage-kconfig"
+    # a previous run may have staged MORE fragments than this one (flavour or
+    # profile changed) — stale numbered files would silently merge back in
+    command rm -f "${LIVE_ROOT}/tmp/xstage-kconfig/"*
+    local i=0
+    for f in "${frags[@]}"; do
+        command cp -f "${f}" "${LIVE_ROOT}/tmp/xstage-kconfig/$((i++))-$(basename "${f}")"
+    done
+    if [[ ${base} != defconfig && ${base} != host ]]; then
+        [[ -f ${base} ]] || die "XSTAGE_LIVE_KCONFIG_BASE='${base}' is neither 'defconfig', 'host', nor a file"
+        command cp -f "${base}" "${LIVE_ROOT}/tmp/xstage-kconfig/base.config"
+    elif [[ ${base} == host ]]; then
+        [[ -f /usr/src/linux/.config ]] ||
+            die "XSTAGE_LIVE_KCONFIG_BASE=host but this machine has no /usr/src/linux/.config"
+        command cp -f /usr/src/linux/.config "${LIVE_ROOT}/tmp/xstage-kconfig/base.config"
+    fi
+
+    live_chroot kconfig <<-EOF
+	# --ignore-default-opts is load-bearing: the image's EMERGE_DEFAULT_OPTS
+	# carry --update --deep --newuse, which drag the whole stage3-to-tree
+	# transition (the perl 5.44 graph) into this one-package resolution — the
+	# exact slot-conflict wall the two-pass 'pkgs' design exists to avoid.
+	# USE=symlink because no sources ebuild enables it by default, and the
+	# eclasses find the tree through the /usr/src/linux symlink; eselect covers
+	# sources that are already installed without the flag.
+	[ -e /usr/src/linux ] || eselect kernel set 1 2>/dev/null || true
+	[ -e /usr/src/linux ] ||
+	    USE=symlink emerge --ignore-default-opts --verbose --oneshot ${LIVE_KERNEL_PKG}
+	[ -e /usr/src/linux ] || eselect kernel set 1
+	[ -e /usr/src/linux ] || { echo "no /usr/src/linux symlink" >&2; exit 1; }
+	cd /usr/src/linux
+
+	# 1. the base config
+	if [ -f /tmp/xstage-kconfig/base.config ]; then
+	    cp /tmp/xstage-kconfig/base.config .config
+	else
+	    make defconfig
+	fi
+
+	# 2. merge the fragments. -m keeps the merge in .config without running
+	#    a config target yet; olddefconfig then answers every new symbol with
+	#    its default instead of prompting (a chroot has no one to prompt).
+	./scripts/kconfig/merge_config.sh -m .config /tmp/xstage-kconfig/[0-9]-*
+	make olddefconfig
+
+	# 3. fail loudly if the boot chain did not survive the merge — a live ISO
+	#    without squashfs or loop is a two-hour build that cannot boot
+	for sym in CONFIG_SQUASHFS CONFIG_BLK_DEV_LOOP CONFIG_ISO9660_FS \\
+	           CONFIG_BLK_DEV_INITRD CONFIG_OVERLAY_FS ${kcheck}; do
+	    grep -q "^\${sym}=y" .config ||
+	        { echo "FATAL: \${sym} is not =y after merge — the ISO would not boot" >&2; exit 1; }
+	done
+	EOF
+}
+
 cmd_live_pkgs() {
     need_root
     local list; list=$(live_pkg_list)
@@ -1121,6 +1225,7 @@ cmd_live_pkgs() {
         die "Nothing to install — the profile sets neither PROF_LIVE_PKGS/TIERS nor PROF_LIVE_SETS"
     [[ -d ${LIVE_ROOT}/var/db/repos/gentoo/profiles ]] ||
         die "No ebuild tree in the image — run: sudo $0 ${TGT:-amd64} conf"
+    live_prep_kconfig
     local n; n=$(printf '%s\n' "${list}" | grep -c . || true)
     # Pass 1: bring the stage3 up to the tree BEFORE adding the package list.
     #
@@ -1241,78 +1346,15 @@ cmd_live_configure() {
 cmd_live_kernel() {
     need_root
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
-
-    # The base the fragments are merged onto:
-    #   defconfig  the kernel's own x86_64 defconfig — reproducible, and the
-    #              live fragment adds the breadth an ISO needs (default)
-    #   host       this machine's /usr/src/linux/.config — widest driver set,
-    #              but it is tuned for THIS laptop and carries its quirks
-    #   <path>     any .config file on the host
-    local base="${XSTAGE_LIVE_KCONFIG_BASE:-defconfig}"
-    local frags=("${LIVE_TPL}/kernel/live.fragment")
-    # extra symbols the post-merge check insists on, per flavour
-    local kcheck=""
-    # systemd as PID 1 has its own mandatory Kconfig list (its README); an
-    # OpenRC image has no use for it, so it is a separate fragment
-    if [[ ${LIVE_RC} == systemd ]]; then
-        frags+=("${LIVE_TPL}/kernel/systemd.fragment")
-        kcheck+=" CONFIG_FHANDLE CONFIG_AUTOFS_FS CONFIG_DMIID CONFIG_CGROUPS"
-        info "systemd flavour — adding the systemd kernel fragment"
-    fi
-    # a hardened image needs kernel-side hardening too: the portage 'hardened'
-    # profile only changes the toolchain, never the kernel
-    if [[ ${LIVE_PORTAGE_PROFILE} == *hardened* || -n ${XSTAGE_LIVE_KHARDEN:-} ]]; then
-        frags+=("${LIVE_TPL}/kernel/hardened.fragment")
-        info "Hardened profile detected — adding the KSPP kernel fragment"
-    fi
-    local f
-    for f in "${frags[@]}"; do
-        [[ -f ${f} ]] || die "Missing Kconfig fragment: ${f}"
-    done
-
-    info "Kernel config base: ${base}; fragments: $(basename -a "${frags[@]}" | tr '\n' ' ')"
-    mkdir -p "${LIVE_ROOT}/tmp/xstage-kconfig"
-    local i=0
-    for f in "${frags[@]}"; do
-        command cp -f "${f}" "${LIVE_ROOT}/tmp/xstage-kconfig/$((i++))-$(basename "${f}")"
-    done
-    if [[ ${base} != defconfig && ${base} != host ]]; then
-        [[ -f ${base} ]] || die "XSTAGE_LIVE_KCONFIG_BASE='${base}' is neither 'defconfig', 'host', nor a file"
-        command cp -f "${base}" "${LIVE_ROOT}/tmp/xstage-kconfig/base.config"
-    elif [[ ${base} == host ]]; then
-        [[ -f /usr/src/linux/.config ]] ||
-            die "XSTAGE_LIVE_KCONFIG_BASE=host but this machine has no /usr/src/linux/.config"
-        command cp -f /usr/src/linux/.config "${LIVE_ROOT}/tmp/xstage-kconfig/base.config"
-    fi
+    live_prep_kconfig
 
     info "Building the live kernel with genkernel (CDROOT=1) — this takes a while"
     live_chroot kernel <<-EOF
+	# --ignore-default-opts for the same reason as the kconfig step: the
+	# image's EMERGE_DEFAULT_OPTS would drag the stage3 transition graph in
 	command -v genkernel >/dev/null ||
-	    emerge --verbose --oneshot sys-kernel/genkernel
-	[ -e /usr/src/linux ] || emerge --verbose --oneshot sys-kernel/gentoo-sources
-	[ -e /usr/src/linux ] || { echo "no /usr/src/linux symlink" >&2; exit 1; }
-	cd /usr/src/linux
-
-	# 1. the base config
-	if [ -f /tmp/xstage-kconfig/base.config ]; then
-	    cp /tmp/xstage-kconfig/base.config .config
-	else
-	    make defconfig
-	fi
-
-	# 2. merge the fragments. -m keeps the merge in .config without running
-	#    a config target yet; olddefconfig then answers every new symbol with
-	#    its default instead of prompting (a chroot has no one to prompt).
-	./scripts/kconfig/merge_config.sh -m .config /tmp/xstage-kconfig/[0-9]-*
-	make olddefconfig
-
-	# 3. fail loudly if the boot chain did not survive the merge — a live ISO
-	#    without squashfs or loop is a two-hour build that cannot boot
-	for sym in CONFIG_SQUASHFS CONFIG_BLK_DEV_LOOP CONFIG_ISO9660_FS \\
-	           CONFIG_BLK_DEV_INITRD CONFIG_OVERLAY_FS ${kcheck}; do
-	    grep -q "^\${sym}=y" .config ||
-	        { echo "FATAL: \${sym} is not =y after merge — the ISO would not boot" >&2; exit 1; }
-	done
+	    emerge --ignore-default-opts --verbose --oneshot sys-kernel/genkernel
+	[ -f /usr/src/linux/.config ] || { echo "no /usr/src/linux/.config" >&2; exit 1; }
 
 	sed -i 's/CDROOT="0"/CDROOT="1"/' /usr/share/genkernel/defaults/initrd.defaults
 	genkernel --makeopts=-j${JOBS} --kernel-config=/usr/src/linux/.config \\
