@@ -255,7 +255,7 @@ CCACHE_TRACK_DIR="${XDIR}/ccache-amd64"
 
 # live half of the amd64 track — the stage3 does not end on an SD card but in
 # livecd.squashfs plus an isolinux directory, the layout bin/v builds from
-# /etc/liveusb. Own build tree per profile (amd64live, amd64kde, …).
+# /etc/liveusb. Own build tree per profile (amd64live, amdkde, …).
 LIVE_BLD="${REPO}/build/${XSTAGE_LIVE_SUBDIR:-amd64live}"
 LIVE_ROOT="${LIVE_BLD}/rootfs"
 LIVE_ISO_DIR="${LIVE_BLD}/iso"
@@ -488,7 +488,7 @@ need_catalyst() { command -v catalyst >/dev/null || die "No catalyst — install
 # a bare 'xstage' call has no profile to contradict.
 need_native_profile() {
     [[ ${XSTAGE_PROF_KIND:-native} != board ]] ||
-        die "'${CMD:-?}' builds the native amd64 live image, but the active profile is ${XSTAGE_PROF_NAME:-?} (an ARM board under qemu). Switch it: XPROFILE=amd64kde $0 ${TGT:-amd64} ${CMD:-?}"
+        die "'${CMD:-?}' builds the native amd64 live image, but the active profile is ${XSTAGE_PROF_NAME:-?} (an ARM board under qemu). Switch it: XPROFILE=amdkde $0 ${TGT:-amd64} ${CMD:-?}"
 }
 need_board_profile() {
     [[ ${XSTAGE_PROF_KIND:-board} != native ]] ||
@@ -1209,6 +1209,31 @@ cmd_live_conf() {
         [[ -d ${LIVE_ROOT}/usr/lib/ccache/bin ]] ||
             warn "dev-util/ccache did not install — FEATURES=ccache will be inert this run"
     fi
+    # A warm eix database, so 'eix qt6' on the booted image answers at once
+    # instead of demanding an eix-update first. Cheap to ship (~22 MB, a few MB
+    # after squashfs compression) and built from the tree this very function
+    # just rsynced in, so it matches what the image ships.
+    #
+    # Two things that are easy to get wrong here:
+    #   - app-portage/eix does NOT own /var/cache/eix. It comes from
+    #     /usr/lib/tmpfiles.d/eix.conf ('d /var/cache/eix 0775 portage portage')
+    #     at boot, which never runs in a chroot — so create it here.
+    #   - eix-update drops privileges to portage (EIX_USER), so a root:root
+    #     directory is not writable and eix-update fails only AFTER doing all
+    #     the work, with "cannot open database file ... for writing".
+    #
+    # Skipped on a fresh stage3 that has no eix yet; the 'conf' after 'pkgs'
+    # picks it up. Installed-package state is not in this cache — eix reads
+    # /var/db/pkg live — so 'pkgs' merging afterwards does not invalidate it.
+    if [[ -x ${LIVE_ROOT}/usr/bin/eix-update ]]; then
+        info "Seeding the eix cache (/var/cache/eix/portage.eix)"
+        live_chroot eix-seed <<-'EOF'
+		install -d -o portage -g portage -m 0775 /var/cache/eix
+		eix-update || true
+		EOF
+        [[ -s ${LIVE_ROOT}/var/cache/eix/portage.eix ]] ||
+            warn "eix-update produced no cache — the image will have to build it on first use"
+    fi
     info "Image configured."
 }
 
@@ -1326,7 +1351,7 @@ cmd_live_pkgs() {
     # subslot, the ~60 dev-perl modules the stage3 ships pin ':0/5.42=', and the
     # fresh virtual/perl-* the tree offers demand '=dev-lang/perl-5.44*'.
     # Resolving that transition at the same time as several hundred new atoms
-    # made portage give up after 23 backtracks and 220 s (measured, amd64kde
+    # made portage give up after 23 backtracks and 220 s (measured, amdkde
     # 2026-08-05). Alone it takes 30 s and 3 backtracks.
     #
     # This costs no extra build time: '--update --newuse --deep' rebuilds that
@@ -1348,7 +1373,7 @@ cmd_live_pkgs() {
     # silently build with the old gcc while the tree's sits installed and idle.
     # binutils-config, in contrast, auto-selects on install. No-op when seed
     # and tree agree on the slot, or when a profile masks the newer one (as
-    # amd64kde does: nvcc caps its host compiler at gcc-15).
+    # amdkde does: nvcc caps its host compiler at gcc-15).
     live_chroot toolchain-select <<-EOF
 	latest=\$(gcc-config -l | awk '/^ *\[/{p=\$2} END{print p}')
 	current=\$(gcc-config -c)
@@ -1839,6 +1864,9 @@ cmd_live_squash() {
     [[ -z ${stale} ]] || die "still mounted under ${LIVE_ROOT} — refusing to squash:
 ${stale}"
 
+    # var/cache/eix is deliberately NOT excluded: 'conf' seeds it (~22 MB, a
+    # few MB compressed) so that 'eix' on the booted image answers instantly
+    # instead of making the user sit through an eix-update first.
     local excl=(dev/pts dev/shm var/tmp/portage var/tmp/distfiles var/cache/distfiles var/cache/ccache var/cache/binpkgs)
     mksquashfs "${LIVE_ROOT}" "${LIVE_ISO_DIR}/livecd.squashfs" \
         -comp "${LIVE_COMP}" -noappend -no-progress -b 1048576 -no-xattrs \

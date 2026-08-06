@@ -1,5 +1,5 @@
 # amd64.pkgs — package catalogue for the native (PROF_KIND=native) live
-# profiles: amd64, amd64kde, intelgnome, …
+# profiles: amd64, amdkde, intelgnome, …
 #
 # Derived from this host's /var/lib/portage/world — top-level packages ONLY.
 # Dependencies are deliberately absent: portage pulls them in anyway, and

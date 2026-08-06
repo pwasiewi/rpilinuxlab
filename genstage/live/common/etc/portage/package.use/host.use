@@ -1,4 +1,4 @@
-# package.use for the amd64kdehardened live image.
+# package.use for the amdkdehard live image.
 #
 # Verbatim copy of this host's /etc/portage/package.use/{moje,systemowe}.use,
 # taken 2026-08-04, for the same reason as host.keywords next door:

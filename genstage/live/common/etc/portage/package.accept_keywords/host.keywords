@@ -1,9 +1,9 @@
-# package.accept_keywords for the amd64kdehardened live image.
+# package.accept_keywords for the amdkdehard live image.
 #
 # Verbatim copy of this host's /etc/portage/package.accept_keywords/
 # {moje,systemowe}.keywords, taken 2026-08-04.
 #
-# Why the image needs it at all: PROF_LIVE_PKGS in profiles/amd64kdehardened.conf
+# Why the image needs it at all: PROF_LIVE_PKGS in profiles/amdkdehard.conf
 # is this host's world(5), and 45 of those atoms — awscli-bin, keepassxc,
 # suricata, lynis, hashcat, zen-sources, every *-bin browser, all twelve
 # ::pwr overlay atoms — have no stable amd64 keyword. A keyword mask is a

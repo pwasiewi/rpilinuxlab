@@ -1,4 +1,4 @@
-# Kconfig fragment: kernel-side hardening for the amd64kdehardened profile.
+# Kconfig fragment: kernel-side hardening for the amdkdehard profile.
 # Merged AFTER live.fragment, so where the two disagree this one wins.
 #
 # WHY THIS FILE EXISTS AT ALL: the 'hardened' portage profile is a USERLAND

@@ -8,7 +8,7 @@
 # binhost, whose binpkgs are all built with gcc-15 (the host never installed
 # gcc-16 at all).
 #
-# This layer is amd64kde-only (PROF_LIVE_OVERLAY_DIR="common nvidia"); the
+# This layer is amdkde-only (PROF_LIVE_OVERLAY_DIR="common nvidia"); the
 # hardened image has no CUDA and builds gcc-16 as the tree intends.
 # Drop the mask when the toolkit in ::pwr moves to a CUDA release that
 # supports gcc-16.
