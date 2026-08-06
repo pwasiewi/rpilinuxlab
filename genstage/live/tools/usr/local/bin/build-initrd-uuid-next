@@ -208,7 +208,7 @@ for dir in home var mnt etc tmp root; do
     mkdir -p "\$TMP_WORK/\$dir"
     if [ -d "\$ROOT_MNT/\$dir" ]; then
         cp -a "\$ROOT_MNT/\$dir/." "\$TMP_WORK/\$dir/"
-        echo "    copied /$dir (\$(ls \$TMP_WORK/\$dir | wc -l) entries)"
+        echo "    copied /\$dir (\$(ls \$TMP_WORK/\$dir | wc -l) entries)"
     else
         echo "    \$dir does not exist in squashfs — empty directory in RAM"
     fi

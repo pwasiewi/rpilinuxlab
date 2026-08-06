@@ -1,0 +1,31 @@
+# Hardened image audit.rules — MERGED from rules.d/ (10-base + 50-hardening).
+# Gentoo's auditd.service is plain ExecStart=/sbin/auditd: it loads THIS file
+# and never runs augenrules, so rules.d/ alone would be silently inert. Keep
+# this file and rules.d/ in sync — if augenrules --load is ever run, it
+# regenerates this file from rules.d/ with identical content.
+
+# First rule - delete all
+# This is to clear out old rules, so we don't append to them.
+-D
+
+# Feel free to add below this line. See auditctl man page
+
+# The following rule would cause all of the syscalls listed to be ignored in logging.
+-a exit,never -F arch=b32 -S read -S write -S open -S fstat -S mmap -S brk -S munmap -S nanosleep -S fcntl -S close -S dup2 -S rt_sigaction -S stat
+-a exit,never -F arch=b64 -S read -S write -S open -S fstat -S mmap -S brk -S munmap -S nanosleep -S fcntl -S close -S dup2 -S rt_sigaction -S stat
+
+# The following rule would cause the capture of all systems not caught above.
+# -a exit,always -S all
+
+# Increase the buffers to survive stress events
+-b 8192
+
+
+-w /etc/passwd -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d -p wa -k sudoers
+-w /var/lib/aide/aide.db -p wa -k aide
+-w /etc/audit -p wa -k auditconfig

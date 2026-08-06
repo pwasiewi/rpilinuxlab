@@ -1168,6 +1168,13 @@ cmd_live_conf() {
     #
     # rsync here is additive by design: renaming or deleting a fragment leaves
     # the old file behind in an image tree that has already been configured.
+    #
+    # --chown=root:root, because rsync running as root otherwise preserves the
+    # checkout's ownership and every overlaid file lands in the image owned by
+    # the uid that edited it. Most consumers do not care; some refuse the file
+    # and say so only in a debug run — logrotate skips any /etc/logrotate.d
+    # entry not owned by uid 0 ("Ignoring aide because the file owner is
+    # wrong"), which is a rotation that silently never happens.
     if [[ -n ${XSTAGE_LIVE_OVERLAY_DIR:-} ]]; then
         local ovdir
         for ovdir in ${XSTAGE_LIVE_OVERLAY_DIR}; do
@@ -1178,7 +1185,7 @@ cmd_live_conf() {
             [[ ${ovdir} == /* ]] && ov="${ovdir}"
             if [[ -d ${ov} ]]; then
                 info "Overlaying config fragments from ${ov}"
-                rsync -a "${ov}/" "${LIVE_ROOT}/"
+                rsync -a --chown=root:root "${ov}/" "${LIVE_ROOT}/"
             else
                 warn "PROF_LIVE_OVERLAY_DIR names '${ovdir}' but ${ov} does not exist"
             fi
@@ -1378,6 +1385,90 @@ cmd_live_pkgs() {
     info "Package set installed: $(du -sh "${LIVE_ROOT}" | cut -f1) unpacked"
 }
 
+# Plasma ships a light Breeze by default; the live image is dark instead (user
+# request 2026-08-06). Everything is written under /etc/xdg — the first entry
+# of XDG_CONFIG_DIRS — so it applies to the live user, to any account added
+# later, and stays overridable from System Settings, which is not true of a
+# file dropped into a home directory. Self-guarding: profiles without Plasma
+# (intelgnome, the headless arm ones) simply return.
+live_kde_dark() {
+    local scheme="${LIVE_ROOT}/usr/share/color-schemes/BreezeDark.colors"
+    [[ -f ${scheme} ]] || return 0
+    info "Plasma: Breeze Dark as the system-wide default"
+    local kg="${LIVE_ROOT}/etc/xdg/kdeglobals"
+    mkdir -p "${LIVE_ROOT}/etc/xdg"
+    # A .colors file IS a kdeglobals fragment: [Colors:*], [General] with
+    # ColorScheme=, [WM] and [KDE] are exactly the groups Plasma reads back out
+    # of kdeglobals. Naming the scheme alone would not recolour anything — the
+    # colours themselves have to be here. Comments and the ~50 translated
+    # Name[xx]= lines are dropped as noise.
+    grep -v -e '^#' -e '^Name\[' "${scheme}" > "${kg}"
+    # into the scheme's own [KDE] group rather than appending a second one:
+    # KConfig merges duplicate groups on read, but not every consumer does
+    sed -i '/^\[KDE\]$/a LookAndFeelPackage=org.kde.breezedark.desktop\nwidgetStyle=Breeze' "${kg}"
+    printf '\n[Icons]\nTheme=breeze-dark\n' >> "${kg}"
+    grep -q '^LookAndFeelPackage=' "${kg}" ||
+        die "BreezeDark.colors has no [KDE] group — kdeglobals would be light"
+    # panel and widget theme: a separate file from the colour scheme
+    printf '[Theme]\nname=breeze-dark\n' > "${LIVE_ROOT}/etc/xdg/plasmarc"
+    # GTK apps do not read kdeglobals; without this every GTK file dialog
+    # stays white next to a dark Plasma
+    local gtktheme=Adwaita-dark
+    [[ -d ${LIVE_ROOT}/usr/share/themes/Breeze-Dark ]] && gtktheme=Breeze-Dark
+    local g
+    for g in gtk-3.0 gtk-4.0; do
+        mkdir -p "${LIVE_ROOT}/etc/xdg/${g}"
+        cat > "${LIVE_ROOT}/etc/xdg/${g}/settings.ini" <<-EOF
+		[Settings]
+		gtk-theme-name=${gtktheme}
+		gtk-icon-theme-name=breeze-dark
+		gtk-application-prefer-dark-theme=1
+		EOF
+    done
+    # The greeter is normally skipped by autologin, but it is what shows after
+    # a logout or with XSTAGE_LIVE_USER="" — sddm's breeze theme is the dark one.
+    if [[ -d ${LIVE_ROOT}/usr/share/sddm/themes/breeze ]]; then
+        mkdir -p "${LIVE_ROOT}/etc/sddm.conf.d"
+        printf '[Theme]\nCurrent=breeze\n' \
+            > "${LIVE_ROOT}/etc/sddm.conf.d/20-xstage-theme.conf"
+    fi
+}
+
+# Sound for the desktop user. Installing PipeWire is not enough to hear
+# anything: this image has no /etc/xdg/autostart entry for it and an empty
+# /etc/systemd/user, so nothing ever starts the daemon and the desktop comes up
+# silent with a working sound card.
+#
+# 'systemctl --global enable' is the offline-safe spelling of 'systemctl --user
+# enable' for an image: it writes the same .wants symlinks, but under
+# /etc/systemd/user/ and for every account, so it needs neither a session bus
+# nor a per-user HOME that does not exist yet at build time.
+live_sound_units() {
+    [[ -x ${LIVE_ROOT}/usr/bin/pipewire ]] || return 0
+    # pipewire.socket starts the daemon on first client connect;
+    # pipewire-pulse.socket serves the PulseAudio protocol (what the ALSA
+    # pulse plugin, Firefox and Chromium actually talk to); wireplumber is the
+    # session manager — without it PipeWire runs but routes nothing, which
+    # looks exactly like broken hardware.
+    local uunits=(pipewire.socket pipewire-pulse.socket wireplumber.service)
+    local uu missing=()
+    for uu in "${uunits[@]}"; do
+        [[ -e ${LIVE_ROOT}/usr/lib/systemd/user/${uu} ]] || missing+=("${uu}")
+    done
+    if (( ${#missing[@]} )); then
+        warn "PipeWire is installed but its user units are missing (${missing[*]})" \
+             "— the desktop will have no sound"
+        return 0
+    fi
+    info "sound: enabling ${uunits[*]} for every user"
+    live_chroot enable-sound <<-EOF
+	systemctl --global enable ${uunits[*]}
+	EOF
+    # --global writes plain symlinks and cannot fail loudly; check the result
+    [[ -e ${LIVE_ROOT}/etc/systemd/user/sockets.target.wants/pipewire.socket ]] ||
+        die "systemctl --global enable left no symlinks — the image would be silent"
+}
+
 cmd_live_configure() {
     need_root
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
@@ -1397,6 +1488,19 @@ cmd_live_configure() {
     mkdir -p "${LIVE_ROOT}/etc/ssh/sshd_config.d"
     echo "PermitRootLogin yes" > "${LIVE_ROOT}/etc/ssh/sshd_config.d/50-xstage.conf"
 
+    # A stage3 ships /etc/locale.gen with every entry commented out, so the
+    # image would have C.UTF-8 and nothing else — glibc then falls back
+    # silently and anything asking for pl_PL.UTF-8 gets C. The list is a plain
+    # config file in the 'common' overlay layer, so it is edited there, not
+    # here; this only runs the generator when the layer actually enabled
+    # something. locale-gen is idempotent and skips locales already built.
+    if grep -qv -e '^#' -e '^$' "${LIVE_ROOT}/etc/locale.gen" 2>/dev/null; then
+        info "locales: $(grep -v -e '^#' -e '^$' "${LIVE_ROOT}/etc/locale.gen" | tr '\n' ' ')"
+        live_chroot locale-gen <<-EOF
+		locale-gen
+		EOF
+    fi
+
     # Live user (the gap the old v-pipeline image filled with a hand-edited
     # passwd): created by useradd IN the chroot so passwd/shadow/group stay
     # consistent — never overlaid as files. Password = the same hash as root's
@@ -1407,18 +1511,58 @@ cmd_live_configure() {
         live_chroot live-user <<-EOF
 	id -u ${LIVE_USER} >/dev/null 2>&1 ||
 	    useradd -m -c "Live user" -s /bin/bash -p '${hash}' ${LIVE_USER}
-	for g in wheel users video audio input plugdev usb portage; do
-	    getent group \${g} >/dev/null && usermod -aG \${g} ${LIVE_USER} || true
+	# Every group the image defines, not a hand-picked list (user rule
+	# 2026-08-06): a live medium is expected to reach all hardware and every
+	# service group without a reinstall, and the set differs per profile.
+	# Skipped: root, so root-group-owned files stay out of reach of a plain
+	# guest process, and the two "no privileges" groups, where membership
+	# means nothing.
+	for g in \$(cut -d: -f1 /etc/group); do
+	    case \${g} in root|nogroup|nobody|${LIVE_USER}) continue ;; esac
+	    gpasswd -a ${LIVE_USER} \${g} >/dev/null || true
 	done
 	EOF
         if [[ -n ${XSTAGE_LIVE_XSESSION:-} ]]; then
-            # Session= left out: sddm falls back to the only/default session,
-            # which stays correct whatever the profile ships
+            # sddm needs BOTH keys. 'User=' alone does nothing at all — the
+            # daemon skips autologin without a word in the journal and shows
+            # the greeter, which is exactly what the first booted image did.
+            # Session is a .desktop NAME, not a command, so resolve it from the
+            # profile's session command by matching Exec=; Wayland first.
+            local sdir sfile sess="" stype=""
+            for sdir in wayland-sessions xsessions; do
+                for sfile in "${LIVE_ROOT}/usr/share/${sdir}"/*.desktop; do
+                    [[ -e ${sfile} ]] || continue
+                    grep -q "^Exec=.*${XSTAGE_LIVE_XSESSION}\b" "${sfile}" || continue
+                    sess=$(basename "${sfile}" .desktop); stype=${sdir}; break 2
+                done
+            done
+            [[ -n ${sess} ]] || die "no .desktop session runs '${XSTAGE_LIVE_XSESSION}' —" \
+                "autologin would be skipped silently"
+            info "sddm autologin: ${LIVE_USER} -> ${sess} (${stype})"
             mkdir -p "${LIVE_ROOT}/etc/sddm.conf.d"
+            # Relogin=false: after a deliberate logout you get the greeter,
+            # not an endless loop straight back into the session.
             cat > "${LIVE_ROOT}/etc/sddm.conf.d/10-xstage-autologin.conf" <<-EOF
 		[Autologin]
 		User=${LIVE_USER}
+		Session=${sess}
+		Relogin=false
 		EOF
+            # The greeter's display server has to match the session's type.
+            # Gentoo's own 01gentoo.conf pins DisplayServer=x11, which sorts
+            # first and would leave sddm starting an X server for a Wayland
+            # session. Same block the build host runs with a working autologin.
+            if [[ ${stype} == wayland-sessions ]]; then
+                cat >> "${LIVE_ROOT}/etc/sddm.conf.d/10-xstage-autologin.conf" <<-EOF
+
+		[General]
+		DisplayServer=wayland
+		GreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+
+		[Wayland]
+		CompositorCommand=kwin_wayland --drm --no-lockscreen --no-global-shortcuts --locale1
+		EOF
+            fi
         fi
         if [[ ${LIVE_RC} == systemd ]]; then
             mkdir -p "${LIVE_ROOT}/etc/systemd/system/getty@tty1.service.d"
@@ -1428,14 +1572,37 @@ cmd_live_configure() {
 		ExecStart=-/sbin/agetty --autologin ${LIVE_USER} --noclear %I \$TERM
 		EOF
         fi
-        # standard live-medium convenience; the installed system's sudoers
-        # comes from the /root/* payload kits, not from here
-        if [[ -d ${LIVE_ROOT}/etc/sudoers.d ]]; then
-            echo "%wheel ALL=(ALL:ALL) NOPASSWD: ALL" \
-                > "${LIVE_ROOT}/etc/sudoers.d/95-xstage-live"
+        # Standard live-medium convenience; the installed system's sudoers
+        # comes from the /root/* payload kits, not from here.
+        #
+        # The guard used to be '[[ -d /etc/sudoers.d ]]' — and a stage3 ships
+        # /etc/sudoers with '@includedir /etc/sudoers.d' but NOT the directory,
+        # so it never fired and every image so far gave the live user no sudo
+        # at all. Create it; only a missing sudo binary is a real reason to
+        # skip, and that gets a warning rather than silence.
+        if [[ -x ${LIVE_ROOT}/usr/bin/sudo ]]; then
+            install -d -m 0755 "${LIVE_ROOT}/etc/sudoers.d"
+            # The explicit user line is not redundant with %wheel: it keeps
+            # sudo working if the account is ever created outside wheel, and
+            # it is what the display manager's single login is traded for —
+            # sddm autologs the user in, so a second password prompt for sudo
+            # protects nothing (user decision 2026-08-06).
+            cat > "${LIVE_ROOT}/etc/sudoers.d/95-xstage-live" <<-EOF
+		%wheel ALL=(ALL:ALL) NOPASSWD: ALL
+		${LIVE_USER} ALL=(ALL:ALL) NOPASSWD: ALL
+		EOF
             chmod 0440 "${LIVE_ROOT}/etc/sudoers.d/95-xstage-live"
+            # a syntax error here locks sudo out completely, and it would only
+            # surface on the booted image
+            live_chroot sudoers-check <<-EOF
+		visudo -cf /etc/sudoers.d/95-xstage-live
+		EOF
+        else
+            warn "no /usr/bin/sudo in the image — ${LIVE_USER} gets no sudo"
         fi
     fi
+
+    live_kde_dark
 
     # Enabling services differs per flavour, and neither method can simply be
     # "run the tool": no init system is running in this chroot. OpenRC's
@@ -1452,10 +1619,15 @@ cmd_live_configure() {
             units+=(sddm.service)
         [[ -n ${XSTAGE_LIVE_XSESSION:-} && -e ${LIVE_ROOT}/usr/lib/systemd/system/gdm.service ]] &&
             units+=(gdm.service)
+        # Without the timer nothing ever calls logrotate, and every
+        # /etc/logrotate.d file in the image (aide's included) is decoration.
+        [[ -e ${LIVE_ROOT}/usr/lib/systemd/system/logrotate.timer ]] &&
+            units+=(logrotate.timer)
         live_chroot enable-units <<-EOF
 		systemctl enable ${units[*]} || true
 		systemctl set-default graphical.target 2>/dev/null || true
 		EOF
+        live_sound_units
     else
         local svc
         for svc in "${want[@]}"; do
@@ -1499,7 +1671,7 @@ cmd_live_kernel() {
 
 	sed -i 's/CDROOT="0"/CDROOT="1"/' /usr/share/genkernel/defaults/initrd.defaults
 	genkernel --makeopts=-j${JOBS} --kernel-config=/usr/src/linux/.config \\
-	    --luks --lvm --busybox --no-clean all
+	    --luks --lvm --btrfs --busybox --no-clean all
 	sed -i 's/CDROOT="1"/CDROOT="0"/' /usr/share/genkernel/defaults/initrd.defaults
 	EOF
     # keep the exact config next to the artifacts: without it a built ISO
@@ -1507,14 +1679,36 @@ cmd_live_kernel() {
     command cp -f "${LIVE_ROOT}/usr/src/linux/.config" "${LIVE_BLD}/kernel.config" 2>/dev/null || true
     mkdir -p "${LIVE_BLD}"
     local k i
-    k=$(ls -1t "${LIVE_ROOT}/boot/"{vmlinuz,kernel}-*genkernel* 2>/dev/null | head -1 || true)
-    i=$(ls -1t "${LIVE_ROOT}/boot/"initramfs-*genkernel* "${LIVE_ROOT}/boot/"initr*-genkernel* 2>/dev/null | head -1 || true)
+    # genkernel 4.x names artifacts vmlinuz-<KV> / initramfs-<KV>.img — the
+    # 3.x "-genkernel-" infix is gone, so match on the prefix only
+    k=$(ls -1t "${LIVE_ROOT}/boot/"{vmlinuz,kernel}-* 2>/dev/null | head -1 || true)
+    i=$(ls -1t "${LIVE_ROOT}/boot/"initramfs-* 2>/dev/null | head -1 || true)
     [[ -n ${k} ]] || die "genkernel produced no kernel in ${LIVE_ROOT}/boot"
     [[ -n ${i} ]] || die "genkernel produced no initramfs in ${LIVE_ROOT}/boot"
     command cp -f "${k}" "${LIVE_BLD}/bzImage"
     command cp -f "${i}" "${LIVE_BLD}/initrd"
     info "kernel: $(basename "${k}") ($(du -h "${LIVE_BLD}/bzImage" | cut -f1))"
     info "initrd: $(basename "${i}") ($(du -h "${LIVE_BLD}/initrd" | cut -f1))"
+
+    # Pass 2: same kernel relinked with the initramfs built in
+    # (CONFIG_INITRAMFS_SOURCE). A UEFI firmware boot entry can exec this one
+    # PE binary directly — no bootloader, no separate initrd, no cmdline (the
+    # CDROOT logic hunts for the /livecd marker itself). The split pair from
+    # pass 1 stays the GRUB/isolinux payload.
+    info "Building the stub kernel (integrated initramfs) for direct UEFI boot"
+    live_chroot kernel-stub <<-EOF
+	sed -i 's/CDROOT="0"/CDROOT="1"/' /usr/share/genkernel/defaults/initrd.defaults
+	genkernel --makeopts=-j${JOBS} --kernel-config=/usr/src/linux/.config \\
+	    --luks --lvm --btrfs --busybox --no-clean --integrated-initramfs all
+	sed -i 's/CDROOT="1"/CDROOT="0"/' /usr/share/genkernel/defaults/initrd.defaults
+	EOF
+    k=$(ls -1t "${LIVE_ROOT}/boot/"{vmlinuz,kernel}-* 2>/dev/null | head -1 || true)
+    [[ -n ${k} ]] || die "stub pass produced no kernel in ${LIVE_ROOT}/boot"
+    command cp -f "${k}" "${LIVE_BLD}/bzImage-stub"
+    # if the initramfs really got linked in, the stub must be visibly bigger
+    [[ $(stat -c%s "${LIVE_BLD}/bzImage-stub") -gt $(stat -c%s "${LIVE_BLD}/bzImage") ]] ||
+        die "bzImage-stub is not bigger than bzImage — initramfs not integrated?"
+    info "stub kernel: $(basename "${k}") ($(du -h "${LIVE_BLD}/bzImage-stub" | cut -f1))"
 
     # Out-of-tree module packages (nvidia-drivers, bbswitch, openrazer, ...)
     # check /usr/src/linux/Module.symvers in pkg_setup — it only exists NOW,
@@ -1589,26 +1783,76 @@ cmd_live_squash() {
     # image is convenience; the one exported here is authoritative and must
     # move to the encrypted volume.
     if [[ -x ${LIVE_ROOT}/usr/bin/aide ]]; then
-        info "AIDE: initializing pristine baseline (this hashes the whole rootfs)"
-        live_chroot aide-init <<-EOF
-	aide --init || aide -i || echo "AIDE-INIT-FAILED"
-	EOF
-        local adb
-        adb=$(ls -1t "${LIVE_ROOT}"/var/lib/aide/aide.db.new* 2>/dev/null | head -1 || true)
-        if [[ -n ${adb} ]]; then
-            command cp -f "${adb}" "${LIVE_BLD}/aide-baseline-$(date -u +%Y%m%d).db"
-            info "AIDE baseline exported: ${LIVE_BLD}/aide-baseline-*.db — move to the encrypted volume"
-        else
-            warn "aide produced no database under /var/lib/aide — no baseline this build"
+        # The image's exclusions live in a FRAGMENT under aide.conf.d (shipped
+        # by the hardened overlay), not in a replaced aide.conf: aide.conf is a
+        # package file, and carrying a private copy of it means every aide
+        # upgrade either clobbers our edits or silently keeps shipping a stale
+        # default. Only the include line is added here, appended so the
+        # fragment's rules are read last, and only once.
+        local aconf="${LIVE_ROOT}/etc/aide/aide.conf"
+        if [[ -d ${LIVE_ROOT}/etc/aide/aide.conf.d ]] &&
+           ! grep -q '^@@include /etc/aide/aide.conf.d' "${aconf}"; then
+            info "AIDE: including /etc/aide/aide.conf.d fragments"
+            printf '\n# xstage: image-specific exclusions, read last\n@@include /etc/aide/aide.conf.d ^.*\\.conf$\n' >> "${aconf}"
         fi
+        info "AIDE: initializing pristine baseline (this hashes the whole rootfs)"
+        # No "|| echo AIDE-INIT-FAILED": swallowing the failure once shipped an
+        # image whose promised baseline did not exist, and clobbered the previous
+        # good export with a 0-byte file. live_chroot dies on a non-zero step.
+        live_chroot aide-init <<-EOF
+	# a typo in a fragment must fail here, in a second, not after the
+	# full-rootfs hash run has already burned the time
+	aide --config-check
+	aide --init || aide -i
+	# aide.conf reads database_in=/var/lib/aide/aide.db, but --init writes
+	# aide.db.new — without this rename "aide --check" on the installed
+	# system finds no database at all
+	mv -f /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+	EOF
+        local adb="${LIVE_ROOT}/var/lib/aide/aide.db"
+        # -s, not -n: an empty file is what a failed run leaves behind, and it
+        # must never overwrite a good baseline in LIVE_BLD
+        [[ -s ${adb} ]] ||
+            die "aide produced no usable database — refusing to ship an image without its baseline"
+        command cp -f "${adb}" "${LIVE_BLD}/aide-baseline-$(date -u +%Y%m%d).db"
+        info "AIDE baseline exported: ${LIVE_BLD}/aide-baseline-*.db — move to the encrypted volume"
     fi
     info "Compressing the rootfs into livecd.squashfs (-comp ${LIVE_COMP})"
     # -e: the pseudo-filesystems are mount points inside the image, and the
     # portage tree we seeded is worth ~1.5 GB of the result on its own
-    local excl=(proc sys dev/pts dev/shm var/tmp/portage var/tmp/distfiles var/cache/distfiles var/cache/ccache var/cache/binpkgs)
+    # Unmount the chroot's API filesystems and bind mounts FIRST, then squash
+    # /proc and /sys as the plain empty directories they are. They used to be
+    # in the exclude list, which was the wrong fix twice over: 'mksquashfs -e'
+    # drops the DIRECTORY, not just its contents, and the live root is
+    # read-only squashfs — systemd cannot mkdir the mount points at boot, so
+    # PID 1 died with "Failed to mount early API filesystems. Freezing
+    # execution." (T14, 2026-08-06). Excluding them also hid the real problem:
+    # a chroot step that leaves its mounts behind.
+    live_chroot_umount "${LIVE_ROOT}"
+    # /proc/mounts spells mount points with symlinks RESOLVED (build/ is a
+    # symlink to the data volume), so match both spellings — and with index()
+    # rather than a regex, since the path may hold regex metacharacters
+    local stale rp
+    rp=$(realpath "${LIVE_ROOT}")
+    stale=$(awk -v a="${LIVE_ROOT}/" -v b="${rp}/" \
+        'index($2,a)==1 || index($2,b)==1 {print $2}' /proc/mounts || true)
+    [[ -z ${stale} ]] || die "still mounted under ${LIVE_ROOT} — refusing to squash:
+${stale}"
+
+    local excl=(dev/pts dev/shm var/tmp/portage var/tmp/distfiles var/cache/distfiles var/cache/ccache var/cache/binpkgs)
     mksquashfs "${LIVE_ROOT}" "${LIVE_ISO_DIR}/livecd.squashfs" \
         -comp "${LIVE_COMP}" -noappend -no-progress -b 1048576 -no-xattrs \
         -e "${excl[@]}" || die "mksquashfs failed"
+    # guard: the image is unbootable without these, and the failure only shows
+    # up on real hardware minutes into a boot — assert it here instead
+    # List once into a variable: 'unsquashfs -l | grep -q' would make grep exit
+    # early, SIGPIPE unsquashfs, and pipefail turn that into a false failure
+    local mp sqlist
+    sqlist=$(unsquashfs -l "${LIVE_ISO_DIR}/livecd.squashfs" 2>/dev/null || true)
+    for mp in proc sys dev run; do
+        grep -qx "squashfs-root/${mp}" <<<"${sqlist}" ||
+            die "squashfs has no /${mp} mount point — systemd cannot boot it"
+    done
     # the marker the CDROOT initrd looks for when identifying the boot media
     touch "${LIVE_ISO_DIR}/livecd"
     # recorded OUTSIDE the iso tree: the artifact's own fingerprint, for the
@@ -1762,6 +2006,13 @@ cmd_live_usb() {
     info "ESP ${p1}: kernel -> /gentoo, initrd.uuid.cpio.gz"
     command cp -f "${LIVE_BLD}/bzImage" "${mnt}/gentoo"
     command cp -f "${DL_DIR}/uuid-initrd/initrd.uuid.cpio.gz" "${mnt}/initrd.uuid.cpio.gz"
+    # stub kernel with builtin initramfs: bootable straight from the firmware
+    # menu / efibootmgr without GRUB (kernel EFI stub, no cmdline needed)
+    if [[ -f ${LIVE_BLD}/bzImage-stub ]]; then
+        mkdir -p "${mnt}/EFI/Gentoo"
+        command cp -f "${LIVE_BLD}/bzImage-stub" "${mnt}/EFI/Gentoo/gentoo-stub.efi"
+        info "ESP ${p1}: stub kernel -> /EFI/Gentoo/gentoo-stub.efi"
+    fi
     umount "${mnt}"
     mount "${p2}" "${mnt}" || die "mount ${p2} failed"
     info "LIVE ${p2}: livecd.squashfs ($(du -h "${LIVE_ISO_DIR}/livecd.squashfs" | cut -f1))"

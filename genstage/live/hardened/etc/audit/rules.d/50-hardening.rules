@@ -1,0 +1,16 @@
+# Hardened image — MINIMAL audit rule set (mirrors gen2db's hardening.rules).
+# Policy: lowest possible noise — only write-watches on rarely-written,
+# high-value files. No execve logging, no file-access logging, no network
+# rules: those are the noise generators. The stock audit.rules base already
+# excludes the hot syscalls and sets -b 8192; auditd.conf stays at its
+# conservative defaults (ROTATE 8MB x5, SYSLOG/SUSPEND actions).
+-w /etc/passwd -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d -p wa -k sudoers
+-w /var/lib/aide/aide.db -p wa -k aide
+-w /etc/audit -p wa -k auditconfig
+# Opt-in extras (uncomment knowingly — each adds volume):
+#-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k modules

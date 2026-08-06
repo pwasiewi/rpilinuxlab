@@ -1,0 +1,15 @@
+# AIDE integrity reports — rotated monthly, kept a year.
+# Lives here rather than in a post-install kit because the rest of the AIDE
+# setup is already in the image (aide.conf.d fragment, the baseline, aidectl),
+# and aide.conf's own rule already whitelists the rotated names:
+#   /var/log/aide/aide.log(.[0-9])?(.gz)? Databases
+# Splitting the two halves only makes it possible to have one without
+# the other. Rotation needs logrotate.timer, which 'xstage ... configure'
+# enables.
+/var/log/aide/aide.log {
+    monthly
+    rotate 12
+    compress
+    missingok
+    notifempty
+}
