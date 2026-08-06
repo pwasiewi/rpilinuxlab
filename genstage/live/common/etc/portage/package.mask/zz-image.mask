@@ -1,0 +1,5 @@
+# The tree's openrgb-9999 no longer takes its OpenRGB-0.9-udev-check.patch —
+# upstream master moved the code. ::pwr carries a fixed fork of the live
+# ebuild (plus the Gainward RTX 5070 Ti detector), so mask only the ::gentoo
+# copy and let the pwr one win.
+=app-misc/openrgb-9999::gentoo

@@ -1,0 +1,14 @@
+FieldDescriptor::is_optional() was removed in protobuf 33 (6.33); the image
+tree pairs opencv 4.12 with the newer protobuf. Replace the call with its
+documented definition (!required && !repeated) — semantically identical.
+--- a/modules/dnn/src/caffe/caffe_importer.cpp
++++ b/modules/dnn/src/caffe/caffe_importer.cpp
+@@ -216,7 +216,7 @@
+ 
+             const google::protobuf::UnknownFieldSet& unknownFields = msgRefl->GetUnknownFields(msg);
+             bool hasData =  fd->is_required() ||
+-                            (fd->is_optional() && msgRefl->HasField(msg, fd)) ||
++                            (!fd->is_required() && !fd->is_repeated() && msgRefl->HasField(msg, fd)) ||
+                             (fd->is_repeated() && msgRefl->FieldSize(msg, fd) > 0) ||
+                             !unknownFields.empty();
+             if (!hasData)

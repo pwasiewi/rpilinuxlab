@@ -1515,6 +1515,22 @@ cmd_live_kernel() {
     command cp -f "${i}" "${LIVE_BLD}/initrd"
     info "kernel: $(basename "${k}") ($(du -h "${LIVE_BLD}/bzImage" | cut -f1))"
     info "initrd: $(basename "${i}") ($(du -h "${LIVE_BLD}/initrd" | cut -f1))"
+
+    # Out-of-tree module packages (nvidia-drivers, bbswitch, openrazer, ...)
+    # check /usr/src/linux/Module.symvers in pkg_setup — it only exists NOW,
+    # after genkernel compiled the tree, so during 'pkgs' they inevitably
+    # failed with "tree has not been built". Re-run the package list: with
+    # EMERGE_DEFAULT_OPTS carrying --update, everything already merged drops
+    # out of the graph and only the module packages (plus whatever their
+    # failure dropped via --keep-going) merge here.
+    local list; list=$(live_pkg_list)
+    if [[ -n ${list} || -n ${LIVE_SETS} ]]; then
+        info "Post-kernel pass: retrying packages that needed the built kernel tree"
+        live_chroot module-pkgs <<-EOF
+	emerge --verbose --keep-going --with-bdeps=y \\
+	    ${LIVE_SETS} $(printf '%s ' ${list})
+	EOF
+    fi
 }
 
 # /etc/image-release: every input of this build, machine-readable — the

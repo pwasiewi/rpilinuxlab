@@ -1,0 +1,13 @@
+# Default-deny inbound (security policy §5). Loaded by iptables-restore.service
+# (enabled via the wants/ symlink in this overlay). Outbound stays open — this
+# is a workstation, not a server. SSH is allowed because the live image runs
+# sshd; tighten or drop the rule after installation if the host policy says so.
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT ACCEPT [0:0]
+-A INPUT -i lo -j ACCEPT
+-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+-A INPUT -p icmp --icmp-type echo-request -j ACCEPT
+-A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
+COMMIT

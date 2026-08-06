@@ -1,0 +1,167 @@
+#!/bin/bash
+# aidectl — AIDE file-integrity lifecycle: baseline, check, report reading.
+# Wraps the aide(1) two-step dance (run + activate new database) and the two
+# report sinks configured in aide.conf (journal via aide-check.service and
+# /var/log/aide/aide.log).
+set -euo pipefail
+
+CONF="${AIDE_CONF:-/etc/aide/aide.conf}"
+UNIT="aide-check.service"
+LOCK="/run/lock/aidectl.lock"
+
+help() {
+    cat <<EOF
+Usage: aidectl [-c CONF] [-y] <verb> [args]
+
+Verbs:
+  init          Build the first baseline and activate it.
+                Refuses to overwrite an existing baseline without confirmation.
+  check         One-shot integrity check against the current baseline
+                (same as the daily timer run; report goes to stdout + log).
+  update        Check AND write a new database in one pass, then — after
+                confirmation — activate it as the new baseline.
+                Use after reviewing/explaining reported changes.
+  report [N]    Print the last N reports from the log file (default 1).
+  journal       Show timer-run history from the journal (extra args pass
+                through to journalctl, e.g.: aidectl journal --since -7d).
+  status        Timer, baseline and log at a glance.
+
+Options:
+  -c CONF       aide config (default: ${CONF})
+  -y            skip the confirmation prompt (init/update)
+
+Exit-code cheat sheet (aide): 0 = clean, 1-7 = differences found
+(bitmask: 1 added, 2 removed, 4 changed), >=14 = real error.
+aidectl treats 1-7 as reportable findings, >=14 as fatal.
+EOF
+}
+
+die() { echo "❌ $*" >&2; exit 1; }
+
+confirm() {
+    [[ ${ASSUME_YES} == yes ]] && return 0
+    local reply
+    read -r -p "$1 Type 'yes' to proceed: " reply
+    [[ ${reply} == yes ]] || die "Aborted."
+}
+
+need_root() { [[ ${EUID} -eq 0 ]] || die "Root required."; }
+
+# database_in/database_out from aide.conf (file: URLs), with stock defaults
+db_path() {  # db_path <database_in|database_out>
+    local val
+    val=$(grep -E "^${1}=file:" "${CONF}" | tail -1 | cut -d: -f2- || true)
+    [[ -n ${val} ]] && { echo "${val}"; return; }
+    case "$1" in
+        database_in)  echo /var/lib/aide/aide.db ;;
+        database_out) echo /var/lib/aide/aide.db.new ;;
+    esac
+}
+
+# Run aide capturing its exit code without tripping set -e; 1-7 = findings.
+run_aide() {  # run_aide <--init|--check|--update> -> sets AIDE_RC
+    AIDE_RC=0
+    flock -n 9 || die "Another aide run holds ${LOCK} (timer job in progress?)"
+    /usr/bin/aide "$1" --config="${CONF}" || AIDE_RC=$?
+    [[ ${AIDE_RC} -lt 14 ]] ||
+        die "aide $1 failed with exit ${AIDE_RC} (>=14 = internal error, not findings) — new database NOT activated"
+} 9>"${LOCK}"
+
+activate() {
+    local dbin dbout
+    dbin=$(db_path database_in); dbout=$(db_path database_out)
+    [[ -s ${dbout} ]] || die "No new database at ${dbout} — nothing to activate."
+    mv -f "${dbout}" "${dbin}"
+    echo "✅ Baseline activated: ${dbin} ($(date -r "${dbin}" '+%F %T'))"
+}
+
+cmd_init() {
+    local dbin; dbin=$(db_path database_in)
+    if [[ -s ${dbin} ]]; then
+        confirm "Baseline ${dbin} already exists — a fresh init REPLACES it and forgets all history."
+    fi
+    run_aide --init
+    activate
+}
+
+cmd_check() {
+    run_aide --check
+    if [[ ${AIDE_RC} -eq 0 ]]; then
+        echo "✅ Clean — filesystem matches the baseline."
+    else
+        echo "⚠  Differences found (exit ${AIDE_RC}). Review above; if all changes are explained, run: aidectl update"
+    fi
+}
+
+cmd_update() {
+    run_aide --update
+    if [[ ${AIDE_RC} -eq 0 ]]; then
+        echo "✅ Clean — baseline unchanged, new database discarded."
+        rm -f "$(db_path database_out)"
+        return
+    fi
+    confirm "Accept the differences above as the new baseline?"
+    activate
+}
+
+cmd_report() {
+    local n="${1:-1}" log
+    [[ ${n} =~ ^[0-9]+$ ]] || die "report takes a number, got: ${n}"
+    log=$(grep -E "^report_url=file:" "${CONF}" | tail -1 | cut -d: -f2- || true)
+    log="${log:-/var/log/aide/aide.log}"
+    [[ -s ${log} ]] || die "No reports yet in ${log}"
+    # reports are appended; split on their first line and print the last N
+    awk -v n="${n}" '
+        /^Start timestamp:/ { c++ }
+        { blk[c] = blk[c] $0 "\n" }
+        END { for (i = (c-n+1 > 1 ? c-n+1 : 1); i <= c; i++) printf "%s", blk[i] }
+    ' "${log}"
+}
+
+cmd_journal() {
+    journalctl -u "${UNIT}" --no-pager "$@"
+}
+
+cmd_status() {
+    local dbin; dbin=$(db_path database_in)
+    systemctl list-timers "${UNIT%.service}.timer" --no-pager 2>/dev/null || true
+    echo
+    if [[ -s ${dbin} ]]; then
+        echo "Baseline: ${dbin} — $(stat -c '%s bytes, activated %y' "${dbin}" | cut -d. -f1)"
+    else
+        echo "Baseline: MISSING — run: aidectl init"
+    fi
+    local log; log=$(grep -E "^report_url=file:" "${CONF}" | tail -1 | cut -d: -f2- || true)
+    log="${log:-/var/log/aide/aide.log}"
+    if [[ -s ${log} ]]; then
+        echo "Last report ($(date -r "${log}" '+%F %T')):"
+        grep -E "^(Start timestamp|AIDE found|  (Added|Removed|Changed) entries)" "${log}" | tail -5
+    else
+        echo "No reports in ${log} yet."
+    fi
+}
+
+ASSUME_YES=no
+while getopts ":c:yh" opt; do
+    case "${opt}" in
+        c) CONF="${OPTARG}" ;;
+        y) ASSUME_YES=yes ;;
+        h) help; exit 0 ;;
+        *) help; exit 1 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+[[ $# -ge 1 ]] || { help; exit 0; }
+verb="$1"; shift
+
+case "${verb}" in
+    init)    need_root; cmd_init ;;
+    check)   need_root; cmd_check ;;
+    update)  need_root; cmd_update ;;
+    report)  need_root; cmd_report "$@" ;;
+    journal) cmd_journal "$@" ;;
+    status)  need_root; cmd_status ;;
+    -h|--help|help) help ;;
+    *) die "Unknown verb: ${verb} (see: aidectl -h)" ;;
+esac
