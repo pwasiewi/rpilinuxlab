@@ -859,7 +859,6 @@ dev-util/gshards
 dev-util/hxtools
 dev-util/hyprwayland-scanner
 dev-util/idea-community
-dev-util/idea-ultimate
 dev-util/intel_clc
 #dev-util/mdds
 dev-util/mdds
@@ -906,10 +905,8 @@ games-util/goverlay-bin
 games-util/lutris
 games-util/mangohud
 games-util/piper 
-games-util/steam-client-meta
 games-util/steam-games-meta
 games-util/steam-launcher
-games-util/steam-meta
 gnome-base/librsvg
 gnome-extra/nm-applet
 gui-apps/1password
@@ -1327,7 +1324,6 @@ net-misc/keychain
 net-misc/libreswan
 #net-misc/openssh
 net-misc/openvswitch
-net-misc/postman-bin
 net-misc/quagga
 net-misc/remmina
 net-misc/sstp-client
@@ -1337,7 +1333,6 @@ net-p2p/bitcoin-cli
 net-p2p/bitcoind
 net-p2p/bitcoin-qt
 net-p2p/cpuminer-opt
-net-p2p/etherwall
 net-p2p/ethminer
 net-p2p/geth
 net-p2p/go-ethereum
@@ -1371,11 +1366,9 @@ net-wireless/hsphfpd
 net-wireless/kismet
 net-wireless/kismet
 net-wireless/rtl_433
-net-wireless/rtl8812au
 net-wireless/rtl8812au_aircrack-ng
 net-wireless/rtl8814au
 net-wireless/rtl-sdr
-net-wireless/rtw88
 perl-core/Compress-Raw-Zlib
 perl-core/Encode
 perl-core/File-Temp
@@ -1395,7 +1388,6 @@ sci-libs/blas-reference
 sci-libs/cblas-reference
 sci-libs/ccfits
 #sci-libs/cfitsio
-sci-libs/clfft
 sci-libs/colpack
 sci-libs/gdal
 sci-libs/geos
