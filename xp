@@ -31,6 +31,9 @@
 #   build           make the rootfs: 'arm64 unpack' (stage3 method),
 #                   'tiny build' (rootfs method) or, on a native profile,
 #                   unpack a stage3 into the live tree                  [root]
+#   restrict-run    native: merge PROF_LIVE_RESTRICT_PKGS in their own
+#                   emerge run — fetch-restricted archives and bootstrap
+#                   chains kept out of the main 'pkgs' graph      [root]
 #   pkgs            install the profile's package list: cross-emerge into a
 #                   board rootfs, or emerge inside the live chroot      [root]
 #   rpi             Pi boot payload into the rootfs                    [root]
@@ -104,7 +107,7 @@ case "$1" in
 esac
 
 # a profile file named like a verb would shadow it — refuse such confs
-RESERVED=" status setup enter emerge 1by1 pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel sd binhost distcc unpack conf configure squash isolinux iso live usb xarm xstage xlab profiles help "
+RESERVED=" status setup enter emerge 1by1 pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
 
 PROF=""
 if [[ -f ${PROFDIR}/$1.conf ]]; then
@@ -228,7 +231,7 @@ gate)
     exec "${XSTAGE}" "${T}" run-rpi
     ;;
 # --- live-image verbs (native profiles): the squashfs + isolinux pipeline ---
-unpack|conf|configure|squash|isolinux|iso|live)
+unpack|conf|configure|squash|isolinux|iso|live|restrict-run)
     need_native; no_args "$@"
     exec "${XSTAGE}" "${T}" "${VERB}"
     ;;

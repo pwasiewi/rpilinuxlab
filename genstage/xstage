@@ -263,6 +263,8 @@ LIVE_IMG="${LIVE_BLD}/livecd.iso"
 LIVE_TIERS="${XSTAGE_LIVE_TIERS:-}"
 LIVE_PKGS="${XSTAGE_LIVE_PKGS:-}"
 LIVE_OVERLAY_PKGS="${XSTAGE_LIVE_OVERLAY_PKGS:-}"
+LIVE_CYCLE_BOOTSTRAP="${XSTAGE_LIVE_CYCLE_BOOTSTRAP:-}"
+LIVE_RESTRICT_PKGS="${XSTAGE_LIVE_RESTRICT_PKGS:-}"
 LIVE_REPOS="${XSTAGE_LIVE_REPOS:-}"
 LIVE_SETS="${XSTAGE_LIVE_SETS:-}"
 LIVE_HOSTNAME="${XSTAGE_LIVE_HOSTNAME:-amd64live}"
@@ -891,6 +893,31 @@ live_pkg_list() {
 # to ~12 GB of source tarballs, most of which this host already has; the mount
 # is read-write so anything new lands in the host cache too. 'squash' already
 # excludes /var/cache/distfiles, so none of it reaches the ISO.
+# Archives portage may not download for itself (RESTRICT="fetch"), copied into
+# DISTDIR before anything merges. They are kept OUTSIDE DISTDIR because DISTDIR
+# is shared with the host and eclean-dist prunes whatever the tree stops
+# referencing — which is how dev-db/sqldeveloper's zip was lost once already.
+# Recovery is manual and version-specific: RESTRICT="fetch" still checks the
+# Manifest digest, so an installed copy cannot be re-archived into a valid
+# distfile.
+#
+# Copy, not a symlink or a bind mount: portage writes lock files next to a
+# distfile and the store should stay read-only in spirit. Existing files are
+# left alone, so this never overwrites a good DISTDIR entry, and it is a no-op
+# once the file is there.
+live_distfiles_seed() {
+    local store="${XP_LAB_DIR:-${REPO}}/dl/distfiles-restricted"
+    [[ -d ${store} && -n ${LIVE_DISTFILES_DIR} && -d ${LIVE_DISTFILES_DIR} ]] || return 0
+    local f n=0
+    for f in "${store}"/*; do
+        [[ -f ${f} ]] || continue
+        case "${f}" in *.md|*.txt) continue ;; esac
+        [[ -e ${LIVE_DISTFILES_DIR}/${f##*/} ]] && continue
+        cp -n "${f}" "${LIVE_DISTFILES_DIR}/" && n=$((n + 1))
+    done
+    [[ ${n} -eq 0 ]] || info "Seeded ${n} fetch-restricted distfile(s) from ${store}"
+}
+
 live_distfiles_mount() {
     [[ -n ${LIVE_DISTFILES_DIR} ]] || return 0
     [[ -d ${LIVE_DISTFILES_DIR} ]] ||
@@ -1030,7 +1057,19 @@ cmd_live_conf() {
     {
         echo
         echo "# --- BEGIN xstage-managed block ('xstage ${TGT:-amd64} conf', xp profile ${XPROFILE:-none}) ---"
-        echo "MAKEOPTS=\"-j${JOBS}\""
+        # -l as well as -j, because these two multiply. MAKEOPTS is per-package
+        # and EMERGE_DEFAULT_OPTS carries --jobs=16, so the worst case is 16
+        # packages x -j${JOBS} compilers at once. Nothing bounds that, and on
+        # 2026-08-07 it did not stay theoretical: sci-ml/caffe2 alone ran ~30
+        # nvcc/cicc at ~1.5 GB resident each and took a 64 GB machine down with
+        # a global OOM and a reboot. The per-package cap for that case lives in
+        # package.env (lowmem-j4.conf); this is the general net under it.
+        #
+        # -l does not bound memory — it bounds runnable processes — so it is a
+        # brake on fan-out, not a guarantee. It matches what this host runs
+        # ("-j16 -l32"). The -j value is left at nproc rather than halved,
+        # because that trade-off belongs to whoever is watching the build.
+        echo "MAKEOPTS=\"-j${JOBS} -l${JOBS}\""
         # a profile that sets its own opts replaces these wholesale: portage
         # does not merge EMERGE_DEFAULT_OPTS, the last assignment wins, and
         # this block is appended last — so a line the user wrote earlier in
@@ -1132,10 +1171,20 @@ cmd_live_conf() {
 
     # binpkg verification trust: seed the image's portage keyring from the
     # host's working one — getuto's Gentoo binhost anchors plus the gen2db
-    # signing key — so a binpkg-request-signature image can verify packages
-    # from its very first merge. Public material only: private keys, the
-    # passphrase file and revocation certs stay on the host.
-    if [[ " ${LIVE_FEATURES} " == *binpkg-request-signature* ]]; then
+    # signing key — so the image can verify binhost packages from its very
+    # first merge. Public material only: private keys, the passphrase file and
+    # revocation certs stay on the host, because this rootfs ships as
+    # livecd.squashfs and a signing key inside it is a key given away.
+    #
+    # Gated on getbinpkg, not on FEATURES=binpkg-request-signature. That
+    # FEATURE is global — it applies to the packages the image BUILDS as well
+    # as the ones it downloads — so in a chroot with buildpkg and no signing
+    # key it rejects portage's own freshly built binpkg and the merge never
+    # happens (amdkde, zen-sources, 2026-08-07; the reasoning is in
+    # profiles/amdkde.conf next to PROF_LIVE_FEATURES). The verification an
+    # image actually wants is per-repository, and that is binrepos.conf's
+    # 'verify-signature' — which needs exactly the same keyring.
+    if [[ " ${LIVE_FEATURES} " == *getbinpkg* ]]; then
         if [[ -f /etc/portage/gnupg/pubring.kbx ]]; then
             info "Seeding /etc/portage/gnupg (binpkg trust anchors, public only)"
             mkdir -p "${LIVE_ROOT}/etc/portage/gnupg"
@@ -1145,8 +1194,25 @@ cmd_live_conf() {
                 --exclude='*~' --exclude='tofu.db' --exclude='S.*' \
                 /etc/portage/gnupg/ "${LIVE_ROOT}/etc/portage/gnupg/"
         else
-            warn "binpkg-request-signature is set but the host has no /etc/portage/gnupg — run getuto first"
+            warn "getbinpkg is set but the host has no /etc/portage/gnupg — run getuto first"
         fi
+        # Assert the per-repo verification rather than trusting the stage3 to
+        # have shipped it: a binrepos.conf section without the line fetches
+        # from a remote binhost unverified and says nothing about it. Appended
+        # at the end of the file, which is the last (and by convention only)
+        # section it declares.
+        local brc
+        for brc in "${LIVE_ROOT}"/etc/portage/binrepos.conf/*.conf \
+                   "${LIVE_ROOT}"/etc/portage/binrepos.conf; do
+            [[ -f ${brc} ]] || continue
+            # 'if !' and not 'grep -q ... && continue': under set -e the
+            # short-circuited AND-list is itself the statement's exit status,
+            # so a file that legitimately lacks the line would abort 'conf'
+            if ! grep -q '^[[:space:]]*verify-signature' "${brc}"; then
+                info "binrepos.conf: asserting 'verify-signature = true' in ${brc#"${LIVE_ROOT}"}"
+                printf 'verify-signature = true\n' >> "${brc}"
+            fi
+        done
     fi
 
     if [[ -n ${LIVE_PORTAGE_PROFILE} ]]; then
@@ -1385,11 +1451,63 @@ cmd_live_pkgs() {
 	fi
 	echo "gcc-config: \$(gcc-config -c)"
 	EOF
+    # Build-time cycles with no permanent USE cut. Portage can break a cycle by
+    # dropping a flag, but only if the image can live without it; where the
+    # image's own packages USE-depend on the flag, the only way in is to merge
+    # one side once with the flag off, so the other side has something to build
+    # against, and let pass 2 rebuild it properly.
+    #
+    # Each entry is "<atom> <USE overrides...>", and each is skipped once the
+    # atom is installed — so this costs nothing on a re-run, and nothing at all
+    # for a profile that sets no PROF_LIVE_CYCLE_BOOTSTRAP.
+    #
+    # EMERGE_DEFAULT_OPTS is cleared for the same reason as the ccache
+    # bootstrap: the profile's '--update --newuse --deep' would pull the whole
+    # graph back in, and with it the very packages whose USE-dep this step
+    # exists to defer.
+    if [[ -n ${LIVE_CYCLE_BOOTSTRAP} ]]; then
+        local entry atom useov
+        while IFS= read -r entry; do
+            [[ -n ${entry} ]] || continue
+            atom=${entry%% *}
+            useov=${entry#"${atom}"}
+            info "Cycle bootstrap: ${atom} with USE='${useov# }' (skipped if already installed)"
+            live_chroot "cycle-${atom##*/}" <<-EOF
+		if ls -d /var/db/pkg/${atom}-* >/dev/null 2>&1; then
+		    echo ">>> ${atom} already installed — bootstrap not needed"
+		else
+		    EMERGE_DEFAULT_OPTS="" USE="${useov}" \\
+		        emerge --oneshot --verbose ${atom}
+		fi
+		EOF
+        done <<< "${LIVE_CYCLE_BOOTSTRAP}"
+    fi
     info "Pass 2/2: merging ${n} top-level packages${LIVE_SETS:+ + sets: ${LIVE_SETS}} (dependencies resolve inside)"
     # --keep-going: one broken ebuild in a 300-package image should not throw
     # away hours of work; the summary at the end names what failed
+    #
+    # --with-bdeps=n, unlike pass 1, and it is a resolver fix rather than a
+    # slimming measure. A binary package records the RESOLVED subslot of its
+    # build deps, so a binhost package built when the tree carried an older
+    # language runtime drags that pin into the graph. go-module.eclass puts
+    # 'dev-lang/go:=' in BDEPEND, so the Gentoo binhost's restic, syncthing,
+    # docker, lxd, containerd, gocryptfs, github-cli ... all arrive demanding
+    # 'dev-lang/go:0/1.26.3=' while the image has go-1.26.5 installed (which
+    # net-dns/doggo needs, at >=1.26.4). With --with-bdeps=y that is an
+    # unsolvable slot conflict and the whole pass aborts before merging
+    # anything (measured 2026-08-07, 1549-package plan).
+    #
+    # =n does not lose the build deps of anything portage actually BUILDS —
+    # those are strictly required and pulled regardless. It only stops pulling
+    # the toolchain that built a package we are installing prebuilt, which is
+    # exactly the useless edge here: dev-lang/go is a PROF_LIVE_PKGS entry, so
+    # the image gets a go either way, just the tree's one.
+    #
+    # The RDEPEND-side twin of this failure (dev-perl/* binaries pinning an
+    # old dev-lang/perl subslot) cannot be fixed this way and is handled with
+    # --usepkg-exclude in PROF_LIVE_EMERGE_OPTS; see the profile.
     live_chroot pkgs <<-EOF
-	emerge --verbose --keep-going --with-bdeps=y \\
+	emerge --verbose --keep-going --with-bdeps=n \\
 	    ${LIVE_SETS} $(printf '%s ' ${list})
 	EOF
     if [[ -n ${LIVE_OVERLAY_PKGS} ]]; then
@@ -1492,6 +1610,49 @@ live_sound_units() {
     # --global writes plain symlinks and cannot fail loudly; check the result
     [[ -e ${LIVE_ROOT}/etc/systemd/user/sockets.target.wants/pipewire.socket ]] ||
         die "systemctl --global enable left no symlinks — the image would be silent"
+}
+
+# Packages that must not share a resolver graph — or a run — with 'pkgs'.
+#
+# A separate verb rather than a bucket inside 'pkgs' on purpose. What lands
+# here is awkward for reasons that have nothing to do with the image: an
+# archive portage may not fetch, or a bootstrap chain that pulls an ancient
+# toolchain in behind it. Neither should be able to abort, or be buried in,
+# a multi-hour package run — and both are things you want to retry on their
+# own without touching the other 1500 packages.
+#
+# dev-db/sqldeveloper is both at once:
+#   - RESTRICT="fetch". The zip is a click-through download from Oracle, so
+#     portage stops at dependency resolution with "Fetch Restriction". The
+#     archive is kept in dl/distfiles-restricted and seeded below.
+#   - It RDEPENDs dev-java/openjdk:11[javafx], openjdk:11[javafx] needs
+#     dev-java/openjfx:11, and openjfx:11 BDEPENDs a JDK 11 to build itself —
+#     satisfied by dev-java/openjdk-bin:11. A whole second, obsolete JVM
+#     bootstrap, resolved here where it cannot perturb the main graph.
+#
+# Not part of 'live' (cmd_live_all): this is opt-in by design. Run it after
+# 'pkgs' and before 'squash'.
+cmd_live_restrict_run() {
+    need_root
+    [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
+    if [[ -z ${LIVE_RESTRICT_PKGS} ]]; then
+        info "Profile sets no PROF_LIVE_RESTRICT_PKGS — nothing to do"
+        return 0
+    fi
+    live_distfiles_seed
+    local entry
+    while IFS= read -r entry; do
+        [[ -n ${entry} ]] || continue
+        info "Restricted run: ${entry}"
+        # Each line is its own emerge, so one entry's bootstrap cannot be
+        # merged into the next one's graph. EMERGE_DEFAULT_OPTS is kept: these
+        # are ordinary packages once their archive is in place, and --keep-going
+        # still applies.
+        live_chroot "restrict-${entry##*/}" <<-EOF
+	emerge --verbose ${entry}
+	EOF
+    done <<< "${LIVE_RESTRICT_PKGS}"
+    info "Restricted packages installed"
 }
 
 cmd_live_configure() {
@@ -3042,6 +3203,7 @@ amd64)
         unpack)     need_native_profile; cmd_live_unpack "$@" ;;
         conf)       need_native_profile; cmd_live_conf "$@" ;;
         pkgs)       need_native_profile; cmd_live_pkgs "$@" ;;
+        restrict-run) need_native_profile; cmd_live_restrict_run "$@" ;;
         configure)  need_native_profile; cmd_live_configure "$@" ;;
         kernel)     need_native_profile; cmd_live_kernel "$@" ;;
         squash)     need_native_profile; cmd_live_squash "$@" ;;

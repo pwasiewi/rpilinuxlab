@@ -86,3 +86,44 @@ app-benchmarks/sysbench LUA_SINGLE_TARGET: -* luajit
 # Nothing in this image reads zips that way, and the flag is only set because
 # 'sdl' is global.
 dev-libs/zziplib -sdl
+
+# Breaks sci-ml/gloo <-> sci-ml/caffe2 — the one cycle here that no USE flag
+# cuts cleanly: gloo[cuda] BDEPENDs sci-ml/caffe2[cuda], and caffe2[cuda,gloo]
+# RDEPENDs '>=sci-ml/gloo-2025.06.04[cuda?,rocm?]', so with cuda on each side
+# wants the other built first. This host never hit it only by history — gloo
+# has been installed since 2023, long before caffe2, so portage was never
+# asked to schedule both at once. A fresh image has no such luck.
+#
+# Neither alternative survives contact:
+#   - 'sci-ml/gloo -cuda' is not a cut. caffe2[cuda] propagates cuda into the
+#     dep, and emerge answers 'there are no ebuilds built with USE flags to
+#     satisfy ">=sci-ml/gloo-2025.06.04[cuda?,rocm?]"'. Relaxing that dep in
+#     ::pwr would not help either: with USE_SYSTEM_GLOO and USE_CUDA both on,
+#     pytorch greps the system gloo's config.h for 'GLOO_USE_CUDA 1' and
+#     hard-errors at configure time (cmake/Dependencies.cmake:1295).
+#   - 'nccl' in place of 'gloo' does not exist for CUDA. caffe2's REQUIRED_USE
+#     is 'nccl? ( rocm )' and the flag maps to dev-libs/rccl; no NVIDIA NCCL
+#     package is in ::gentoo or ::pwr, which is why this host runs -nccl.
+#
+# And '-gloo' cannot be the permanent answer either, which is what a probe of
+# the overlay set settled on 2026-08-07: dev-python/vllm (::pwr, reached from
+# sci-ml/unsloth) RDEPENDs 'sci-ml/caffe2[distributed,gloo]' outright. Its
+# ebuild says why — vllm builds a CPU coordination group on the gloo backend,
+# and because this caffe2 is USE_NCCL=OFF the device group falls back to gloo
+# as well, so without the flag vllm dies at engine init with "Fallback Gloo
+# backend is not available" (upstream note: verified 2026-06-14, bug #274).
+# sci-ml/accelerate names caffe2[gloo] too, but only in a 'test?' BDEPEND,
+# which is inert here.
+#
+# So there is no flag to set in this file at all. The cut has to be temporary:
+# caffe2 is merged ONCE with USE=-gloo before pass 2 (which is all the cycle
+# needs — it gives gloo[cuda] something to build against), and pass 2 then
+# builds gloo[cuda] and rebuilds caffe2 with gloo back on, in that order.
+# That lives in the profile, as
+#
+#     PROF_LIVE_CYCLE_BOOTSTRAP=( "sci-ml/caffe2 -gloo" )
+#
+# and costs one extra caffe2 build. Deliberately NOT a '-gloo' line here: a
+# permanent flag would resolve, build for hours and produce an image whose
+# whole reason for existing (the unsloth/vLLM stack) fails at run time — the
+# expensive kind of silent failure.

@@ -20,6 +20,10 @@ dev-util/tracee **
 # amdkde only (::pwr): same shape, KEYWORDS empty at PV=9999.
 app-misc/dezkvm **
 dev-util/opencode-bin **
+# Reached through the overlay set rather than listed: dev-python/tyro-9999
+# (::pwr) <- sci-ml/unsloth-9999. Its own dependency is on a -9999
+# docstring-parser, which has no KEYWORDS at all, so '~amd64' is not enough.
+dev-python/docstring-parser **
 
 # Testing-only, keyworded ~amd64, listed by amdkde and not by the host's own
 # package.accept_keywords. Found by keyword-checking every listed atom against
@@ -31,18 +35,52 @@ app-misc/qwen-code
 # hitting them one failed run at a time. The host's list could not cover these:
 # they are pulled by versions the image resolves to and the host does not.
 #   feedparser-sgmllib  <- dev-python/feedparser <- app-text/calibre
-#   the perl virtuals   <- dev-lang/perl-5.44, which the stage3 upgrades into
 # Unversioned on purpose; autounmask suggests '=<exact version>', which rots
 # at the next bump.
 dev-python/feedparser-sgmllib
-virtual/perl-Text-Balanced
-virtual/perl-Time-HiRes
-virtual/perl-Math-BigInt
+
+# The perl virtuals, as a family rather than one atom at a time.
+#
+# dev-lang/perl is ~amd64 in host.keywords, so the stage3's 5.42 is upgraded
+# to 5.44 in pass 1 — but every virtual/perl-* has ONE version per perl
+# release, and only the 5.42-matching ones are stable. Their dependency is
+#   || ( =dev-lang/perl-5.42* ~perl-core/${module}-${PV} )
+# and portage takes the first satisfiable branch, so with perl-5.42.2 still
+# visible in the tree it schedules a SECOND perl alongside the installed 5.44
+# and dies on the slot conflict. The 5.44-matching virtual (e.g.
+# virtual/perl-Archive-Tar-3.120.0) is ~amd64 and invisible until keyworded.
+#
+# This was three hand-found atoms until 2026-08-07, when a full pass-2 resolve
+# turned up virtual/perl-Archive-Tar and virtual/perl-IO-Socket-IP as well.
+# There is no reason to expect that list to be complete either: the set is
+# "whichever core modules a package in this image happens to reach", and it
+# changes with the package list AND with every perl bump. Keywording the
+# family states the actual rule — if perl is testing here, its virtuals are
+# testing here. perl-core/* comes along because it is the other branch of the
+# same || and has exactly the same stable-lags-perl problem.
+#
+# The host does not need this: it has the perl-core/* packages installed from
+# earlier upgrades, so its virtuals resolve through the second branch.
+virtual/perl-*
+perl-core/*
 #   protobuf   <- dev-ruby/google-protobuf <- googleapis-common-protos-types
 #                 <- dev-ruby/grpc
 # (dev-python/pyqtgraph was here for net-wireless/gqrx; both dropped from
 #  amdkde on 2026-08-05 — the ~amd64 pyqtgraph caps numpy <2.5.0.)
 dev-libs/protobuf
+
+# PROF_LIVE_OVERLAY_PKGS dependencies. That step runs AFTER 'pkgs' and has its
+# own resolver graph, so nothing above covers it; these came out of a single
+# 'emerge -p --autounmask=y --autounmask-write=n' sweep over the whole overlay
+# list on 2026-08-07, rather than one aborted run per atom.
+#   glom, face      <- dev-python/semgrep
+#   cachebox        <- deepdiff <- dbt-common <- dbt-adapters <- dev-util/dbt-core
+#   acct-user/lemonade <- sci-ml/lemonade  (an acct-user/* is keyworded like any
+#                      other package, and a missing one masks its consumer)
+dev-python/glom
+dev-python/face
+dev-python/cachebox
+acct-user/lemonade
 
 # host.keywords lists 'dev-util/shaderc', but shaderc lives in media-libs — the
 # package moved category and the host's entry has silently matched nothing
