@@ -1,0 +1,12 @@
+# dev-util/h5i (::pwr) — not in any package list on purpose (tested by hand:
+# 'xp amdkdehard emerge dev-util/h5i'), but the flags are seeded here so a
+# test merge comes out right on the first try.
+#
+# containers: OFF by default in the ebuild; without it the 'container'
+#   confinement tier (rootless podman) is compiled out and h5i fails closed
+#   at runtime. The profile ships podman+passt+nftables for exactly this.
+# -web is worth considering for a hardened box: USE=web bakes an npm-built
+#   UI (vite + the whole node graph at build time) into a confinement tool.
+#   Left at upstream default (+web) for now — flip it here if the supply
+#   chain bothers you more than the 'h5i ui' console helps.
+dev-util/h5i containers

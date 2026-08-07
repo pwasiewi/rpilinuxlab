@@ -1,0 +1,28 @@
+# Pin amdkde's whole toolchain to gcc-15 (block gcc-16 as the selected
+# compiler). This layer is amdkde-ONLY — it is not in the 'nvidia' layer that
+# amdkde and nvidiahard share, precisely so the two can diverge here.
+#
+# Why amdkde stays gcc-15 when nvidiahard goes gcc-16:
+#   amdkde clones this host and REUSES the host's binpkg pool
+#   (PROF_LIVE_BINPKGS_DIR=/var/cache/binpkgs, FEATURES=getbinpkg+buildpkg).
+#   The host is gcc-15 (it never installed gcc-16). If amdkde built its desktop
+#   with gcc-16, its buildpkg output would poison that shared pool with gcc-16
+#   binaries the gcc-15 host cannot later consume — a package built with gcc-16
+#   links libstdc++ symbol versions absent from the host's gcc-15 runtime, so
+#   the host's own '--usepkg' would fail at merge with an undefined-symbol
+#   error. Keeping amdkde on gcc-15 keeps the pool coherent in BOTH directions.
+#
+# The hardened images do NOT take this layer. amdkdehard has no CUDA and builds
+# gcc-16 as the tree intends; nvidiahard builds gcc-16 for the desktop and
+# forces gcc-15 only on the CUDA packages via package.env/gcc15.conf. They
+# share a private pool (binpkgs-amdkdehard), both gcc-16 at the desktop, so
+# that pool is coherent too. This split is why the blanket mask left the
+# shared 'nvidia' layer.
+#
+# The cap is nvcc's, not nvidia-drivers': the driver deps on 'sys-devel/gcc:*'
+# and builds its module with whatever gcc compiled the kernel, so it is fine on
+# any slot. nvcc (nvidia-cuda-toolkit-13.3.1) is what refuses host gcc > 15.
+#
+# Drop this file when the host itself moves to gcc-16 (then amdkde can follow
+# the tree like the hardened images, and the pool stays coherent at gcc-16).
+>=sys-devel/gcc-16

@@ -1583,6 +1583,17 @@ cmd_live_pkgs() {
         if [[ -n ${missing} ]]; then
             warn "Skipping overlay packages — missing repos in the image:${missing}"
         else
+            # portage-bashrc-mv first and ALONE, when listed: it installs
+            # /etc/portage/bashrc phase hooks, and under --jobs a package
+            # whose setup ran before the hooks appeared dies in preinst with
+            # "compile or preinst before setup" (10-flag.sh). Five packages
+            # went down that way in one run (amdkdehard, 2026-08-08).
+            if [[ " ${LIVE_OVERLAY_PKGS} " == *" app-portage/portage-bashrc-mv "* ]]; then
+                info "Merging portage-bashrc-mv ahead of the rest (bashrc hook ordering)"
+                live_chroot overlay-pkgs-bashrc <<-EOF
+		emerge --verbose --jobs=1 app-portage/portage-bashrc-mv
+		EOF
+            fi
             info "Merging overlay packages: ${LIVE_OVERLAY_PKGS}"
             live_chroot overlay-pkgs <<-EOF
 		emerge --verbose --keep-going ${LIVE_OVERLAY_PKGS}

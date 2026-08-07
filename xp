@@ -13,49 +13,62 @@
 #
 # Profiles: rpi400, rpi3, zero2w, amd64 (xp profiles → current list)
 #
-# Verbs:
-#   status          xarm + xstage + xlab status for the profile
-#   setup           xarm setup (board only), then xstage setup          [root]
-#   enter [sysroot|PATH] [CMD]  board: qemu-user chroot into the profile's
-#                   build rootfs (default), the crossdev sysroot, or PATH,
-#                   native: an interactive shell in the live image tree [root]
-#   emerge ARGS     board: cross-emerge into the sysroot (xarm emerge),
-#                   native: emerge inside the live image chroot        [root]
-#   1by1 ARGS       xarm 1by1                                          [root]
-#   pkgs            cross-emerge $PROF_PKGS into the profile rootfs    [root]
-#   seed snapshot spec stage1 stage2 stage3 all verify crossstage
-#                   the xstage stage-building pipeline                 [root]
-#   log [emerge]    follow the running catalyst build: newest package
-#                   log, or the run chroot's emerge.log                [root]
-#   qlop [ARGS]     merge times from the run chroot's emerge.log       [root]
-#   build           make the rootfs: 'arm64 unpack' (stage3 method),
-#                   'tiny build' (rootfs method) or, on a native profile,
-#                   unpack a stage3 into the live tree                  [root]
-#   restrict-run    native: merge PROF_LIVE_RESTRICT_PKGS in their own
-#                   emerge run — fetch-restricted archives and bootstrap
-#                   chains kept out of the main 'pkgs' graph      [root]
-#   pkgs            install the profile's package list: cross-emerge into a
-#                   board rootfs, or emerge inside the live chroot      [root]
-#   rpi             Pi boot payload into the rootfs                    [root]
-#   image           board: build sd.img — native: master livecd.iso
-#                   (optional; 'usb' is the native deliverable)      [root]
-#   gate            boot the result in qemu (board: output-only; native:
-#                   interactive, KVM when available)
+# Verbs, in the order a build runs them.
 #
-# Live-image verbs (native profiles only — squashfs, the layout bin/v
-# builds; run them in this order, or just 'live'; isolinux+iso are optional,
-# only the qemu gate needs them):
-#   unpack conf pkgs configure livekernel squash [isolinux iso]  [root]
-#   live            the chain through squash (no ISO)                  [root]
+# Stage-building pipeline (catalyst track; 'seed' alone is also what feeds
+# 'build' below):
+#   setup           xarm setup (board only), then xstage setup          [root]
+#   seed            download + verify the stage3 seed for the profile's
+#                   flavour (hardened-systemd for the hardened images)  [root]
+#   snapshot spec stage1 stage2 stage3 all verify
+#                   the rest of the xstage stage pipeline               [root]
+#   crossstage      board: no-catalyst fast path (cross-emerge @system) [root]
+#
+# Board profiles — rootfs to SD card, in order:
+#   build           make the rootfs: 'arm64 unpack' (stage3 method) or
+#                   'tiny build' (rootfs method)                        [root]
+#   pkgs            cross-emerge $PROF_PKGS into the profile rootfs     [root]
+#   rpi             Pi boot payload into the rootfs                     [root]
+#   image           build sd.img                                        [root]
+#   gate            boot the result in qemu (output-only)
+#   sd DEV          dd sd.img onto a real card                  [root,confirm]
+#
+# Native profiles — live image (squashfs, the layout bin/v builds), in
+# order; or just 'live' for the chain through squash:
+#   build | unpack  unpack a stage3 into the live tree                  [root]
+#   conf            portage config, repos and the overlay stack into it [root]
+#   pkgs            emerge the profile's package list in the chroot     [root]
+#   restrict-run    merge PROF_LIVE_RESTRICT_PKGS in their own emerge
+#                   runs — fetch-restricted archives and bootstrap
+#                   chains kept out of the main 'pkgs' graph            [root]
+#   configure       system configuration inside the image              [root]
+#   livekernel      genkernel build ('kernel' alone is the xlab verb)   [root]
+#   squash          livecd.squashfs + sha256 + AIDE baseline            [root]
+#   isolinux iso    optional — only the qemu 'gate' needs an ISO        [root]
+#   image           native alias for 'iso'                              [root]
+#   gate            boot the ISO in qemu (interactive, KVM if available)
 #   usb DEV [--wipe] the deliverable: kernel + UUID-initrd -> p1,
 #                   squashfs -> p2 of an existing build-usb stick;
 #                   --wipe (or no layout) first wipes the whole stick,
 #                   repartitions and installs GRUB              [root,confirm]
+#
+# Working verbs, any point in the flow:
+#   enter [sysroot|PATH] [CMD]  board: qemu-user chroot into the profile's
+#                   build rootfs (default), the crossdev sysroot, or PATH;
+#                   native: an interactive shell in the live image tree [root]
+#   emerge ARGS     board: cross-emerge into the sysroot (xarm emerge);
+#                   native: emerge inside the live image chroot         [root]
+#   1by1 ARGS       xarm 1by1 (board)                                   [root]
 #   run             xlab run for the profile's xlab target
-#   kernel          xlab kernel build
-#   sd DEV          dd sd.img onto a real card                 [root,confirm]
+#   kernel          xlab kernel build (the QEMU lab, not the live image)
 #   binhost         serve sysroot binpkgs over HTTP (port from global.conf)
 #   distcc ...      xarm distcc start|stop|status
+#
+# Auxiliary — read-only, any time:
+#   status          xarm + xstage + xlab status for the profile
+#   log [emerge]    follow the running catalyst build: newest package
+#                   log, or the run chroot's emerge.log                 [root]
+#   qlop [ARGS]     merge times from the run chroot's emerge.log        [root]
 #
 # Env:
 #   XPROFILE        active profile when no <profile> arg (export per tab)
@@ -111,7 +124,7 @@ case "$1" in
 esac
 
 # a profile file named like a verb would shadow it — refuse such confs
-RESERVED=" status setup enter emerge 1by1 pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
+RESERVED=" status setup enter emerge 1by1 pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel livekernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
 
 PROF=""
 if [[ -f ${PROFDIR}/$1.conf ]]; then

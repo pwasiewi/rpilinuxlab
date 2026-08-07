@@ -97,6 +97,20 @@ CONFIG_HYPERVISOR_GUEST=y
 CONFIG_PARAVIRT=y
 CONFIG_KVM_GUEST=y
 
+# KVM the other way round: the guest bits above let the image run UNDER qemu
+# (the gate); these let the booted image HOST its own VMs — /dev/kvm for
+# isolated test machines (and the h5i 'microvm' tier, should microsandbox
+# ever get packaged). Host parity (=m on all three); both vendor modules
+# because the ISO boots on Intel machines too, and the wrong-vendor module
+# simply never loads. VHOST_NET accelerates virtio guest networking.
+# Restored 2026-08-08 — an earlier trim dropped it as unused; isolated VMs
+# for testing turned out to be exactly what a live image is for.
+CONFIG_KVM=m
+CONFIG_KVM_AMD=m
+CONFIG_KVM_INTEL=m
+CONFIG_VHOST=m
+CONFIG_VHOST_NET=m
+
 # --- rescue-image filesystems: mount whatever the broken machine has --------
 CONFIG_EXT4_FS=y
 CONFIG_EXT4_FS_POSIX_ACL=y
@@ -306,3 +320,16 @@ CONFIG_EVM=y
 CONFIG_TCG_TPM=y
 CONFIG_TCG_TIS=y
 CONFIG_HW_RANDOM_TPM=y
+
+# --- AMD NPU (Ryzen AI) ------------------------------------------------------
+# The DRM accel subsystem. dev-libs/xdna-driver (::pwr, the out-of-tree
+# amdxdna module that sci-ml/fastflowlm's XRT stack version-locks against)
+# compiles against <drm/drm_accel.h>, whose declarations are guarded by
+# IS_ENABLED(CONFIG_DRM_ACCEL) — without it the module build dies with
+# "'accel_open' undeclared" (amdkdehard backfill, 2026-08-08). =y like the
+# host: the accel core is not modular. The in-tree amdxdna stays =m, also
+# host parity; the out-of-tree module lands in updates/ and wins depmod
+# priority. Costs nothing on non-AMD images — the subsystem is a few KB and
+# the module simply never loads without the hardware.
+CONFIG_DRM_ACCEL=y
+CONFIG_DRM_ACCEL_AMDXDNA=m

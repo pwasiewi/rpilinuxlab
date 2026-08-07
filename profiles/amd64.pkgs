@@ -59,6 +59,11 @@ app-portage/pfl
 app-portage/gemato
 app-portage/cpuid2cpuflags
 app-portage/smart-live-rebuild
+app-portage/mgorny-dev-scripts
+# pkgdev lives here rather than in @tier lint: it is the packaging workflow
+# tool (manifest, commit, bump), so any profile that takes the portage tier
+# expects it — lint is only the checkers.
+dev-util/pkgdev
 app-admin/eselect
 app-admin/webapp-config
 app-eselect/eselect-repository
@@ -296,7 +301,6 @@ virtual/pkgconfig
 dev-util/ruff
 dev-python/black
 dev-util/pkgcheck
-dev-util/pkgdev
 app-forensics/yara
 app-text/doxygen
 
@@ -464,7 +468,7 @@ gui-apps/hyprpicker             # hyproverlay
 games-misc/asciiquarium         # guru
 games-misc/cbonsai              # guru
 sys-fs/encfs                    # mv
-sys-kernel/genkernel-next       # thegreatmcpain
+# sys-kernel/genkernel-next dropped 2026-08-07 — obsolete, use sys-kernel/genkernel
 dev-python/semgrep              # pwr
 dev-util/codeql-bin             # pwr
 dev-util/sqlfluff               # tatsh-overlay
