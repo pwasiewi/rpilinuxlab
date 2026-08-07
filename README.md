@@ -1,5 +1,54 @@
 # Some laboratory scripts to run in Gentoo linux
 
+## xp — one profile switch for the whole lab
+
+[`xp`](xp) coordinates the three scripts below through board profiles in
+[`profiles/`](profiles/): a profile fixes the tuple, CPU tuning, board
+(config.txt/DTB/qemu machine), network address and installation method, and
+`xp` routes tool-agnostic verbs to the right script with the right env
+(`XPROFILE=<name>` also works per-tab, and directly on `xarm`/`xstage`/`xlab`).
+Precedence: explicit env var > profile > script default.
+
+Host-level configuration lives in **`/etc/xp.conf`** — assignments only, no
+commands; explicit env vars always win over values set there:
+
+```
+XP_LAB_DIR=/path/to/rpilinuxlab   # lab root: profiles/ + the scripts
+                                  #   (what the /usr/local/bin copy of xp needs)
+XP_BUILD_DIR=/mnt/.../build       # shared build trees   (default <lab root>/build)
+XP_DL_DIR=/mnt/.../dl             # shared downloads     (default <lab root>/dl)
+#XSTAGE_DIR=/mnt/.../genstage     # catalyst data root: snapshots, stages, ccache
+#XANDROID_DIR=... / #XOWRT_DIR=...  # xandroid / xowrt data roots
+```
+
+`XP_BUILD_DIR`/`XP_DL_DIR` keep ~15 GB of regenerable/re-downloadable
+artifacts on the data HDD, out of the home-SSD backups (builds are CPU-bound,
+so the HDD costs nothing measurable); unset, everything lands in the repo
+root. `xp` exports these together with `XP_LAB_DIR`, so they reach
+`xstage`/`xlab` through the environment; run directly, each script sources
+`/etc/xp.conf` itself. Catalyst conf/spec files generated under an old
+`XSTAGE_DIR` keep their absolute paths — after relocating, rerun
+`xstage <track> setup` + `spec` (or sed them).
+
+```
+xp profiles                      # rpi400, rpi3, zero2w, amd64
+export XPROFILE=rpi3             # per-tab active profile
+sudo xp setup                    # xarm toolchain + xstage catalyst dirs
+sudo xp build                    # rootfs: stage3 unpack (arm64) / tiny build
+sudo xp rpi && sudo xp image     # Pi payload + board sd.img (192.168.0.201)
+xp gate                          # qemu boot gate (raspi3b for the Pi 3)
+sudo xp sd /dev/sdX              # dd to the card
+sudo xp rpi400 enter             # aarch64 shell in the Pi 400 rootfs (qemu-user)
+sudo xp rpi400 stage1            # catalyst under qemu; distccd auto-starts
+sudo xp rpi400 log               # watch it (also: log emerge, qlop)
+```
+
+Variant profiles: copy a conf, set `PROF_BUILD_SUBDIR` (own build tree,
+shared sysroot + binpkgs) and optionally `PROF_PKGS` (`xp <p> pkgs`). All ARM
+profiles share one sysroot: the managed make.conf block uses
+`-march=armv8-a -mtune=<cpu>` (`xarm tune` switches it), so binaries run on
+every ARMv8 board. Details: **[profiles/README.md](profiles/README.md)**.
+
 ## xlab — unified QEMU kernel lab
 
 `./xlab` is a single data-driven script that supersedes the per-directory
@@ -8,16 +57,7 @@ kernel, pairs it with a static busybox initrd — or, for the `gentoo` target,
 with a real arm64 Gentoo stage3 on an ext4 virtio disk — and boots it in
 qemu. Downloads are cached in shared `dl/` (legacy `make.*/dl` tarballs are
 reused via symlinks), sources unpack once into shared `src/`, and each
-target builds in `build/<target>/`.
-
-> **Storage note (2026-08-07):** `build/` and `dl/` live on the data HDD at
-> `/mnt/db5/rpilinuxlab/{build,dl}` — ~15 GB of regenerable/re-downloadable
-> artifacts (next to genstage/android/openwrt), keeping them out of the
-> home-SSD backups. The scripts find them through `XP_BUILD_DIR`/`XP_DL_DIR`
-> in `/etc/xp.conf` (exported by `xp`; xstage/xlab source the file themselves
-> when run directly). Unset, they fall back to `build/` and `dl/` in the repo
-> root — no in-repo symlinks needed either way. Builds are CPU-bound (qemu
-> emulation), so the HDD costs nothing measurable.
+target builds in `build/<target>/` (locations: see `/etc/xp.conf` above).
 
 ```
 ./xlab targets                # aarch64 (RPi3) | armhfp (RPi2) | arm | x86_64 | gentoo
@@ -111,35 +151,6 @@ sudo genstage/xstage tiny sd /dev/sdX  # dd to a card -> boot the real board
 
 Background, stage semantics and the Buildroot mapping:
 **[genstage/readme.md](genstage/readme.md)**.
-
-## xp — one profile switch for the whole lab
-
-[`xp`](xp) coordinates the three scripts above through board profiles in
-[`profiles/`](profiles/): a profile fixes the tuple, CPU tuning, board
-(config.txt/DTB/qemu machine), network address and installation method, and
-`xp` routes tool-agnostic verbs to the right script with the right env
-(`XPROFILE=<name>` also works per-tab, and directly on `xarm`/`xstage`/`xlab`).
-Precedence: explicit env var > profile > script default. Machine-local root
-pointer for the `/usr/local/bin` copy: `/etc/xp.conf` (`XP_LAB_DIR=...`).
-
-```
-xp profiles                      # rpi400, rpi3, zero2w, amd64
-export XPROFILE=rpi3             # per-tab active profile
-sudo xp setup                    # xarm toolchain + xstage catalyst dirs
-sudo xp build                    # rootfs: stage3 unpack (arm64) / tiny build
-sudo xp rpi && sudo xp image     # Pi payload + board sd.img (192.168.0.201)
-xp gate                          # qemu boot gate (raspi3b for the Pi 3)
-sudo xp sd /dev/sdX              # dd to the card
-sudo xp rpi400 enter             # aarch64 shell in the Pi 400 rootfs (qemu-user)
-sudo xp rpi400 stage1            # catalyst under qemu; distccd auto-starts
-sudo xp rpi400 log               # watch it (also: log emerge, qlop)
-```
-
-Variant profiles: copy a conf, set `PROF_BUILD_SUBDIR` (own build tree,
-shared sysroot + binpkgs) and optionally `PROF_PKGS` (`xp <p> pkgs`). All ARM
-profiles share one sysroot: the managed make.conf block uses
-`-march=armv8-a -mtune=<cpu>` (`xarm tune` switches it), so binaries run on
-every ARMv8 board. Details: **[profiles/README.md](profiles/README.md)**.
 
 ## Verified walkthrough — every command, in order (2026-07-31)
 
