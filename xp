@@ -85,6 +85,10 @@ fi
 [[ -n ${XP_LAB_DIR:-} && -f ${XP_LAB_DIR}/profiles/global.conf ]] ||
     die "Lab root not found — point /etc/xp.conf at it: echo 'XP_LAB_DIR=/path/to/rpilinuxlab' | sudo tee /etc/xp.conf"
 export XP_LAB_DIR
+# Data-tree knobs from xp.conf reach xstage/xlab only through the environment:
+# with XP_LAB_DIR exported, those scripts skip sourcing xp.conf themselves.
+[[ -z ${XP_BUILD_DIR:-} ]] || export XP_BUILD_DIR
+[[ -z ${XP_DL_DIR:-} ]] || export XP_DL_DIR
 PROFDIR="${XP_LAB_DIR}/profiles"
 
 XSTAGE="${XP_LAB_DIR}/genstage/xstage"
@@ -142,7 +146,7 @@ prof_build_dir() {
     if [[ -z ${sub} ]]; then
         [[ ${T} == tiny ]] && sub=tinyroot || sub=arm64sd
     fi
-    echo "${XP_LAB_DIR}/build/${sub}"
+    echo "${XP_BUILD_DIR:-${XP_LAB_DIR}/build}/${sub}"
 }
 
 case "${VERB}" in

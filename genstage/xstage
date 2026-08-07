@@ -224,8 +224,13 @@ fi
 # Globals
 # ---------------------------------------------------------------------------
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(dirname "${HERE}")"          # rpilinuxlab root: shared dl/ and build/
-DL_DIR="${REPO}/dl"
+REPO="$(dirname "${HERE}")"          # rpilinuxlab root
+# Shared data trees — precedence: env / /etc/xp.conf knob > in-repo build/
+# and dl/. With XP_BUILD_DIR + XP_DL_DIR set (xp exports them) the repo needs
+# no build/dl symlinks at all. The guard mirrors the XSTAGE_DIR one below.
+if [[ -z ${XP_DL_DIR:-}${XP_BUILD_DIR:-} && -r /etc/xp.conf ]]; then source /etc/xp.conf; fi
+DL_DIR="${XP_DL_DIR:-${REPO}/dl}"
+BUILD_ROOT="${XP_BUILD_DIR:-${REPO}/build}"
 JOBS="${XSTAGE_JOBS:-$(nproc)}"
 
 # amd64 / catalyst track — data dir precedence: env > /etc/xp.conf > default
@@ -256,7 +261,7 @@ CCACHE_TRACK_DIR="${XDIR}/ccache-amd64"
 # live half of the amd64 track — the stage3 does not end on an SD card but in
 # livecd.squashfs plus an isolinux directory, the layout bin/v builds from
 # /etc/liveusb. Own build tree per profile (amd64live, amdkde, …).
-LIVE_BLD="${REPO}/build/${XSTAGE_LIVE_SUBDIR:-amd64live}"
+LIVE_BLD="${BUILD_ROOT}/${XSTAGE_LIVE_SUBDIR:-amd64live}"
 LIVE_ROOT="${LIVE_BLD}/rootfs"
 LIVE_ISO_DIR="${LIVE_BLD}/iso"
 LIVE_IMG="${LIVE_BLD}/livecd.iso"
@@ -355,7 +360,7 @@ SYSROOT="/usr/${TUPLE}"
 # XSTAGE_BUILD_SUBDIR: variant build trees (xp profiles with PROF_BUILD_SUBDIR)
 # — several boards/experiments keep independent rootfs/image dirs while
 # sharing the sysroot and its binpkgs
-TINY_BLD="${REPO}/build/${XSTAGE_BUILD_SUBDIR:-tinyroot}"
+TINY_BLD="${BUILD_ROOT}/${XSTAGE_BUILD_SUBDIR:-tinyroot}"
 TINY_ROOT="${TINY_BLD}/rootfs"
 TINY_IMG="${TINY_BLD}/sd.img"
 TINY_MNT="${TINY_BLD}/mnt"
@@ -420,7 +425,7 @@ TINY_PKGS="${XSTAGE_TINY_PKGS:-}"
 TINY_BASE_PKGS="app-shells/bash sys-apps/coreutils sys-apps/util-linux
     sys-apps/grep sys-apps/sed sys-apps/gawk sys-apps/findutils
     sys-process/procps sys-apps/less"
-XLAB_KERNEL="${REPO}/build/gentoo/emu/vmlinuz"
+XLAB_KERNEL="${BUILD_ROOT}/gentoo/emu/vmlinuz"
 # what PID 1 is in the image — the tiny rootfs has the /init hook script, a
 # stage3 has real OpenRC; rendered into cmdline.txt and the run-rpi -append
 TINY_INIT="/init"
@@ -430,7 +435,7 @@ ROOT_HINT="tiny build"                      # 'no rootfs' die messages
 # dispatch switches every TINY_* path here before calling the shared functions
 ARM64_AUTOBUILDS="${MIRROR}/releases/arm64/autobuilds"
 use_arm64_dirs() {
-    TINY_BLD="${REPO}/build/${XSTAGE_BUILD_SUBDIR:-arm64sd}"
+    TINY_BLD="${BUILD_ROOT}/${XSTAGE_BUILD_SUBDIR:-arm64sd}"
     TINY_ROOT="${TINY_BLD}/rootfs"
     TINY_IMG="${TINY_BLD}/sd.img"
     TINY_MNT="${TINY_BLD}/mnt"
@@ -907,7 +912,7 @@ live_pkg_list() {
 # left alone, so this never overwrites a good DISTDIR entry, and it is a no-op
 # once the file is there.
 live_distfiles_seed() {
-    local store="${XP_LAB_DIR:-${REPO}}/dl/distfiles-restricted"
+    local store="${DL_DIR}/distfiles-restricted"
     [[ -d ${store} && -n ${LIVE_DISTFILES_DIR} && -d ${LIVE_DISTFILES_DIR} ]] || return 0
     local f n=0
     for f in "${store}"/*; do

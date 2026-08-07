@@ -84,7 +84,12 @@ fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 JOBS="${XLAB_JOBS:-$(nproc)}"
 
-DL_DIR="${HERE}/dl"
+# Shared data trees — precedence: env / /etc/xp.conf knob > in-repo build/
+# and dl/. With XP_BUILD_DIR + XP_DL_DIR set (xp exports them) the repo needs
+# no build/dl symlinks at all.
+if [[ -z ${XP_DL_DIR:-}${XP_BUILD_DIR:-} && -r /etc/xp.conf ]]; then source /etc/xp.conf; fi
+DL_DIR="${XP_DL_DIR:-${HERE}/dl}"
+BUILD_ROOT="${XP_BUILD_DIR:-${HERE}/build}"
 SRC_DIR="${HERE}/src"
 
 BUSYBOX_VER=1.36.1
@@ -212,7 +217,7 @@ load_target() {
         esac
         die "Unknown target: ${TGT} (see: $0 targets)" ;;
     esac
-    BLD="${HERE}/build/${TGT}"
+    BLD="${BUILD_ROOT}/${TGT}"
     BIN_KERNEL="${BLD}/kernel"
     BIN_BUSYBOX="${BLD}/busybox"
     INITRD_DIR="${BLD}/initrd"
@@ -679,7 +684,12 @@ cmd_clean_all() {
         fi
     done
     confirm "Remove build/ AND src/ for all targets (dl/ downloads are kept)?"
-    command rm -rf "${HERE}/build" "${SRC_DIR}"
+    # Per-target dirs only: BUILD_ROOT is shared with xstage's live/tiny/arm64
+    # trees (amd64live, amdkdehard, …), which a blanket rm -rf would take out.
+    for t in "${ALL_TARGETS[@]}"; do
+        command rm -rf "${BUILD_ROOT:?}/${t}"
+    done
+    command rm -rf "${SRC_DIR}"
     info "Cleaned all targets."
 }
 
