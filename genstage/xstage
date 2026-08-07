@@ -944,12 +944,32 @@ live_binpkgs_mount() {
 # 'squash' excludes /var/tmp/portage regardless, so this changes where the churn
 # lands, not what ships.
 #
-# Caveat worth knowing: portage does not lock across chroots. Do not run a host
-# emerge and an image 'pkgs' at the same time with this shared.
+# Portage does not lock across chroots, so this must NOT be the host's own
+# /var/tmp/portage: a host emerge and an image 'pkgs' would then share one
+# <category>/<pf> build tree, as would two image profiles running at once. The
+# profiles therefore point it at a per-profile subdirectory,
+# /var/tmp/portage/<profile>, which is still on the host volume (that path is a
+# bind mount to /home/tmp/portage) but cannot collide.
 live_builddir_mount() {
     [[ -n ${LIVE_BUILDDIR} ]] || return 0
-    [[ -d ${LIVE_BUILDDIR} ]] ||
-        { warn "XSTAGE_LIVE_BUILDDIR=${LIVE_BUILDDIR} does not exist — building inside the image tree"; return 0; }
+    # Create it rather than warning past it. The profiles now point this at a
+    # per-profile subdirectory (/var/tmp/portage/<profile>), which by
+    # definition does not exist before the first run — and the old "does not
+    # exist -> build inside the image tree" path is a silent downgrade: the
+    # build still succeeds, so nobody notices that tens of GB of build trees
+    # went into the rootfs instead of the host volume.
+    #
+    # portage:portage 0775 matches the host's own /var/tmp/portage. userpriv
+    # builds run as portage inside the chroot, and a root-owned 0755 directory
+    # would fail every unpack with a permission error that reads like a
+    # sandbox problem.
+    if [[ ! -d ${LIVE_BUILDDIR} ]]; then
+        mkdir -p "${LIVE_BUILDDIR}" ||
+            { warn "cannot create XSTAGE_LIVE_BUILDDIR=${LIVE_BUILDDIR} — building inside the image tree"; return 0; }
+        chown portage:portage "${LIVE_BUILDDIR}" 2>/dev/null || true
+        chmod 0775 "${LIVE_BUILDDIR}" 2>/dev/null || true
+        info "build dir: created ${LIVE_BUILDDIR}"
+    fi
     mkdir -p "${LIVE_ROOT}${LIVE_BUILDDIR_MNT}"
     mount --bind "${LIVE_BUILDDIR}" "${LIVE_ROOT}${LIVE_BUILDDIR_MNT}"
     info "build dir: ${LIVE_BUILDDIR} -> ${LIVE_BUILDDIR_MNT} (bind)"
