@@ -127,3 +127,17 @@ dev-libs/zziplib -sdl
 # permanent flag would resolve, build for hours and produce an image whose
 # whole reason for existing (the unsloth/vLLM stack) fails at run time — the
 # expensive kind of silent failure.
+
+# net-vpn/cisco-secure-client — the embedded SAML/SSO browser.
+#
+# PROF_LIVE_USE turns 'webkit' off globally, and the flag defaults to on in
+# IUSE, so without this line the image would build a client with acwebhelper
+# quietly missing: the merge succeeds, net-libs/webkit-gtk:4 never gets pulled,
+# and the failure only shows up at the office, on a headend that insists on the
+# embedded browser rather than handing SAML to acextwebhelper.
+#
+# 'telemetry' is deliberately NOT set: it defaults off, which leaves out
+# libacfeedback.so (Customer Experience Feedback). That is the same choice the
+# stock installer makes when a deployment sets DisableCustomerExperienceFeedback
+# in ACTransforms.xml, so the client stays a supported configuration.
+net-vpn/cisco-secure-client webkit

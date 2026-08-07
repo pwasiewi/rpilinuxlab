@@ -96,3 +96,10 @@ media-libs/shaderc
 # changed the error-handler callback signature, so aconnect.c fails with
 # "'err' undeclared". The matching utils release is keyworded; take it.
 =media-sound/alsa-utils-1.2.16 ~amd64
+
+# Cisco Secure Client and its retro dependency stack, merged by
+# 'xp <profile> restrict-run'. webkit-gtk:4 is the slot ::gentoo dropped, so it
+# only exists in ::pwr and only as ~amd64; the client itself is ~amd64 because
+# nothing about a vendor binary earns a stable keyword.
+=net-libs/webkit-gtk-2.48.3-r1 ~amd64
+net-vpn/cisco-secure-client ~amd64

@@ -280,6 +280,23 @@ CONFIG_IKCONFIG_PROC=y
 CONFIG_SECURITY=y
 CONFIG_SECURITYFS=y
 CONFIG_SECURITY_YAMA=y
+# Landlock: unprivileged, stackable filesystem/network sandboxing. Nothing to
+# do with the hardened flavour — it is an ordinary LSM and works the same in a
+# plain kernel, so it belongs here rather than in hardened.fragment (which
+# already enables it, and whose CONFIG_LSM overrides this one because its
+# fragment merges later).
+#
+# Both lines are needed. An LSM that is compiled but absent from the active
+# list is inert, and 'make olddefconfig' will NOT insert landlock into an
+# existing explicit CONFIG_LSM — this host is the proof: it carries
+# CONFIG_LSM="yama,loadpin,safesetid,integrity,selinux,smack,tomoyo,apparmor"
+# with no landlock in it at all.
+#
+# The list names exactly the LSMs this fragment compiles. Listing one that is
+# not built is harmless (it is skipped), but leaving a built one out silently
+# disables it, so extend this string when adding an LSM above.
+CONFIG_SECURITY_LANDLOCK=y
+CONFIG_LSM="landlock,yama,integrity"
 CONFIG_KEXEC=y
 CONFIG_KEXEC_FILE=y
 CONFIG_INTEGRITY=y

@@ -265,6 +265,7 @@ LIVE_PKGS="${XSTAGE_LIVE_PKGS:-}"
 LIVE_OVERLAY_PKGS="${XSTAGE_LIVE_OVERLAY_PKGS:-}"
 LIVE_CYCLE_BOOTSTRAP="${XSTAGE_LIVE_CYCLE_BOOTSTRAP:-}"
 LIVE_RESTRICT_PKGS="${XSTAGE_LIVE_RESTRICT_PKGS:-}"
+LIVE_KMOD_PKGS="${XSTAGE_LIVE_KMOD_PKGS:-}"
 LIVE_REPOS="${XSTAGE_LIVE_REPOS:-}"
 LIVE_SETS="${XSTAGE_LIVE_SETS:-}"
 LIVE_HOSTNAME="${XSTAGE_LIVE_HOSTNAME:-amd64live}"
@@ -1506,8 +1507,32 @@ cmd_live_pkgs() {
     # The RDEPEND-side twin of this failure (dev-perl/* binaries pinning an
     # old dev-lang/perl subslot) cannot be fixed this way and is handled with
     # --usepkg-exclude in PROF_LIVE_EMERGE_OPTS; see the profile.
+    # Out-of-tree kernel modules cannot be built here at all: linux-mod-r1
+    # requires a BUILT kernel tree (it checks /usr/src/linux/Module.symvers)
+    # and this step only CONFIGURES it — genkernel compiles the tree later, in
+    # 'kernel', which already ends with a 'module-pkgs' pass that exists to
+    # merge exactly these packages.
+    #
+    # So the failure was never the missing module: it was that nvidia-drivers
+    # dying under --keep-going still makes the step exit 1, and that abort took
+    # the overlay-pkgs run below with it (measured 2026-08-07: 1930 packages
+    # merged, sci-ml/unsloth and the whole ::pwr half never attempted).
+    # Excluding them turns an inevitable failure into a deliberate skip.
+    #
+    # --exclude is the right tool even though nothing lists nvidia-drivers
+    # directly — it arrives via VIDEO_CARDS=nvidia -> x11-drivers/xorg-drivers,
+    # so it cannot be dropped from PROF_LIVE_PKGS. Portage omits it from the
+    # merge list without failing the resolve.
+    local kmod_excl=""
+    local kp
+    while IFS= read -r kp; do
+        [[ -n ${kp} ]] || continue
+        kmod_excl+=" --exclude ${kp}"
+    done <<< "${LIVE_KMOD_PKGS}"
+    [[ -z ${kmod_excl} ]] ||
+        info "Deferred to the post-kernel module pass:${kmod_excl//--exclude/}"
     live_chroot pkgs <<-EOF
-	emerge --verbose --keep-going --with-bdeps=n \\
+	emerge --verbose --keep-going --with-bdeps=n${kmod_excl} \\
 	    ${LIVE_SETS} $(printf '%s ' ${list})
 	EOF
     if [[ -n ${LIVE_OVERLAY_PKGS} ]]; then
