@@ -1430,6 +1430,28 @@ cmd_live_pkgs() {
         die "No ebuild tree in the image — run: sudo $0 ${TGT:-amd64} conf"
     live_prep_kconfig
     local n; n=$(printf '%s\n' "${list}" | grep -c . || true)
+
+    # Out-of-tree kernel modules, deferred to the post-kernel pass in
+    # cmd_live_kernel. linux-mod-r1.eclass dies in setup when
+    # /usr/src/linux/Module.symvers is missing ("built kernel sources are
+    # required to build kernel modules"), and 'pkgs' runs before 'kernel' by
+    # design, so these cannot succeed here at all.
+    #
+    # This must apply to BOTH passes. Pass 1 is an @world/@installed update,
+    # and a module package reached through a dependency — nvidia-drivers via
+    # dev-util/nvidia-cuda-toolkit, or via VIDEO_CARDS=nvidia through
+    # x11-drivers/xorg-drivers — is in that graph just as much as in the
+    # payload list. Excluding it only from pass 2 is what let run6 merge 148 of
+    # 148 packages and still abort: --keep-going means the one failure does not
+    # stop the run, but emerge still exits 1, and live_chroot dies on that.
+    local kmod_excl=""
+    local kp
+    while IFS= read -r kp; do
+        [[ -n ${kp} ]] || continue
+        kmod_excl+=" --exclude ${kp}"
+    done <<< "${LIVE_KMOD_PKGS}"
+    [[ -z ${kmod_excl} ]] ||
+        info "Deferred to the post-kernel module pass:${kmod_excl//--exclude/}"
     # Pass 1: bring the stage3 up to the tree BEFORE adding the package list.
     #
     # Not an optimisation — the two do not fit in one resolver graph. A stage3
@@ -1451,7 +1473,7 @@ cmd_live_pkgs() {
     if [[ ${LIVE_UPDATE_FIRST} == yes ]]; then
         info "Pass 1/2: updating the stage3 to the tree (@world @installed)"
         live_chroot update-seed <<-EOF
-	emerge --verbose --keep-going --with-bdeps=y \\
+	emerge --verbose --keep-going --with-bdeps=y${kmod_excl} \\
 	    --update --deep --newuse @world @installed
 	EOF
     fi
@@ -1543,14 +1565,6 @@ cmd_live_pkgs() {
     # directly — it arrives via VIDEO_CARDS=nvidia -> x11-drivers/xorg-drivers,
     # so it cannot be dropped from PROF_LIVE_PKGS. Portage omits it from the
     # merge list without failing the resolve.
-    local kmod_excl=""
-    local kp
-    while IFS= read -r kp; do
-        [[ -n ${kp} ]] || continue
-        kmod_excl+=" --exclude ${kp}"
-    done <<< "${LIVE_KMOD_PKGS}"
-    [[ -z ${kmod_excl} ]] ||
-        info "Deferred to the post-kernel module pass:${kmod_excl//--exclude/}"
     live_chroot pkgs <<-EOF
 	emerge --verbose --keep-going --with-bdeps=n${kmod_excl} \\
 	    ${LIVE_SETS} $(printf '%s ' ${list})
