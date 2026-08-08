@@ -70,6 +70,11 @@
 #                   log, or the run chroot's emerge.log                 [root]
 #   qlop [ARGS]     merge times from the run chroot's emerge.log        [root]
 #
+# Timing: every long verb runs under the bash 'time' keyword — a
+#   ">>>  xp <profile> <verb>: ..." elapsed/user/sys line prints when it ends.
+#   Interactive and read-only verbs (enter, status, gate, log, qlop, run,
+#   binhost, distcc, the passthroughs) are exempt.
+#
 # Env:
 #   XPROFILE        active profile when no <profile> arg (export per tab)
 #   XP_LAB_DIR      lab root override; else /etc/xp.conf, else xp's own dir
@@ -86,6 +91,16 @@ die()  { echo "❌  $*" >&2; exit 1; }
 info() { echo ">>>  $*"; }
 warn() { echo "⚠️   $*" >&2; }
 help() { sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \?//'; }
+
+# timed CMD... — replaces exec for the long verbs: run CMD under the bash
+# 'time' keyword and exit with its status, so every build step ends with an
+# elapsed/user/sys line. Interactive and read-only verbs keep plain exec.
+timed() {
+    local rc=0
+    local TIMEFORMAT=">>>  xp ${PROF} ${VERB}: %lR elapsed (user %lU, sys %lS)"
+    time "$@" || rc=$?
+    exit "${rc}"
+}
 
 # --- lab root discovery: env > /etc/xp.conf > next to this script ----------
 if [[ -z ${XP_LAB_DIR:-} && -r /etc/xp.conf ]]; then
@@ -173,7 +188,7 @@ status)
 setup)
     no_args "$@"
     if is_board; then "$(xarm_bin)" setup; fi
-    exec "${XSTAGE}" "${T}" setup
+    timed "${XSTAGE}" "${T}" setup
     ;;
 enter)
     # native profiles have exactly one rootfs — the live image tree — and
@@ -195,52 +210,55 @@ emerge|1by1)
     # live image, with the same bind mounts (distfiles, build dir, ccache) that
     # 'pkgs' runs with
     if ! is_board && [[ ${VERB} == emerge ]]; then
-        exec "${XSTAGE}" "${T}" live-emerge "$@"
+        timed "${XSTAGE}" "${T}" live-emerge "$@"
     fi
     need_board
-    exec "$(xarm_bin)" "${VERB}" "$@"
+    timed "$(xarm_bin)" "${VERB}" "$@"
     ;;
 pkgs)
     no_args "$@"
     # native profiles emerge inside the live chroot (xstage owns that);
     # boards cross-emerge into the rootfs with the crossdev toolchain
-    if ! is_board; then exec "${XSTAGE}" "${T}" pkgs; fi
+    if ! is_board; then timed "${XSTAGE}" "${T}" pkgs; fi
     [[ -n ${PROF_PKGS:-} ]] || die "Profile ${PROF} sets no PROF_PKGS"
     root="$(prof_build_dir)/rootfs"
     [[ -d ${root} ]] || die "No ${root} — run: sudo xp ${PROF} build"
     info "Installing into ${root}: ${PROF_PKGS}"
     # shellcheck disable=SC2086 — word splitting of the package list is intended
-    exec "${PROF_TUPLE}-emerge" --root="${root}" --root-deps=rdeps \
+    timed "${PROF_TUPLE}-emerge" --root="${root}" --root-deps=rdeps \
         --usepkg --buildpkg --oneshot -q ${PROF_PKGS}
     ;;
-seed|snapshot|spec|stage1|stage2|stage3|all|verify|log|qlop|qlog)
+seed|snapshot|spec|stage1|stage2|stage3|all|verify)
     # 'seed' on a native profile fetches the flavour the profile asks for
     # (hardened-openrc for the hardened image, plain openrc otherwise)
+    timed "${XSTAGE}" "${T}" "${VERB}" "$@"
+    ;;
+log|qlop|qlog)
     [[ ${VERB} == qlog ]] && VERB=qlop   # common slip of the finger
     exec "${XSTAGE}" "${T}" "${VERB}" "$@"
     ;;
 crossstage)
     need_board
-    exec "${XSTAGE}" "${T}" crossstage "$@"
+    timed "${XSTAGE}" "${T}" crossstage "$@"
     ;;
 build)
     no_args "$@"
     # 'build' means "make the rootfs" on both sides of the lab: unpack a stage3
     # for the live image, unpack/cross-emerge one for a board
-    if ! is_board; then exec "${XSTAGE}" "${T}" unpack; fi
-    if [[ ${T} == tiny ]]; then exec "${XSTAGE}" tiny build; fi
-    exec "${XSTAGE}" "${T}" unpack
+    if ! is_board; then timed "${XSTAGE}" "${T}" unpack; fi
+    if [[ ${T} == tiny ]]; then timed "${XSTAGE}" tiny build; fi
+    timed "${XSTAGE}" "${T}" unpack
     ;;
 rpi)
     need_board; no_args "$@"
-    exec "${XSTAGE}" "${T}" rpi
+    timed "${XSTAGE}" "${T}" rpi
     ;;
 image)
     no_args "$@"
     # boards produce sd.img; native profiles produce livecd.iso (optional
     # qemu-gate artifact — the native deliverable is 'usb')
-    if ! is_board; then exec "${XSTAGE}" "${T}" iso; fi
-    exec "${XSTAGE}" "${T}" "${PROF_IMAGE_CMD}"
+    if ! is_board; then timed "${XSTAGE}" "${T}" iso; fi
+    timed "${XSTAGE}" "${T}" "${PROF_IMAGE_CMD}"
     ;;
 gate)
     no_args "$@"
@@ -250,25 +268,28 @@ gate)
 # --- live-image verbs (native profiles): the squashfs + isolinux pipeline ---
 unpack|conf|configure|squash|isolinux|iso|live|restrict-run)
     need_native; no_args "$@"
-    exec "${XSTAGE}" "${T}" "${VERB}"
+    timed "${XSTAGE}" "${T}" "${VERB}"
     ;;
 livekernel)
     # spelled out, because plain 'kernel' belongs to the xlab QEMU lab
     need_native; no_args "$@"
-    exec "${XSTAGE}" "${T}" kernel
+    timed "${XSTAGE}" "${T}" kernel
     ;;
 usb)
     need_native
     [[ $# -ge 1 ]] || die "Usage: sudo xp ${PROF} usb /dev/sdX [--wipe]"
-    exec "${XSTAGE}" "${T}" usb "$@"
+    timed "${XSTAGE}" "${T}" usb "$@"
     ;;
-run|kernel)
-    exec "${XLAB}" "${L}" "${VERB}" "$@"
+run)
+    exec "${XLAB}" "${L}" run "$@"
+    ;;
+kernel)
+    timed "${XLAB}" "${L}" kernel "$@"
     ;;
 sd)
     need_board
     [[ $# -eq 1 ]] || die "Usage: sudo xp ${PROF} sd /dev/sdX|/dev/mmcblkN"
-    exec "${XSTAGE}" "${T}" sd "$1"
+    timed "${XSTAGE}" "${T}" sd "$1"
     ;;
 binhost)
     need_board; no_args "$@"
