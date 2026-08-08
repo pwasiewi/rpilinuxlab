@@ -70,6 +70,14 @@ fi
 TARGET="${XARM_TARGET:-aarch64-unknown-linux-gnu}"
 PROFILE="${XARM_PROFILE:-default/linux/arm64/23.0}"
 CPU="${XARM_CPU:-cortex-a72}"
+# xp-profile make.conf additions and portage fragments (board profiles export
+# these via global.conf). The sysroot is shared by all ARM profiles — the
+# managed block and the xprofile-* fragments are rewritten on setup/tune, so a
+# profile switch is 'sudo xarm setup' away, never an accumulation.
+USE_EXTRA="${XARM_USE_EXTRA:-}"
+VIDEO_CARDS_EXTRA="${XARM_VIDEO_CARDS:-}"
+INPUT_DEVICES_EXTRA="${XARM_INPUT_DEVICES:-}"
+PORTAGE_CONFDIR="${XARM_PORTAGE_CONFDIR:-}"
 SYSROOT="/usr/${TARGET}"
 # Binary packages are only valid for the profile that built them — USE, and
 # whatever else the profile settles, is baked into the tarball. One cache per
@@ -202,13 +210,49 @@ sysroot_write_makeconf() {
 	# never the host's /var/cache/ccache (x86 objects; do not mix architectures)
 	FEATURES="\${FEATURES} ccache"
 	CCACHE_DIR="/var/cache/ccache-xarm"
-	# <<< xarm managed
 	EOF
+    # xp-profile additions land inside the managed block, so the next
+    # setup/tune under a different profile removes them with the rest
+    if [[ -n ${USE_EXTRA} ]]; then
+        echo "# xp profile USE (XARM_USE_EXTRA)" >> "${mc}"
+        echo "USE=\"\${USE} ${USE_EXTRA}\"" >> "${mc}"
+    fi
+    [[ -z ${VIDEO_CARDS_EXTRA} ]]   || echo "VIDEO_CARDS=\"${VIDEO_CARDS_EXTRA}\"" >> "${mc}"
+    [[ -z ${INPUT_DEVICES_EXTRA} ]] || echo "INPUT_DEVICES=\"${INPUT_DEVICES_EXTRA}\"" >> "${mc}"
+    echo "# <<< xarm managed" >> "${mc}"
+}
+
+# Per-xp-profile portage fragments in the shared sysroot: every xprofile-*
+# file is deleted, then the active profile's fragments (XARM_PORTAGE_CONFDIR,
+# an etc/portage tree) are copied in as xprofile-<basename>. A profile that
+# sets no confdir just cleans up the previous one's files. env/ is not synced:
+# package.env fragments must reference env files the sysroot already has, or
+# the layer grows them under profile-specific names by hand.
+sysroot_sync_portage_confdir() {
+    local sub src dst f n=0
+    for sub in package.use package.accept_keywords package.env package.mask package.license; do
+        dst="${SYSROOT}/etc/portage/${sub}"
+        [[ -d ${dst} ]] && find "${dst}" -maxdepth 1 -type f -name 'xprofile-*' -delete
+        if [[ -n ${PORTAGE_CONFDIR} && -d ${PORTAGE_CONFDIR}/${sub} ]]; then
+            mkdir -p "${dst}"
+            for f in "${PORTAGE_CONFDIR}/${sub}"/*; do
+                [[ -f ${f} ]] || continue
+                cp -f "${f}" "${dst}/xprofile-$(basename "${f}")"
+                n=$((n + 1))
+            done
+        fi
+    done
+    if [[ -n ${PORTAGE_CONFDIR} ]]; then
+        [[ -d ${PORTAGE_CONFDIR} ]] ||
+            die "XARM_PORTAGE_CONFDIR=${PORTAGE_CONFDIR}: not a directory"
+        info "Synced ${n} xprofile-* fragment(s) from ${PORTAGE_CONFDIR}"
+    fi
 }
 
 cmd_tune() {
     need_root
     sysroot_write_makeconf
+    sysroot_sync_portage_confdir
     info "Retuned for ${CPU} — affects future builds only (all ARM profiles share this sysroot)"
 }
 
@@ -313,7 +357,10 @@ cmd_setup() {
     # re-runs just this step after an XARM_CPU / xp profile switch)
     sysroot_write_makeconf
 
-    # 4b. host-side ARM ccache dir (separate from the host's own x86 cache)
+    # 4b. per-xp-profile portage fragments (xprofile-*, same rewrite contract)
+    sysroot_sync_portage_confdir
+
+    # 4c. host-side ARM ccache dir (separate from the host's own x86 cache)
     if command -v ccache >/dev/null 2>&1; then
         if [[ ! -d /var/cache/ccache-xarm ]]; then
             mkdir -p /var/cache/ccache-xarm

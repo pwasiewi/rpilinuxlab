@@ -1,0 +1,12 @@
+# Per-package USE for the rpi400kde profile. Synced into the crossdev sysroot
+# as package.use/xprofile-rpi400kde.use by 'xarm setup'/'xarm tune' and shipped
+# onto the card by 'xp rpi400kde conf' — keep both sides in this one file.
+# Global flags belong in PROF_BOARD_USE (profiles/rpi400kde.conf), not here.
+#
+# Starts empty on purpose: entries are added per resolver failure during the
+# Phase 2 probe (emerge -pv), each with a one-line reason.
+
+# REQUIRED_USE any-of(adolc boost ... openmp ... sparsehash ...): the sysroot
+# bootstrap keeps -openmp globally, so pick the cheapest backend — sparsehash
+# is header-only. Chain: plasma-meta -> spectacle -> opencv[eigen] -> eigen.
+dev-cpp/eigen sparsehash

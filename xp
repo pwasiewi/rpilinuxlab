@@ -28,6 +28,8 @@
 #   build           make the rootfs: 'arm64 unpack' (stage3 method) or
 #                   'tiny build' (rootfs method)                        [root]
 #   pkgs            cross-emerge $PROF_PKGS into the profile rootfs     [root]
+#   conf            overlay PROF_BOARD_OVERLAY_DIR layers onto the
+#                   rootfs (also runs first inside 'image')             [root]
 #   rpi             Pi boot payload into the rootfs                     [root]
 #   image           build sd.img                                        [root]
 #   gate            boot the result in qemu (output-only)
@@ -266,7 +268,13 @@ gate)
     exec "${XSTAGE}" "${T}" run-rpi
     ;;
 # --- live-image verbs (native profiles): the squashfs + isolinux pipeline ---
-unpack|conf|configure|squash|isolinux|iso|live|restrict-run)
+conf)
+    # both kinds since the rpi400kde work: native rsyncs PROF_LIVE_OVERLAY_DIR
+    # into the live tree, boards rsync PROF_BOARD_OVERLAY_DIR into the rootfs
+    no_args "$@"
+    timed "${XSTAGE}" "${T}" conf
+    ;;
+unpack|configure|squash|isolinux|iso|live|restrict-run)
     need_native; no_args "$@"
     timed "${XSTAGE}" "${T}" "${VERB}"
     ;;

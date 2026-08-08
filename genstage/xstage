@@ -118,6 +118,9 @@
 #   unpack           untar the stage3 into ../build/arm64sd/rootfs
 #                    (handbook flags: xattrs, numeric owners); source
 #                    override: XSTAGE_ARM64_TARBALL=/path       [root,confirm]
+#   conf             overlay config layers (PROF_BOARD_OVERLAY_DIR) onto the
+#                    rootfs — board twin of the amd64 'conf' fragment step;
+#                    also runs first inside 'image'                      [root]
 #   rpi              same Pi boot payload step as 'tiny rpi'             [root]
 #   image            configure the stage3 (root password + invoker's key,
 #                    PermitRootLogin, eth0 = the board's IP, sshd enabled,
@@ -125,7 +128,11 @@
 #                    (rpi400/rpi3). The init system follows the stage3
 #                    flavour: OpenRC gets netifrc + a runlevel symlink and
 #                    init=/sbin/init, systemd gets a .network file, unit
-#                    .wants symlinks and init=/usr/lib/systemd/systemd  [root]
+#                    .wants symlinks and init=/usr/lib/systemd/systemd.
+#                    With PROF_BOARD_XSESSION set (KDE variants) it also
+#                    creates the desktop user, sddm autologin, pipewire
+#                    user units and graphical.target; PROF_BOOT_CONFIG
+#                    swaps in the profile's config.txt                  [root]
 #   run-rpi          qemu -M raspi4b boot gate (output-only)
 #   sd DEV           dd sd.img onto a real SD card               [root,confirm]
 #   clean            rm ../build/arm64sd                              [confirm]
@@ -2907,12 +2914,22 @@ tiny_zero_board_hook() {
 tiny_make_image() {  # tiny_make_image <rpi400|rpi3|zero2w>
     need_root
     local board="$1" cfg
-    case "${board}" in
-        rpi400) cfg="${HERE}/rpi/config.txt" ;;
-        rpi3)   cfg="${HERE}/rpi/config-rpi3.txt" ;;
-        zero2w) cfg="${HERE}/rpi/config-zero2w.txt" ;;
-        *)      die "Unknown board: ${board}" ;;
-    esac
+    # Per-profile firmware config (PROF_BOOT_CONFIG): bare names live under
+    # rpi/, absolute paths pass through — same contract as the overlay list.
+    # A KDE variant needs dtoverlay=vc4-kms-v3d here; the board default stays
+    # what the headless profiles boot with.
+    if [[ -n ${XSTAGE_BOOT_CONFIG:-} ]]; then
+        cfg="${XSTAGE_BOOT_CONFIG}"
+        [[ ${cfg} == /* ]] || cfg="${HERE}/rpi/${cfg}"
+        [[ -f ${cfg} ]] || die "XSTAGE_BOOT_CONFIG names ${cfg} but it does not exist"
+    else
+        case "${board}" in
+            rpi400) cfg="${HERE}/rpi/config.txt" ;;
+            rpi3)   cfg="${HERE}/rpi/config-rpi3.txt" ;;
+            zero2w) cfg="${HERE}/rpi/config-zero2w.txt" ;;
+            *)      die "Unknown board: ${board}" ;;
+        esac
+    fi
     [[ -x ${TINY_ROOT}${TINY_INIT} ]] || die "No rootfs — run: sudo $0 ${ROOT_HINT}"
     [[ -f ${TINY_ROOT}/boot/kernel8.img ]] || die "No Pi payload — run: sudo $0 ${TGT} rpi"
     command -v parted >/dev/null || die "No parted — emerge -av sys-block/parted"
@@ -3263,6 +3280,170 @@ arm64_configure_systemd() {
     info "eth0 ${ETH_IP} via ${ETH_GW}; units enabled: ${SD_ENABLED:-none}"
 }
 
+# Overlay layers onto the board rootfs — the board twin of cmd_live_conf's
+# fragment step, same contract: space-separated list applied left-to-right,
+# bare names resolve under live/, absolute paths pass through, rsync is
+# additive. --chown=root:root for the same logrotate-class reasons documented
+# at cmd_live_conf.
+cmd_arm64_conf() {
+    need_root
+    [[ -x ${TINY_ROOT}${TINY_INIT} ]] || die "No rootfs — run: sudo $0 arm64 unpack"
+    if [[ -z ${XSTAGE_BOARD_OVERLAY_DIR:-} ]]; then
+        info "Profile sets no PROF_BOARD_OVERLAY_DIR — nothing to overlay"
+        return 0
+    fi
+    local ovdir
+    for ovdir in ${XSTAGE_BOARD_OVERLAY_DIR}; do
+        local ov="${LIVE_TPL}/${ovdir}"
+        [[ ${ovdir} == /* ]] && ov="${ovdir}"
+        if [[ -d ${ov} ]]; then
+            info "Overlaying config fragments from ${ov}"
+            rsync -a --chown=root:root "${ov}/" "${TINY_ROOT}/"
+        else
+            warn "PROF_BOARD_OVERLAY_DIR names '${ovdir}' but ${ov} does not exist"
+        fi
+    done
+}
+
+# The desktop half of arm64_configure — a non-root user, sddm autologin,
+# graphical.target and the PipeWire user units. Runs only when the profile
+# names a session (XSTAGE_BOARD_XSESSION). Everything is host-side file
+# surgery in the arm64_sd_enable house style: shadow-utils' --prefix edits the
+# rootfs passwd/shadow/group directly and wants-symlinks are written by hand —
+# no qemu, no binfmt, works on a foreign-arch tree. The logic mirrors
+# cmd_live_configure's user/sddm block; divergences are commented there.
+arm64_configure_desktop() {  # arm64_configure_desktop <password-hash>
+    local hash="$1"
+    local user="${XSTAGE_BOARD_USER-guest}"   # unset -> guest; explicit "" disables
+
+    if [[ ${RC_SYSTEM} != systemd ]]; then
+        warn "desktop configure supports systemd flavours only (got ${RC_SYSTEM}) — skipped"
+        return 0
+    fi
+
+    if [[ -n ${user} ]]; then
+        info "Desktop user '${user}' (password '${ZERO_PASS}', autologin)"
+        if ! grep -q "^${user}:" "${TINY_ROOT}/etc/passwd"; then
+            useradd --prefix "${TINY_ROOT}" -m -c "Desktop user" -s /bin/bash \
+                -p "${hash}" "${user}" || die "useradd ${user} failed"
+        fi
+        # Every group the image defines, not a hand-picked list (user rule
+        # 2026-08-06) — same policy as the live images: root and the two
+        # no-privilege groups are skipped.
+        local g glist=""
+        while IFS=: read -r g _; do
+            case ${g} in root|nogroup|nobody|"${user}") continue ;; esac
+            glist+="${g},"
+        done < "${TINY_ROOT}/etc/group"
+        [[ -z ${glist} ]] ||
+            usermod --prefix "${TINY_ROOT}" -aG "${glist%,}" "${user}" ||
+            die "usermod -aG failed for ${user}"
+
+        # sddm needs BOTH keys (User= alone is silently ignored); Session is a
+        # .desktop NAME resolved from the session command, Wayland first.
+        local sdir sfile sess="" stype=""
+        for sdir in wayland-sessions xsessions; do
+            for sfile in "${TINY_ROOT}/usr/share/${sdir}"/*.desktop; do
+                [[ -e ${sfile} ]] || continue
+                grep -q "^Exec=.*${XSTAGE_BOARD_XSESSION}\b" "${sfile}" || continue
+                sess=$(basename "${sfile}" .desktop); stype=${sdir}; break 2
+            done
+        done
+        [[ -n ${sess} ]] || die "no .desktop session runs '${XSTAGE_BOARD_XSESSION}' —" \
+            "autologin would be skipped silently"
+        info "sddm autologin: ${user} -> ${sess} (${stype})"
+        mkdir -p "${TINY_ROOT}/etc/sddm.conf.d"
+        cat > "${TINY_ROOT}/etc/sddm.conf.d/10-xstage-autologin.conf" <<-EOF
+	[Autologin]
+	User=${user}
+	Session=${sess}
+	Relogin=false
+	EOF
+        if [[ ${stype} == wayland-sessions ]]; then
+            cat >> "${TINY_ROOT}/etc/sddm.conf.d/10-xstage-autologin.conf" <<-EOF
+
+	[General]
+	DisplayServer=wayland
+	GreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell
+
+	[Wayland]
+	CompositorCommand=kwin_wayland --drm --no-lockscreen --no-global-shortcuts --locale1
+	EOF
+        fi
+
+        # Autologin trades the display manager's login for sudo convenience —
+        # same policy and same rationale as the live images (user decision
+        # 2026-08-06). visudo validates on the host: a syntax error here locks
+        # sudo out and would only surface on the booted card.
+        if [[ -x ${TINY_ROOT}/usr/bin/sudo ]]; then
+            install -d -m 0755 "${TINY_ROOT}/etc/sudoers.d"
+            cat > "${TINY_ROOT}/etc/sudoers.d/95-xstage-desktop" <<-EOF
+	%wheel ALL=(ALL:ALL) NOPASSWD: ALL
+	${user} ALL=(ALL:ALL) NOPASSWD: ALL
+	EOF
+            chmod 0440 "${TINY_ROOT}/etc/sudoers.d/95-xstage-desktop"
+            if command -v visudo >/dev/null; then
+                visudo -cf "${TINY_ROOT}/etc/sudoers.d/95-xstage-desktop" ||
+                    die "sudoers syntax error — it would lock sudo out on the card"
+            fi
+        else
+            warn "no /usr/bin/sudo in the image — ${user} gets no sudo"
+        fi
+    fi
+
+    # NetworkManager for the desktop (wifi GUI), but eth0 stays with
+    # systemd-networkd: the fixed debug address is the board contract, and two
+    # managers on one NIC race each other.
+    if [[ -e ${TINY_ROOT}/usr/lib/systemd/system/NetworkManager.service ]]; then
+        mkdir -p "${TINY_ROOT}/etc/NetworkManager/conf.d"
+        cat > "${TINY_ROOT}/etc/NetworkManager/conf.d/10-xstage-eth0.conf" <<-EOF
+	# generated by 'xstage arm64 image' — eth0 belongs to systemd-networkd
+	[keyfile]
+	unmanaged-devices=interface-name:eth0
+	EOF
+    fi
+
+    # Units: sddm into graphical.target, the security payload's daemon and
+    # timers when the overlay/packages shipped them (arm64_sd_enable warns per
+    # missing unit), then the symlink 'systemctl set-default' would write.
+    arm64_sd_enable sddm.service graphical.target
+    arm64_sd_enable NetworkManager.service
+    arm64_sd_enable auditd.service
+    arm64_sd_enable logrotate.timer timers.target
+    arm64_sd_enable aide-check.timer timers.target
+    arm64_sd_enable glsa-check.timer timers.target
+    arm64_sd_enable lynis-audit.timer timers.target
+    if [[ -f ${TINY_ROOT}/usr/lib/systemd/system/graphical.target ]]; then
+        ln -snf /usr/lib/systemd/system/graphical.target \
+            "${TINY_ROOT}/etc/systemd/system/default.target"
+    fi
+
+    # PipeWire user units, the --global enable spelled as symlinks — same
+    # all-or-nothing check as live_sound_units (wireplumber missing looks
+    # exactly like broken hardware).
+    if [[ -x ${TINY_ROOT}/usr/bin/pipewire ]]; then
+        local uu missing=()
+        for uu in pipewire.socket pipewire-pulse.socket wireplumber.service; do
+            [[ -e ${TINY_ROOT}/usr/lib/systemd/user/${uu} ]] || missing+=("${uu}")
+        done
+        if (( ${#missing[@]} )); then
+            warn "PipeWire is installed but its user units are missing (${missing[*]})" \
+                 "— the desktop will have no sound"
+        else
+            info "sound: enabling pipewire sockets + wireplumber for every user"
+            mkdir -p "${TINY_ROOT}/etc/systemd/user/sockets.target.wants" \
+                     "${TINY_ROOT}/etc/systemd/user/pipewire.service.wants"
+            for uu in pipewire.socket pipewire-pulse.socket; do
+                ln -snf "/usr/lib/systemd/user/${uu}" \
+                    "${TINY_ROOT}/etc/systemd/user/sockets.target.wants/${uu}"
+            done
+            ln -snf /usr/lib/systemd/user/wireplumber.service \
+                "${TINY_ROOT}/etc/systemd/user/pipewire.service.wants/wireplumber.service"
+        fi
+    fi
+    info "desktop configured: session ${XSTAGE_BOARD_XSESSION}, user ${user:-none}"
+}
+
 arm64_configure() {
     need_root
     [[ -x ${TINY_ROOT}${TINY_INIT} ]] || die "No rootfs — run: sudo $0 arm64 unpack"
@@ -3319,11 +3500,18 @@ arm64_configure() {
 	LABEL=RPIBOOT   /boot   vfat    noauto,noatime  0 0
 	LABEL=${ROOT_LABEL}  /       ext4    noatime         0 1
 	EOF
+
+    # desktop half — only when the profile names a session
+    [[ -z ${XSTAGE_BOARD_XSESSION:-} ]] || arm64_configure_desktop "${hash}"
+
     info "configured: ${BOARD_SD_HOSTNAME}, eth0 ${ETH_IP} via ${ETH_GW}, ssh on, init ${TINY_INIT}"
 }
 
 cmd_arm64_image() {
     [[ ${BOARD} != zero2w ]] || die "XSTAGE_BOARD=zero2w is a tiny-track board — use: $0 tiny image_zero"
+    # overlay first, so generated files (fstab, resolv.conf, sshd drop-in) win
+    # over layer content — same ordering as the native conf -> configure flow
+    cmd_arm64_conf
     arm64_configure
     tiny_make_image "${BOARD}"
 }
@@ -3445,6 +3633,7 @@ arm64)
         status)   use_arm64_stage_conf; arm64_status ;;
         seed)     use_arm64_stage_conf; cmd_seed "$@" ;;
         unpack)   need_board_profile; cmd_arm64_unpack "$@" ;;
+        conf)     need_board_profile; cmd_arm64_conf "$@" ;;
         rpi)      need_board_profile; cmd_tiny_rpi "$@" ;;
         image)    need_board_profile; cmd_arm64_image "$@" ;;
         run-rpi)  cmd_tiny_run_rpi "$@" ;;

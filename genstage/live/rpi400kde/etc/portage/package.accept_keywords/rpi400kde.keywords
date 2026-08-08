@@ -1,0 +1,26 @@
+# Keywords for the rpi400kde profile — synced to the sysroot as
+# package.accept_keywords/xprofile-rpi400kde.keywords by 'xarm setup'/'tune'.
+# Empty on purpose: Plasma 6.6.6 / Qt 6.11.1 / sddm / mesa are stable arm64.
+# Add ~arm64 entries only per verified resolver failure, with a reason.
+
+# emoji coverage for the desktop; ~arch on every arch (probe 2026-08-08).
+# fonts-meta was dropped instead of keyworded: it cascades into ~arm64 niche
+# fonts (oldstandard, ...) — the profile lists concrete stable fonts.
+media-fonts/noto-emoji
+
+# plain C, no arch-specific code; only ever keyworded ~arm64 (probe 2026-08-08)
+app-forensics/aide
+
+# ::pwr live fork (upstream left ::gentoo); shell script, arch-independent.
+# The sysroot reaches ::pwr via repos.conf/pwr.conf — written by hand next to
+# xarm's gentoo.conf pin, host path /home/tmp/.repos/pwr (not shipped to the
+# card: the card gets the built binpkg, not the repo)
+app-forensics/lynis **
+
+# crossdev wart: host (BROOT) build deps resolve with THIS file's keywords.
+# glslang BDEPENDs the exact-same-version spirv-tools on the host, and the
+# host runs the ~arch 1.4.350 line — keep the sysroot on the same versions or
+# the resolver schedules a host downgrade that conflicts (probe 2026-08-08)
+dev-util/glslang
+dev-util/spirv-tools
+dev-util/spirv-headers
