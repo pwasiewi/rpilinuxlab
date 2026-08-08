@@ -1,0 +1,26 @@
+# rpi400hard config.txt — read by the BCM2711 GPU firmware (start4.elf) from
+# the FAT32 boot partition. Same KMS base as config-rpi400kde.txt; the
+# HARDENING kernel params do NOT live here — they are appended to cmdline.txt
+# by 'image' from PROF_BOOT_CMDLINE_EXTRA (profiles/rpi400hard.conf).
+
+# boot the 64-bit kernel (kernel8.img); without this the firmware assumes 32-bit
+arm_64bit=1
+
+# which image to load; 'kernel=u-boot.bin' here would chain-load U-Boot instead
+kernel=kernel8.img
+
+# PL011 UART on GPIO14/15 (serial0) — serial console, the backstop if the
+# hardened desktop never reaches the screen
+enable_uart=1
+
+# don't wait for a rainbow splash
+disable_splash=1
+
+# emit HDMI even when the firmware fails to detect the display at power-on
+hdmi_force_hotplug=1
+
+# KMS/DRM for Plasma Wayland: vc4 display controller + v3d GPU as a proper DRM
+# device (auto-selects the BCM2711 variant). cma-512 over the default 256 —
+# a full desktop's display buffers need it and the 4 GB Pi 400 can spare it.
+# gpu_mem is IGNORED under the KMS driver — do not add it.
+dtoverlay=vc4-kms-v3d,cma-512

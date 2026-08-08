@@ -1,0 +1,14 @@
+# Per-package USE for the rpi400hard profile. Synced into the crossdev sysroot
+# as package.use/xprofile-rpi400hard.use by 'xarm setup'/'xarm tune' and
+# shipped onto the card by 'xp rpi400hard conf'. Global flags belong in
+# PROF_BOARD_USE (profiles/rpi400hard.conf), not here.
+
+# THE hardened-profile exception (user decision 2026-08-09): features/hardened
+# sets -jit globally, and Plasma's shell is QML — interpreter-only QML is
+# unusably slow on a Cortex-A72. Scoped to the one package that runs the UI.
+dev-qt/qtdeclarative jit
+
+# duplicated from rpi400kde.use (sysroot_sync_portage_confdir takes ONE
+# confdir): REQUIRED_USE any-of backend for opencv[eigen] via spectacle;
+# sparsehash is header-only, the cheapest satisfier under global -openmp.
+dev-cpp/eigen sparsehash

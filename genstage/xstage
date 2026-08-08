@@ -187,6 +187,10 @@
 #   XSTAGE_SSH_PORT   host port 'tiny run' forwards to :22   (default 2223)
 #   XSTAGE_DISTCC_HOSTS  distcc_hosts for arm64 catalyst (default 127.0.0.1:3632/JOBS)
 #   XSTAGE_ARM64_TARBALL stage3 for 'arm64 unpack'  (default: newest in ../dl/)
+#   XSTAGE_SEED_FLAVOR  upstream flavour 'seed'/stage1 start from when FLAVOR
+#                       names a self-built combination (default: FLAVOR)
+#   XSTAGE_BOOT_CMDLINE_EXTRA  kernel params appended to the rendered
+#                       cmdline.txt (hardening knobs; kept on the one line)
 #
 # Typical flow:
 #   sudo ./xstage amd64 setup
@@ -245,6 +249,11 @@ if [[ -z ${XSTAGE_DIR:-} && -r /etc/xp.conf ]]; then source /etc/xp.conf; fi
 XDIR="${XSTAGE_DIR:-/mnt/db5/genstage}"
 MIRROR="${XSTAGE_MIRROR:-https://distfiles.gentoo.org}"
 FLAVOR="${XSTAGE_FLAVOR:-openrc}"
+# Self-built stages: the flavour catalyst BUILDS (FLAVOR, the version_stamp)
+# can name a combination upstream never ships (arm64 hardened-systemd); the
+# SEED downloaded by 'seed' and consumed by stage1 must still be a real
+# autobuild. When the xp profile sets PROF_SEED_FLAVOR the two diverge.
+SEED_FLAVOR="${XSTAGE_SEED_FLAVOR:-${FLAVOR}}"
 REL_TYPE="${XSTAGE_REL_TYPE:-lab}"
 SUBARCH=amd64
 # The portage profile catalyst builds @system against. It has to agree with
@@ -514,7 +523,7 @@ need_board_profile() {
 # ---------------------------------------------------------------------------
 # amd64 track — catalyst stage1/2/3
 # ---------------------------------------------------------------------------
-seed_tarball()  { ls -1t "${STOREDIR}/builds/default/stage3-${SUBARCH}-${FLAVOR}"-*.tar.xz 2>/dev/null | head -1 || true; }
+seed_tarball()  { ls -1t "${STOREDIR}/builds/default/stage3-${SUBARCH}-${SEED_FLAVOR}"-*.tar.xz 2>/dev/null | head -1 || true; }
 built_stage()   { ls -1t "${STOREDIR}/builds/${REL_TYPE}/$1-${SUBARCH}-${FLAVOR}"-*.tar.xz 2>/dev/null | head -1 || true; }
 snapshot_hash() {
     local s
@@ -581,8 +590,8 @@ cmd_setup() {
 
 cmd_seed() {
     mkdir -p "${DL_DIR}"
-    local latest_txt="latest-stage3-${SUBARCH}-${FLAVOR}.txt"
-    info "Resolving latest stage3 (${SUBARCH}, ${FLAVOR}) from ${AUTOBUILDS}"
+    local latest_txt="latest-stage3-${SUBARCH}-${SEED_FLAVOR}.txt"
+    info "Resolving latest stage3 (${SUBARCH}, ${SEED_FLAVOR}) from ${AUTOBUILDS}"
     local relpath
     relpath=$(curl -fsSL "${AUTOBUILDS}/${latest_txt}" \
         | awk '/^[0-9]{8}T[0-9]{6}Z\// {print $1; exit}')
@@ -2965,6 +2974,13 @@ tiny_make_image() {  # tiny_make_image <rpi400|rpi3|zero2w>
     command cp -f "${cfg}" "${TINY_MNT}/config.txt"
     sed -e "s/@PTUUID@/${ptuuid}/" -e "s|@INIT@|${TINY_INIT}|" \
         "${HERE}/rpi/cmdline.txt.in" > "${TINY_MNT}/cmdline.txt"
+    # profile hardening params (PROF_BOOT_CMDLINE_EXTRA) — appended to the
+    # first line: the firmware reads cmdline.txt as ONE line, a second line
+    # would be silently ignored
+    if [[ -n ${XSTAGE_BOOT_CMDLINE_EXTRA:-} ]]; then
+        sed -i "1s/\$/ ${XSTAGE_BOOT_CMDLINE_EXTRA}/" "${TINY_MNT}/cmdline.txt"
+        info "cmdline.txt += ${XSTAGE_BOOT_CMDLINE_EXTRA}"
+    fi
     tiny_img_umount
 
     info "Root partition: rootfs (minus /boot, which lives on the FAT side)"
