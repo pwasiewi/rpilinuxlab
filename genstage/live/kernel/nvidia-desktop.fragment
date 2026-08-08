@@ -1,0 +1,21 @@
+# For the desktop-NVIDIA images — amdkde and nvidiahard, the two profiles
+# whose target is the gen2db desktop with the RTX 5070 Ti. NOT amdkdehard
+# (T14, no NVIDIA), which sits between them in the source chain and clears
+# PROF_LIVE_KFRAGS again.
+#
+# Bakes the boot cmdline into the kernel (CONFIG_CMDLINE is the base;
+# efi-boot's stub methods append LUKS/root arguments on top via
+# efibootmgr --unicode without touching the binary — see live/tools efi-boot).
+#
+# Verified working on the gen2db host (RTX 5070 Ti, 2026-08-08):
+#   init=…systemd              stub boot has no bootloader to pass init=
+#   iommu=pt amd_iommu=on      IOMMU up in passthrough mode
+#   pci=realloc=off            BAR reallocation quirk
+#   acpi_enforce_resources=lax host sensors need the relaxed ACPI claim
+#   nvidia_drm.modeset=1       KMS for Wayland — the modprobe.d payload keeps
+#   nvidia_drm.fbdev=1         only fbdev; modeset arrives from here
+#
+# Profile-scoped on purpose: the flavour fragments are shared by every image,
+# and a desktop-NVIDIA cmdline must not leak into the T14's kernel.
+CONFIG_CMDLINE_BOOL=y
+CONFIG_CMDLINE="init=/usr/lib/systemd/systemd iommu=pt amd_iommu=on pci=realloc=off acpi_enforce_resources=lax nvidia_drm.modeset=1 nvidia_drm.fbdev=1"

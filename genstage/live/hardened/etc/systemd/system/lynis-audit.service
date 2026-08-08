@@ -1,0 +1,10 @@
+[Unit]
+Description=Lynis system security audit
+After=multi-user.target
+
+[Service]
+Type=oneshot
+# Pełny audyt; wynik do journala + raport w /var/log/lynis-report.dat
+ExecStart=/usr/bin/lynis audit system --cronjob --quiet
+StandardOutput=journal
+StandardError=journal

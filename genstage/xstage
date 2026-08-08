@@ -269,6 +269,7 @@ LIVE_TIERS="${XSTAGE_LIVE_TIERS:-}"
 LIVE_PKGS="${XSTAGE_LIVE_PKGS:-}"
 LIVE_OVERLAY_PKGS="${XSTAGE_LIVE_OVERLAY_PKGS:-}"
 LIVE_CYCLE_BOOTSTRAP="${XSTAGE_LIVE_CYCLE_BOOTSTRAP:-}"
+LIVE_KFRAGS="${XSTAGE_LIVE_KFRAGS:-}"
 LIVE_RESTRICT_PKGS="${XSTAGE_LIVE_RESTRICT_PKGS:-}"
 LIVE_KMOD_PKGS="${XSTAGE_LIVE_KMOD_PKGS:-}"
 LIVE_REPOS="${XSTAGE_LIVE_REPOS:-}"
@@ -1365,6 +1366,19 @@ live_prep_kconfig() {
         frags+=("${LIVE_TPL}/kernel/hardened.fragment")
         info "Hardened profile detected — adding the KSPP kernel fragment"
     fi
+    # Profile-scoped fragments (PROF_LIVE_KFRAGS) — for symbols only ONE
+    # profile may carry, e.g. nvidiahard's baked CONFIG_CMDLINE: the flavour
+    # fragments above are shared, so anything hardware- or GPU-specific in
+    # them would leak into every sibling image. A bare name resolves against
+    # ${LIVE_TPL}/kernel/, an absolute path is taken as-is. Appended LAST, so
+    # a profile fragment wins over the flavour fragments where both set a key
+    # (merge_config.sh: later files override earlier ones).
+    local kf
+    for kf in ${LIVE_KFRAGS}; do
+        [[ ${kf} == /* ]] || kf="${LIVE_TPL}/kernel/${kf}"
+        frags+=("${kf}")
+        info "Profile kernel fragment: $(basename "${kf}")"
+    done
     local f
     for f in "${frags[@]}"; do
         [[ -f ${f} ]] || die "Missing Kconfig fragment: ${f}"

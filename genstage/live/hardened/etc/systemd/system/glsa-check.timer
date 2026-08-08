@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Gentoo GLSA check (catch-up after wake)
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=20min
+
+[Install]
+WantedBy=timers.target

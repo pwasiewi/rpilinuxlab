@@ -1,0 +1,7 @@
+# Świadome wyjątki - gen2db laptop
+# Docker (9 kontenerów [3]) + VirtualBox wymagają ip_forward
+skip-test=KRNL-6000:net.ipv4.conf.all.forwarding
+# USB hotplug + VirtualBox modules + Docker - nie możemy wyłączyć
+skip-test=KRNL-6000:kernel.modules_disabled
+# SysRq = 48: sync(16) + remount-ro(32) - zweryfikowane działanie
+skip-test=KRNL-6000:kernel.sysrq

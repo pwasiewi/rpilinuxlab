@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly Lynis security audit (catch-up after wake)
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

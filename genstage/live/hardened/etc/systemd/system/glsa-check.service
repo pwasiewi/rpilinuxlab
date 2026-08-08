@@ -1,0 +1,10 @@
+[Unit]
+Description=Gentoo GLSA security advisory check
+After=multi-user.target
+
+[Service]
+Type=oneshot
+# List packages affected by known security advisories
+ExecStart=/bin/sh -c '/usr/bin/glsa-check --list affected 2>&1 | logger -t glsa-check'
+StandardOutput=journal
+StandardError=journal

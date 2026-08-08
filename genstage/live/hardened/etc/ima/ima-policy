@@ -1,0 +1,19 @@
+# /etc/ima/ima-policy — gen2db, tryb pomiaru (measurement, bez appraise)
+# Ładowane przez ima-policy.service (root na LUKS — patrz secure-backup/README.md Dodatek B2).
+# Bufor /sys/kernel/security/ima/policy jest write-once do następnego reboota.
+
+# Pomiń pseudo-FS i tmpfs (szum, nie ma sensu mierzyć):
+dont_measure fsmagic=0x9fa0          # procfs
+dont_measure fsmagic=0x62656572      # sysfs
+dont_measure fsmagic=0x64626720      # debugfs
+dont_measure fsmagic=0x01021994      # tmpfs
+dont_measure fsmagic=0x1cd1          # devtmpfs
+dont_measure fsmagic=0x42494e4d      # binfmt_misc
+dont_measure fsmagic=0x73636673      # securityfs
+dont_measure fsmagic=0x27e0eb        # cgroup
+
+# Mierz to, co istotne dla integralności wykonania:
+measure func=BPRM_CHECK mask=MAY_EXEC                 # wykonywane pliki
+measure func=FILE_MMAP mask=MAY_EXEC                  # mmap PROT_EXEC (biblioteki .so)
+measure func=MODULE_CHECK                             # moduły jądra
+measure func=FIRMWARE_CHECK                           # firmware

@@ -1,0 +1,10 @@
+[Unit]
+Description=AIDE file integrity check
+After=multi-user.target
+
+[Service]
+Type=oneshot
+# Porównaj system z bazą. Raport tylko gdy są zmiany (exit code != 0 → widać w journalu).
+ExecStart=/usr/bin/aide --check --config=/etc/aide/aide.conf
+StandardOutput=journal
+StandardError=journal
