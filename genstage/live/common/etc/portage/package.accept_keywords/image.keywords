@@ -103,3 +103,12 @@ media-libs/shaderc
 # nothing about a vendor binary earns a stable keyword.
 =net-libs/webkit-gtk-2.48.3-r1 ~amd64
 net-vpn/cisco-secure-client ~amd64
+
+# nvidiahard unsloth/vllm chain via ::stuff (2026-08-08): the five ~amd64
+# deps the autounmask pass listed (mcp and friends). Bare atoms, host-file
+# style; inert on images whose graphs never reach them.
+dev-python/fastapi
+dev-python/httpx-sse
+dev-python/sse-starlette
+dev-python/pybase64
+dev-python/mcp

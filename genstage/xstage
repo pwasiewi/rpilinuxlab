@@ -1709,8 +1709,13 @@ cmd_live_pkgs() {
 		EOF
             fi
             info "Merging overlay packages: ${LIVE_OVERLAY_PKGS}"
+            # kmod_excl, same as both passes: EMERGE_DEFAULT_OPTS' --newuse
+            # otherwise schedules the nvidia-drivers[-modules] bootstrap
+            # install for a +modules rebuild INSIDE this batch — before the
+            # kernel exists (failed here 2026-08-08; the post-kernel replay
+            # is where that rebuild belongs)
             live_chroot overlay-pkgs <<-EOF
-		emerge --verbose --keep-going ${LIVE_OVERLAY_PKGS}
+		emerge --verbose --keep-going${kmod_excl} ${LIVE_OVERLAY_PKGS}
 		EOF
         fi
     fi

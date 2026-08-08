@@ -3,3 +3,14 @@
 # ebuild (plus the Gainward RTX 5070 Ti detector), so mask only the ::gentoo
 # copy and let the pwr one win.
 =app-misc/openrgb-9999::gentoo
+
+# GitHub regenerated the gh.tar.gz for cuda-pathfinder-1.6.0 (size drifted 19
+# bytes) and ::stuff's Manifest predates that — every fetch dies on a digest
+# mismatch. ::pwr carries the same ebuild with a refreshed Manifest; mask the
+# stale copy so the fixed one wins (2026-08-08, same pattern as openrgb above).
+=dev-python/cuda-pathfinder-1.6.0::stuff
+
+# src_unpack loops `for f in "${A}"` — quoted, so with more than one enabled
+# PYTHON_TARGETS both wheels arrive as a single word and cp dies. ::pwr
+# carries the fixed copy (2026-08-08).
+=dev-python/cuda-tile-bin-1.5.0::stuff
