@@ -757,31 +757,80 @@ run_summary() {  # <run> — running instances + "(N of M) pkg" from emerge.log
 
 cmd_log() {  # [emerge] — follow the newest package log / the emerge.log
     need_root
-    local run; run=$(newest_run)
-    [[ -n ${run} ]] || die "No runs under ${LOGDIR}/${REL_TYPE} — nothing built yet"
-    run_summary "${run}"
+    # Same two-source selection as cmd_qlop: the catalyst run chroot vs the
+    # live image rootfs, newest emerge.log wins.
+    local elog="" src="" run cand
+    run=$(newest_run || true)
+    if [[ -n ${run} ]]; then
+        cand="${STOREDIR}/tmp/${REL_TYPE}/${run}/var/log/emerge.log"
+        [[ -f ${cand} ]] && { elog="${cand}"; src="catalyst run ${run}"; }
+    fi
+    cand="${LIVE_ROOT}/var/log/emerge.log"
+    if [[ -f ${cand} && ( -z ${elog} || ${cand} -nt ${elog} ) ]]; then
+        elog="${cand}"; src="live rootfs"
+    fi
+    [[ -n ${elog} ]] || die "No emerge.log in ${LOGDIR}/${REL_TYPE} runs or ${LIVE_ROOT} — nothing built yet"
     if [[ ${1:-} == emerge ]]; then
-        local elog="${STOREDIR}/tmp/${REL_TYPE}/${run}/var/log/emerge.log"
-        [[ -f ${elog} ]] || die "No ${elog} — run chroot gone?"
+        info "Following the ${src} emerge.log (Ctrl-C stops the tail, not the build)"
         exec tail -f "${elog}"
     fi
-    local dir="${LOGDIR}/${REL_TYPE}/${run}" newest
-    newest=$(ls -1t "${dir}" | head -1 || true)
+    local newest
+    if [[ ${src} == "live rootfs" ]]; then
+        # Live builds keep per-package logs at the portage default,
+        # ${PORTAGE_TMPDIR}/portage/<cat>/<pkg>/temp/build.log — seen from
+        # the host through LIVE_BUILDDIR when the profile sets one.
+        local bld="${LIVE_BUILDDIR:-${LIVE_ROOT}/var/tmp/portage}"
+        newest=$(ls -1t "${bld}"/*/*/temp/build.log 2>/dev/null | head -1 || true)
+        [[ -n ${newest} ]] || die "No build.log under ${bld} — no package building?"
+        info "Following ${newest#"${bld}"/} (Ctrl-C stops the tail, not the build)"
+        exec tail -f "${newest}"
+    fi
+    run_summary "${run}"
+    local dir="${LOGDIR}/${REL_TYPE}/${run}"
+    # -p + the trailing-slash filter: elog/ is a DIRECTORY that sorts newest
+    # and made the old 'ls -1t | head -1' hand tail something untailable
+    newest=$(ls -1tp "${dir}" | grep -v '/$' | head -1 || true)
     [[ -n ${newest} ]] || die "No package logs in ${dir} yet"
     info "Following ${newest} (Ctrl-C stops the tail, not the build)"
     exec tail -f "${dir}/${newest}"
 }
 
-cmd_qlop() {  # [qlop args] — merge times from the run chroot's emerge.log
+cmd_qlop() {  # [qlop args] — merge times from the newest emerge.log
     need_root
     command -v qlop >/dev/null || die "No qlop — emerge -av app-portage/portage-utils"
-    local run; run=$(newest_run)
-    [[ -n ${run} ]] || die "No runs under ${LOGDIR}/${REL_TYPE} — nothing built yet"
-    local elog="${STOREDIR}/tmp/${REL_TYPE}/${run}/var/log/emerge.log"
-    [[ -f ${elog} ]] || die "No ${elog} — run chroot gone?"
-    run_summary "${run}"
+    # Two possible logs: the catalyst run chroot's, and the live image
+    # rootfs's. Whichever was written to most recently is the build the
+    # operator is asking about; a profile that only ever did one kind of
+    # build simply has one candidate.
+    local elog="" src="" run cand
+    run=$(newest_run || true)
+    if [[ -n ${run} ]]; then
+        cand="${STOREDIR}/tmp/${REL_TYPE}/${run}/var/log/emerge.log"
+        [[ -f ${cand} ]] && { elog="${cand}"; src="catalyst run ${run}"; }
+    fi
+    cand="${LIVE_ROOT}/var/log/emerge.log"
+    if [[ -f ${cand} && ( -z ${elog} || ${cand} -nt ${elog} ) ]]; then
+        elog="${cand}"; src="live rootfs"
+    fi
+    [[ -n ${elog} ]] || die "No emerge.log in ${LOGDIR}/${REL_TYPE} runs or ${LIVE_ROOT} — nothing built yet"
+    info "qlop over the ${src} emerge.log"
+    [[ ${src} == catalyst* ]] && run_summary "${run}"
+    # 'top [N]' — the N longest merges, duration FIRST (h:mm:ss, aligned,
+    # sorted). qlop itself cannot reorder its fields: -F formats only the
+    # atom, so this is -M (raw seconds) rearranged in awk. Caveat: under
+    # --jobs the elapsed time is wall time of the whole merge slot, so a
+    # small package that sat behind a 20-minute neighbour inherits the wait.
+    if [[ ${1:-} == top ]]; then
+        qlop -tvM -f "${elog}" | awk '{s=$NF; pkg=$3; sub(/:$/,"",pkg);
+            printf "%3d:%02d:%02d  %s\n", s/3600, (s%3600)/60, s%60, pkg}' |
+            sort -r | head -n "${2:-20}"
+        exit 0
+    fi
     if [[ $# -gt 0 ]]; then exec qlop "$@" -f "${elog}"; fi
-    exec qlop -tv -f "${elog}"
+    # Default view: what is compiling right now (with the merge counter),
+    # then the full per-package duration history, human-readable.
+    qlop -rH -f "${elog}" || true
+    exec qlop -tvH -f "${elog}"
 }
 
 cmd_all() {
@@ -2168,7 +2217,15 @@ ${stale}"
     # var/cache/eix is deliberately NOT excluded: 'conf' seeds it (~22 MB, a
     # few MB compressed) so that 'eix' on the booted image answers instantly
     # instead of making the user sit through an eix-update first.
-    local excl=(dev/pts dev/shm var/tmp/portage var/tmp/distfiles var/cache/distfiles var/cache/ccache var/cache/binpkgs)
+    #
+    # The two emerge log FILES are excluded (2026-08-08): the shipped image
+    # has no business carrying the build's merge timeline, but the rootfs
+    # copy stays — 'qlop -f rootfs/var/log/emerge.log' is the build's timing
+    # record. File-level -e has none of the dropped-mount-point problem the
+    # comment above describes; var/log/portage (elogs) is a DIRECTORY portage
+    # expects to exist, so it stays.
+    local excl=(dev/pts dev/shm var/tmp/portage var/tmp/distfiles var/cache/distfiles var/cache/ccache var/cache/binpkgs
+                var/log/emerge.log var/log/emerge-fetch.log)
     mksquashfs "${LIVE_ROOT}" "${LIVE_ISO_DIR}/livecd.squashfs" \
         -comp "${LIVE_COMP}" -noappend -no-progress -b 1048576 -no-xattrs \
         -e "${excl[@]}" || die "mksquashfs failed"
