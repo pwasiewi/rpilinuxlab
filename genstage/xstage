@@ -1426,6 +1426,83 @@ live_prep_kconfig() {
 	EOF
 }
 
+# Build-time cycles with no permanent USE cut. Portage can break a cycle by
+# dropping a flag, but only if the image can live without it; where the
+# image's own packages USE-depend on the flag, the only way in is to merge
+# one side once with the flag off, so the other side has something to build
+# against, and let pass 2 rebuild it properly.
+#
+# Entry grammar: "[early:]<atom> [<USE overrides...>] [@unless-use=<flag>]"
+#
+#   early:            run before the kernel-sources emerge and pass 1 instead
+#                     of the default slot (after toolchain-select). For cycles
+#                     that already bite in 'kconfig' or the @world update —
+#                     the multilib-transition class below — not for expensive
+#                     payload packages like caffe2, which want the final
+#                     compiler and a settled base system.
+#   @unless-use=FLAG  the entry fires even when the atom IS installed, unless
+#                     the installed copy's USE already carries FLAG. This is
+#                     what makes stage3-shipped packages bootstrappable at
+#                     all: a plain entry is skipped once installed, but e.g.
+#                     ncurses arrives IN the stage3 — 64-bit only — and the
+#                     cycle exists precisely because ABI_X86="64 32" forces
+#                     its source rebuild. The bootstrap merge itself builds
+#                     with the profile's ABI, so the guard closes after one
+#                     run and re-runs skip (nvidiahard, 2026-08-08: four such
+#                     cycles — gpm<->ncurses, doxygen->graphviz->librsvg->
+#                     libxml2, elfutils->xz-9999->git->glib->libelf, and the
+#                     same xz->git edge via tiff — all rooted in xz-utils-9999
+#                     needing git at buildtime while the 32-bit rebuilds of
+#                     its consumers were in the same graph).
+#
+# Without a phase marker an entry keeps the original semantics: late slot,
+# skipped whenever the atom is installed. Costs nothing for a profile that
+# sets no PROF_LIVE_CYCLE_BOOTSTRAP.
+#
+# EMERGE_DEFAULT_OPTS is cleared for the same reason as the ccache bootstrap:
+# the profile's '--update --newuse --deep' would pull the whole graph back in,
+# and with it the very packages whose USE-dep this step exists to defer.
+# --usepkg on top: a binary has no buildtime deps, so any cached package in
+# the entry's own graph erases cycle edges for free.
+live_cycle_bootstrap() {
+    local phase=$1
+    [[ -n ${LIVE_CYCLE_BOOTSTRAP} ]] || return 0
+    local entry entry_phase atom useov guard
+    while IFS= read -r entry; do
+        [[ -n ${entry} ]] || continue
+        entry_phase=late
+        if [[ ${entry} == early:* ]]; then
+            entry_phase=early
+            entry=${entry#early:}
+        fi
+        [[ ${entry_phase} == "${phase}" ]] || continue
+        guard=""
+        if [[ ${entry} == *"@unless-use="* ]]; then
+            guard=${entry##*@unless-use=}
+            guard=${guard%% *}
+            entry=${entry/@unless-use=${guard}/}
+            entry=${entry% }
+        fi
+        atom=${entry%% *}
+        useov=${entry#"${atom}"}
+        info "Cycle bootstrap (${phase}): ${atom} with USE='${useov# }'${guard:+ unless installed with USE=${guard}}"
+        live_chroot "cycle-${atom##*/}" <<-EOF
+	if ls -d /var/db/pkg/${atom}-* >/dev/null 2>&1; then
+	    if [ -n "${guard}" ] && ! grep -qw "${guard}" /var/db/pkg/${atom}-*/USE 2>/dev/null; then
+	        echo ">>> ${atom} installed without USE=${guard} — bootstrap re-merge"
+	        EMERGE_DEFAULT_OPTS="" USE="${useov}" \\
+	            emerge --oneshot --verbose --usepkg ${atom}
+	    else
+	        echo ">>> ${atom} already installed — bootstrap not needed"
+	    fi
+	else
+	    EMERGE_DEFAULT_OPTS="" USE="${useov}" \\
+	        emerge --oneshot --verbose --usepkg ${atom}
+	fi
+	EOF
+    done <<< "${LIVE_CYCLE_BOOTSTRAP}"
+}
+
 cmd_live_pkgs() {
     need_root
     local list; list=$(live_pkg_list)
@@ -1433,6 +1510,10 @@ cmd_live_pkgs() {
         die "Nothing to install — the profile sets neither PROF_LIVE_PKGS/TIERS nor PROF_LIVE_SETS"
     [[ -d ${LIVE_ROOT}/var/db/repos/gentoo/profiles ]] ||
         die "No ebuild tree in the image — run: sudo $0 ${TGT:-amd64} conf"
+    # Early-slot cycle bootstrap first: the kconfig kernel-sources emerge and
+    # the pass-1 @world update walk the same dependency graph the bootstrap
+    # entries exist to untangle.
+    live_cycle_bootstrap early
     live_prep_kconfig
     local n; n=$(printf '%s\n' "${list}" | grep -c . || true)
 
@@ -1499,37 +1580,7 @@ cmd_live_pkgs() {
 	fi
 	echo "gcc-config: \$(gcc-config -c)"
 	EOF
-    # Build-time cycles with no permanent USE cut. Portage can break a cycle by
-    # dropping a flag, but only if the image can live without it; where the
-    # image's own packages USE-depend on the flag, the only way in is to merge
-    # one side once with the flag off, so the other side has something to build
-    # against, and let pass 2 rebuild it properly.
-    #
-    # Each entry is "<atom> <USE overrides...>", and each is skipped once the
-    # atom is installed — so this costs nothing on a re-run, and nothing at all
-    # for a profile that sets no PROF_LIVE_CYCLE_BOOTSTRAP.
-    #
-    # EMERGE_DEFAULT_OPTS is cleared for the same reason as the ccache
-    # bootstrap: the profile's '--update --newuse --deep' would pull the whole
-    # graph back in, and with it the very packages whose USE-dep this step
-    # exists to defer.
-    if [[ -n ${LIVE_CYCLE_BOOTSTRAP} ]]; then
-        local entry atom useov
-        while IFS= read -r entry; do
-            [[ -n ${entry} ]] || continue
-            atom=${entry%% *}
-            useov=${entry#"${atom}"}
-            info "Cycle bootstrap: ${atom} with USE='${useov# }' (skipped if already installed)"
-            live_chroot "cycle-${atom##*/}" <<-EOF
-		if ls -d /var/db/pkg/${atom}-* >/dev/null 2>&1; then
-		    echo ">>> ${atom} already installed — bootstrap not needed"
-		else
-		    EMERGE_DEFAULT_OPTS="" USE="${useov}" \\
-		        emerge --oneshot --verbose ${atom}
-		fi
-		EOF
-        done <<< "${LIVE_CYCLE_BOOTSTRAP}"
-    fi
+    live_cycle_bootstrap late
     info "Pass 2/2: merging ${n} top-level packages${LIVE_SETS:+ + sets: ${LIVE_SETS}} (dependencies resolve inside)"
     # --keep-going: one broken ebuild in a 300-package image should not throw
     # away hours of work; the summary at the end names what failed
