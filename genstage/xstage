@@ -2231,8 +2231,13 @@ ${stale}"
     # expects to exist, so it stays.
     local excl=(dev/pts dev/shm var/tmp/portage var/tmp/distfiles var/cache/distfiles var/cache/ccache var/cache/binpkgs
                 var/log/emerge.log var/log/emerge-fetch.log)
+    # Progress bar only on a terminal: the operator runs 'squash' by hand and
+    # wants it; a logged/backgrounded run would smear the bar's \r redraws
+    # into thousands of log lines.
+    local sqprogress=()
+    [[ -t 1 ]] || sqprogress=(-no-progress)
     mksquashfs "${LIVE_ROOT}" "${LIVE_ISO_DIR}/livecd.squashfs" \
-        -comp "${LIVE_COMP}" -noappend -no-progress -b 1048576 -no-xattrs \
+        -comp "${LIVE_COMP}" -noappend "${sqprogress[@]}" -b 1048576 -no-xattrs \
         -e "${excl[@]}" || die "mksquashfs failed"
     # guard: the image is unbootable without these, and the failure only shows
     # up on real hardware minutes into a boot — assert it here instead
