@@ -342,3 +342,17 @@ The Raspberry Pi Lab was prepared based on
 1) https://wiki.gentoo.org/wiki/Cross_build_environment
 2) http://mgalgs.github.io/2015/05/16/how-to-build-a-custom-linux-kernel-for-qemu-2015-edition.html
 3) Paweł Kraszewski's environment, with fragments of its README
+
+## License
+
+Copyright (C) 2018-2026 Piotr Wasiewicz
+
+This project is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, either **version 2 of the License, or (at your
+option) any later version** (GPL-2.0-or-later). See [LICENSE](LICENSE)
+for the full text of version 2.
+
+The scripts under `genstage/live/tools/` are mirrored from the
+[gentools](https://github.com/pwasiewi/gentools) repository and carry the
+same GPL-2.0-or-later license.

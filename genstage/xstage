@@ -1900,6 +1900,12 @@ cmd_live_configure() {
     mkdir -p "${LIVE_ROOT}/etc/ssh/sshd_config.d"
     echo "PermitRootLogin yes" > "${LIVE_ROOT}/etc/ssh/sshd_config.d/50-xstage.conf"
 
+    # Operator mountpoints baked into every image (host convention): CA
+    # material, key media, install-target chroot. The live track boots UEFI,
+    # so the ESP mountpoint is premade too — 'mount /boot/efi' on first use
+    # instead of a mkdir hunt from a rescue shell.
+    mkdir -p "${LIVE_ROOT}"/mnt/{ca,key,gentoo} "${LIVE_ROOT}/boot/efi"
+
     # A stage3 ships /etc/locale.gen with every entry commented out, so the
     # image would have C.UTF-8 and nothing else — glibc then falls back
     # silently and anything asking for pl_PL.UTF-8 gets C. The list is a plain
@@ -2573,7 +2579,8 @@ cmd_tiny_build() {
     fi
 
     info "Device nodes + /init"
-    mkdir -p "${TINY_ROOT}"/{dev,proc,sys,tmp,root,mnt}
+    mkdir -p "${TINY_ROOT}"/{dev,proc,sys,tmp,root,mnt} \
+             "${TINY_ROOT}"/mnt/{ca,key,gentoo}
     [[ -e ${TINY_ROOT}/dev/console ]] || mknod "${TINY_ROOT}/dev/console" c 5 1
     [[ -e ${TINY_ROOT}/dev/null ]]    || mknod "${TINY_ROOT}/dev/null" c 1 3
     write_tiny_init
@@ -3503,6 +3510,10 @@ arm64_configure() {
     mkdir -p "${TINY_ROOT}/etc/ssh/sshd_config.d" "${TINY_ROOT}/root/.ssh"
     chmod 700 "${TINY_ROOT}/root/.ssh"
     echo "PermitRootLogin yes" > "${TINY_ROOT}/etc/ssh/sshd_config.d/50-xstage.conf"
+
+    # Operator mountpoints (host convention, same set as the live track);
+    # no /boot/efi — Pi firmware boot, the vfat /boot is already in fstab
+    mkdir -p "${TINY_ROOT}"/mnt/{ca,key,gentoo}
     local keyfile="${ZERO_KEY}"
     if [[ -z ${keyfile} && -n ${SUDO_USER:-} ]]; then
         keyfile="/home/${SUDO_USER}/.ssh/id_ed25519.pub"
