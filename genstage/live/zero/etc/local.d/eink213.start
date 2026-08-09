@@ -1,0 +1,18 @@
+#!/bin/sh
+# e-Paper boot banner for the Waveshare 2.13" V4 HAT (SSD1680, 250x122) —
+# run by OpenRC's 'local' service (default runlevel) at the end of boot.
+# /usr/bin/eink213 is the in-tree plain-C driver (genstage/rpi/eink213v4.c),
+# cross-compiled into the image by 'xp zero rpi'.
+
+# dtparam=spi=on loads spi-bcm2835 via the device tree; the modprobes are a
+# harmless belt-and-braces for kernels that ship them as modules
+modprobe spi-bcm2835 2>/dev/null
+modprobe spidev 2>/dev/null
+
+[ -x /usr/bin/eink213 ] || exit 0
+[ -e /dev/spidev0.0 ] || exit 0
+
+IP=$(ip -4 addr show usb0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p')
+/usr/bin/eink213 "$(hostname) / gentoo" "$(uname -r)" \
+    "ssh root@${IP:-10.0.0.2}" \
+    "boot $(cut -d' ' -f1 /proc/uptime)s" &

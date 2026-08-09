@@ -1,0 +1,177 @@
+# Kconfig fragment: hardware breadth for a PORTABLE live image.
+#
+# The image boots on whatever machine it gets plugged into, so the NIC, WiFi
+# and disk-controller drivers cannot be derived from any one host's lspci —
+# this fragment carries the popular sets wholesale. Everything that can be a
+# module is =m: modules cost squashfs bytes, not RAM, until udev matches real
+# hardware. sys-kernel/linux-firmware ships unrestricted in the live package
+# lists, so the matching blobs are already on the image.
+#
+# Shared by EVERY native live profile (amdkde, amdkdehard, nvidiahard, ...) —
+# merged by live_prep_kconfig right after live.fragment, before the
+# systemd/hardened/profile fragments, so a profile fragment can still
+# override any single symbol.
+#
+# Menu gates come first in each section: without the vendor switches set,
+# 'make olddefconfig' silently drops every leaf =m under them.
+
+# --- wired ethernet, PCIe --------------------------------------------------
+CONFIG_NETDEVICES=y
+CONFIG_ETHERNET=y
+CONFIG_NET_VENDOR_AMD=y
+CONFIG_NET_VENDOR_AQUANTIA=y
+CONFIG_NET_VENDOR_ATHEROS=y
+CONFIG_NET_VENDOR_BROADCOM=y
+CONFIG_NET_VENDOR_INTEL=y
+CONFIG_NET_VENDOR_MARVELL=y
+CONFIG_NET_VENDOR_NVIDIA=y
+CONFIG_NET_VENDOR_REALTEK=y
+CONFIG_NET_VENDOR_VIA=y
+# Realtek: RTL8111/8168 GbE and the 2.5G RTL8125/8126 all live in r8169
+CONFIG_R8169=m
+CONFIG_8139TOO=m
+CONFIG_8139CP=m
+# Intel: e1000(e) PCIe GbE, igb/igc (I210/I225/I226 2.5G), ixgbe/i40e 10G+
+CONFIG_E100=m
+CONFIG_E1000=m
+CONFIG_E1000E=m
+CONFIG_IGB=m
+CONFIG_IGC=m
+CONFIG_IXGBE=m
+CONFIG_I40E=m
+# Broadcom: tg3 (NetXtreme desktop/laptop), bnx2/bnxt_en (server)
+CONFIG_TIGON3=m
+CONFIG_BNX2=m
+CONFIG_BNXT=m
+# nForce boards — "NVIDIA ethernet" on many older AMD desktops
+CONFIG_FORCEDETH=m
+# Marvell/Yukon
+CONFIG_SKY2=m
+CONFIG_SKGE=m
+# Atheros/Qualcomm GbE
+CONFIG_ATL1=m
+CONFIG_ATL1C=m
+CONFIG_ATL1E=m
+CONFIG_ALX=m
+# Aquantia/Marvell AQtion multi-gig (10G on prosumer boards)
+CONFIG_AQTION=m
+# VIA (older boards)
+CONFIG_VIA_RHINE=m
+CONFIG_VIA_VELOCITY=m
+# AMD 10GbE SoC MACs
+CONFIG_AMD_XGBE=m
+
+# --- wired ethernet, USB (docks, USB-C dongles) ----------------------------
+CONFIG_USB_NET_DRIVERS=y
+CONFIG_USB_USBNET=m
+CONFIG_USB_RTL8150=m
+CONFIG_USB_RTL8152=m
+CONFIG_USB_NET_AX8817X=m
+CONFIG_USB_NET_AX88179_178A=m
+CONFIG_USB_NET_CDCETHER=m
+CONFIG_USB_NET_CDC_EEM=m
+CONFIG_USB_NET_CDC_NCM=m
+CONFIG_USB_NET_CDC_MBIM=m
+CONFIG_USB_NET_RNDIS_HOST=m
+CONFIG_USB_NET_AQC111=m
+CONFIG_USB_LAN78XX=m
+CONFIG_USB_NET_SMSC75XX=m
+CONFIG_USB_NET_SMSC95XX=m
+
+# --- WiFi core -------------------------------------------------------------
+CONFIG_WLAN=y
+CONFIG_CFG80211=m
+CONFIG_MAC80211=m
+CONFIG_RFKILL=m
+CONFIG_WLAN_VENDOR_ATH=y
+CONFIG_WLAN_VENDOR_BROADCOM=y
+CONFIG_WLAN_VENDOR_INTEL=y
+CONFIG_WLAN_VENDOR_MEDIATEK=y
+CONFIG_WLAN_VENDOR_RALINK=y
+CONFIG_WLAN_VENDOR_REALTEK=y
+CONFIG_WLAN_VENDOR_ZYDAS=y
+
+# --- WiFi, PCIe ------------------------------------------------------------
+# Intel (every generation: dvm = old Centrino, mvm = 7260..AX2xx)
+CONFIG_IWLWIFI=m
+CONFIG_IWLDVM=m
+CONFIG_IWLMVM=m
+# Qualcomm Atheros generations
+CONFIG_ATH9K=m
+CONFIG_ATH10K=m
+CONFIG_ATH10K_PCI=m
+CONFIG_ATH11K=m
+CONFIG_ATH11K_PCI=m
+CONFIG_ATH12K=m
+# Realtek rtw88/rtw89 (RTL8723DE/8821CE/8822BE/CE, RTL8852 WiFi 6/6E)
+CONFIG_RTW88=m
+CONFIG_RTW88_8822BE=m
+CONFIG_RTW88_8822CE=m
+CONFIG_RTW88_8821CE=m
+CONFIG_RTW88_8723DE=m
+CONFIG_RTW89=m
+CONFIG_RTW89_8851BE=m
+CONFIG_RTW89_8852AE=m
+CONFIG_RTW89_8852BE=m
+CONFIG_RTW89_8852CE=m
+# Realtek legacy 11n (rtlwifi family)
+CONFIG_RTL8188EE=m
+CONFIG_RTL8192CE=m
+CONFIG_RTL8192DE=m
+CONFIG_RTL8723AE=m
+CONFIG_RTL8723BE=m
+CONFIG_RTL8821AE=m
+# MediaTek (MT7921/7922 are everywhere on AMD laptops; 7925 = WiFi 7)
+CONFIG_MT7921E=m
+CONFIG_MT7925E=m
+CONFIG_MT7915E=m
+CONFIG_MT76x2E=m
+CONFIG_MT7615E=m
+# Broadcom FullMAC (PCIe variant enabled by default under it)
+CONFIG_BRCMFMAC=m
+CONFIG_BRCMSMAC=m
+
+# --- WiFi, USB -------------------------------------------------------------
+CONFIG_MT7601U=m
+CONFIG_MT76x0U=m
+CONFIG_MT76x2U=m
+CONFIG_MT7921U=m
+CONFIG_RTL8XXXU=m
+CONFIG_RTW88_8822BU=m
+CONFIG_RTW88_8822CU=m
+CONFIG_RTW88_8821CU=m
+CONFIG_RTW88_8723DU=m
+CONFIG_RT2X00=m
+CONFIG_RT2800USB=m
+CONFIG_ATH9K_HTC=m
+CONFIG_CARL9170=m
+CONFIG_ZD1211RW=m
+CONFIG_RTL8187=m
+
+# --- disk controllers: SATA / NVMe / SCSI / USB ----------------------------
+# =y for the boot path (the live medium and the target disks must be visible
+# without an initrd module round-trip), =m for the exotic HBAs.
+CONFIG_BLK_DEV_NVME=y
+CONFIG_ATA=y
+CONFIG_SATA_AHCI=y
+CONFIG_ATA_PIIX=y
+CONFIG_ATA_GENERIC=m
+CONFIG_SATA_NV=m
+CONFIG_SATA_VIA=m
+CONFIG_SATA_SIL=m
+CONFIG_SATA_SIL24=m
+CONFIG_SATA_MV=m
+CONFIG_SATA_PROMISE=m
+CONFIG_PATA_AMD=m
+CONFIG_PATA_ATIIXP=m
+CONFIG_PATA_JMICRON=m
+CONFIG_SCSI=y
+CONFIG_BLK_DEV_SD=y
+CONFIG_BLK_DEV_SR=y
+CONFIG_CHR_DEV_SG=m
+# common SAS/RAID HBAs (workstations, homelab hand-me-down servers)
+CONFIG_SCSI_MPT3SAS=m
+CONFIG_MEGARAID_SAS=m
+CONFIG_SCSI_AACRAID=m
+CONFIG_USB_STORAGE=y
+CONFIG_USB_UAS=y

@@ -125,7 +125,7 @@
 #   image            configure the stage3 (root password + invoker's key,
 #                    PermitRootLogin, eth0 = the board's IP, sshd enabled,
 #                    fstab by label) and build sd.img for XSTAGE_BOARD
-#                    (rpi400/rpi3). The init system follows the stage3
+#                    (rpi400/rpi3/zero). The init system follows the stage3
 #                    flavour: OpenRC gets netifrc + a runlevel symlink and
 #                    init=/sbin/init, systemd gets a .network file, unit
 #                    .wants symlinks and init=/usr/lib/systemd/systemd.
@@ -412,14 +412,25 @@ PI3_DNS="${XSTAGE_PI3_DNS:-${PI3_GW}}"
 # its own subcommand (image_zero). Set by the xp profile layer.
 BOARD="${XSTAGE_BOARD:-rpi400}"
 
-# board_eth_vars: BOARD -> ETH_* + the two hostnames (tiny hook / stage3)
+# board_eth_vars: BOARD -> ETH_IF/ETH_* + the two hostnames (tiny hook /
+# stage3). ETH_IF is the interface the generated config addresses — eth0
+# everywhere except the Zero, whose only wired link is the USB gadget.
 board_eth_vars() {
+    ETH_IF=eth0
     case "${BOARD}" in
     rpi3)
         ETH_IP="${PI3_IP}"; ETH_GW="${PI3_GW}"; ETH_DNS="${PI3_DNS}"
         # Pi 3 ethernet hangs off USB: LAN9514 (3B, smsc95xx) / LAN7515 (3B+)
         ETH_MODULES="smsc95xx lan78xx"
         BOARD_TINY_HOSTNAME=tinypi3; BOARD_SD_HOSTNAME=pi3 ;;
+    zero)
+        # Zero 2 W (full-stage3 track): no ethernet at all — usb0 is g_ether
+        # gadget networking over the data port (dtoverlay=dwc2 in config.txt;
+        # the module is listed in /etc/conf.d/modules by the 'zero' layer)
+        ETH_IF=usb0
+        ETH_IP="${ZERO_IP}"; ETH_GW="${ZERO_GW}"; ETH_DNS="${ZERO_DNS}"
+        ETH_MODULES="g_ether"
+        BOARD_TINY_HOSTNAME=tinyzero; BOARD_SD_HOSTNAME=zero ;;
     *)
         ETH_IP="${PI400_IP}"; ETH_GW="${PI400_GW}"; ETH_DNS="${PI400_DNS}"
         ETH_MODULES="bcmgenet"          # the BCM2711 on-die NIC
@@ -430,9 +441,9 @@ board_eth_vars() {
 # board_dtb: the DTB the firmware picks on the REAL board (payload sanity check)
 board_dtb() {
     case "${1:-${BOARD}}" in
-        rpi3)   echo bcm2710-rpi-3-b.dtb ;;
-        zero2w) echo bcm2710-rpi-zero-2-w.dtb ;;
-        *)      echo bcm2711-rpi-400.dtb ;;
+        rpi3)        echo bcm2710-rpi-3-b.dtb ;;
+        zero2w|zero) echo bcm2710-rpi-zero-2-w.dtb ;;
+        *)           echo bcm2711-rpi-400.dtb ;;
     esac
 }
 # 2223, not 2222: xlab's gentoo VM already forwards that one
@@ -1416,6 +1427,11 @@ live_prep_kconfig() {
     #   <path>     any .config file on the host
     local base="${XSTAGE_LIVE_KCONFIG_BASE:-defconfig}"
     local frags=("${LIVE_TPL}/kernel/live.fragment")
+    # a portable image boots on unknown machines: the popular NIC / WiFi /
+    # disk-controller drivers ride one shared fragment (=m leaves, so the
+    # cost is squashfs bytes, not RAM) — every native profile gets it, and
+    # profile fragments merged later can still override single symbols
+    frags+=("${LIVE_TPL}/kernel/hardware.fragment")
     # extra symbols the post-merge check insists on, per flavour
     local kcheck=""
     # systemd as PID 1 has its own mandatory Kconfig list (its README); an
@@ -2658,6 +2674,15 @@ cmd_tiny_rpi() {
     # the FAT partition by 'image' / 'image_zero', which know the board
     info "Installing the default config.txt (arm_64bit=1, kernel=kernel8.img, uart on)"
     command cp -f "${HERE}/rpi/config.txt" "${TINY_ROOT}/boot/config.txt"
+    # the zero board (full-stage3 track) carries the e-Paper driver in the
+    # image: the same one-file cross build the tiny track does, launched at
+    # boot by the 'zero' overlay layer's etc/local.d/eink213.start
+    if [[ ${BOARD} == zero ]]; then
+        [[ -f ${HERE}/rpi/font8x16.h ]] || "${HERE}/rpi/mkfont.sh"
+        info "Cross-compiling eink213 (SPI + gpiochip v2, no libs beyond libc)"
+        "${TUPLE}-gcc" -O2 -Wall -Wextra -s -o "${TINY_ROOT}/usr/bin/eink213" \
+            "${HERE}/rpi/eink213v4.c" || die "eink213 build failed"
+    fi
     info "Pi boot payload ready: $(find "${TINY_ROOT}/boot" -type f | wc -l) files in /boot"
 }
 
@@ -3008,7 +3033,7 @@ cmd_tiny_run_rpi() {
     # sibling: raspi4b (BCM2711) for the Pi 400, raspi3b (BCM2837) for the
     # Zero 2 W, whose RP3A0 package holds exactly that die.
     case "${board}" in
-        rpi3|zero2w) machine=raspi3b; dtb=bcm2710-rpi-3-b.dtb ;;
+        rpi3|zero2w|zero) machine=raspi3b; dtb=bcm2710-rpi-3-b.dtb ;;
         *)           machine=raspi4b; dtb=bcm2711-rpi-4-b.dtb ;;
     esac
     # qemu does not emulate the VideoCore firmware chain: kernel goes in via
@@ -3062,10 +3087,12 @@ cmd_tiny_sd() {
     sync; partprobe "${dev}" 2>/dev/null || true
     lsblk -o NAME,SIZE,FSTYPE,LABEL "${dev}"
     local board; board=$(cat "${TINY_BOARD_F}" 2>/dev/null || echo rpi400)
-    if [[ ${board} == zero2w ]]; then
+    if [[ ${board} == zero2w || ${board} == zero ]]; then
         info "Done (${board}). Insert into the Pi Zero 2 W and power on: the"
         info "e-Paper HAT shows the boot banner; for a shell attach a 3V3 USB"
         info "serial adapter to GPIO 14/15 (115200 8N1) — HDMI works too."
+        [[ ${board} != zero ]] ||
+            info "Network: plug the data USB port into a host — the board is 10.0.0.2 over g_ether."
     elif [[ ${board} == rpi3 ]]; then
         info "Done (${board}). Insert into the Pi 3 and power on: console on"
         info "HDMI + USB keyboard; serial on GPIO 14/15 is the PL011"
@@ -3260,12 +3287,13 @@ arm64_configure_systemd() {
     SD_ENABLED=""
     # A .network file replaces netifrc's /etc/conf.d/net. Match by interface
     # name, which udev keeps stable per board: bcmgenet gives eth0 on the
-    # BCM2711, the Pi 3's USB NIC also lands on eth0 (see board_eth_vars).
+    # BCM2711, the Pi 3's USB NIC also lands on eth0, the Zero's gadget link
+    # is usb0 (see board_eth_vars, which sets ETH_IF accordingly).
     mkdir -p "${TINY_ROOT}/etc/systemd/network"
-    cat > "${TINY_ROOT}/etc/systemd/network/10-eth0.network" <<-EOF
+    cat > "${TINY_ROOT}/etc/systemd/network/10-${ETH_IF}.network" <<-EOF
 	# generated by 'xstage arm64 image' (board: ${BOARD})
 	[Match]
-	Name=eth0
+	Name=${ETH_IF}
 
 	[Network]
 	Address=${ETH_IP}
@@ -3500,12 +3528,26 @@ arm64_configure() {
         [[ -e ${TINY_ROOT}/etc/init.d/net.lo ]] || warn "netifrc missing in the stage3?"
         cat > "${TINY_ROOT}/etc/conf.d/net" <<-EOF
 		# generated by 'xstage arm64 image' (board: ${BOARD})
-		config_eth0="${ETH_IP}"
-		routes_eth0="default via ${ETH_GW}"
-		dns_servers_eth0="${ETH_DNS}"
+		config_${ETH_IF}="${ETH_IP}"
+		routes_${ETH_IF}="default via ${ETH_GW}"
+		dns_servers_${ETH_IF}="${ETH_DNS}"
 		EOF
-        ln -snf net.lo "${TINY_ROOT}/etc/init.d/net.eth0"
-        ln -snf /etc/init.d/net.eth0 "${TINY_ROOT}/etc/runlevels/default/net.eth0"
+        if [[ ${BOARD} == zero ]]; then
+            # WiFi prepared, not enabled: wpa_supplicant + the brcmfmac43436
+            # firmware are in the image and the credential template ships via
+            # the 'zero' overlay layer — filling it in and uncommenting this
+            # stanza happens on the running board, never in the image
+            cat >> "${TINY_ROOT}/etc/conf.d/net" <<-EOF
+
+		# WiFi — fill /etc/wpa_supplicant/wpa_supplicant.conf first, then
+		# uncomment and: ln -s net.lo /etc/init.d/net.wlan0 &&
+		#                rc-update add net.wlan0 default
+		#modules_wlan0="wpa_supplicant"
+		#config_wlan0="dhcp"
+		EOF
+        fi
+        ln -snf net.lo "${TINY_ROOT}/etc/init.d/net.${ETH_IF}"
+        ln -snf "/etc/init.d/net.${ETH_IF}" "${TINY_ROOT}/etc/runlevels/default/net.${ETH_IF}"
         ln -snf /etc/init.d/sshd    "${TINY_ROOT}/etc/runlevels/default/sshd"
         echo "hostname=\"${BOARD_SD_HOSTNAME}\"" > "${TINY_ROOT}/etc/conf.d/hostname"
     fi

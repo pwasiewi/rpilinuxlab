@@ -1,0 +1,29 @@
+# zero config.txt — read by the BCM2837 GPU firmware (start.elf) from the
+# FAT32 boot partition. Serves the FULL-stage3 'zero' profile; the tiny
+# track's twin is config-zero2w.txt (same hardware, same knobs).
+
+# the Zero 2 W is ARMv8 — run the 64-bit kernel8.img
+arm_64bit=1
+kernel=kernel8.img
+
+# don't wait for a rainbow splash
+disable_splash=1
+
+# headless board: leave the 512 MB to the CPU
+gpu_mem=16
+
+# serial console on GPIO 14/15 (3V3 TTL, 115200 8N1)
+enable_uart=1
+# hand the PL011 back to the header: serial0 becomes ttyAMA0 with a fixed
+# clock. Without this, serial0 is the mini-UART, whose baud follows the core
+# clock.
+dtoverlay=disable-bt
+
+# SPI0 (CE0) for the Waveshare 2.13" V4 e-Paper HAT (SSD1680); creates
+# /dev/spidev0.0, which /usr/bin/eink213 talks to.
+dtparam=spi=on
+
+# USB controller in peripheral/OTG mode, so g_ether can make the board appear
+# to the machine at the other end of the cable as a USB network adapter.
+# Plug into the USB port (the inner one), not PWR IN.
+dtoverlay=dwc2

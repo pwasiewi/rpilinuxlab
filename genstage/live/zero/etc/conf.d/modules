@@ -1,0 +1,11 @@
+# /etc/conf.d/modules for the zero image (overlay layer 'zero').
+#
+# dwc2 binds through the device tree (dtoverlay=dwc2 in config.txt), but the
+# gadget FUNCTION driver has no hardware to match — nothing autoloads it, so
+# it is listed here. Without g_ether there is no usb0 and the primary network
+# path of this board never appears.
+modules="g_ether"
+
+# fixed MACs on both ends of the gadget link, so the peer's interface naming
+# and any DHCP-less peer config survive replugs (same values as the tiny image)
+module_g_ether_args="dev_addr=02:00:00:00:00:02 host_addr=02:00:00:00:00:01"

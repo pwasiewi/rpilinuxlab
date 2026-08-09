@@ -78,6 +78,10 @@ USE_EXTRA="${XARM_USE_EXTRA:-}"
 VIDEO_CARDS_EXTRA="${XARM_VIDEO_CARDS:-}"
 INPUT_DEVICES_EXTRA="${XARM_INPUT_DEVICES:-}"
 PORTAGE_CONFDIR="${XARM_PORTAGE_CONFDIR:-}"
+# ccache per CPU tune family (a72 vs a53), bind-mounted from /home/tmp by
+# ramstart1. ccache keys include -mtune so one cache would be correct — the
+# split stops a big a72 rebuild from evicting the small a53 cache.
+XCCACHE_DIR="${XARM_CCACHE_DIR:-/var/cache/ccache-xarm-${CPU}}"
 SYSROOT="/usr/${TARGET}"
 # Binary packages are only valid for the profile that built them — USE, and
 # whatever else the profile settles, is baked into the tarball. One cache per
@@ -207,9 +211,10 @@ sysroot_write_makeconf() {
 	# generated headers — see the lab README, experiment 8)
 	USE="\${USE} -openmp"
 	# ccache for CROSS builds: host-native ccache, but a DEDICATED aarch64 cache —
-	# never the host's /var/cache/ccache (x86 objects; do not mix architectures)
+	# never the host's /var/cache/ccache (x86 objects; do not mix architectures).
+	# Per CPU tune family; the mount comes from ramstart1 (backing /home/tmp)
 	FEATURES="\${FEATURES} ccache"
-	CCACHE_DIR="/var/cache/ccache-xarm"
+	CCACHE_DIR="${XCCACHE_DIR}"
 	EOF
     # xp-profile additions land inside the managed block, so the next
     # setup/tune under a different profile removes them with the rest
@@ -360,14 +365,16 @@ cmd_setup() {
     # 4b. per-xp-profile portage fragments (xprofile-*, same rewrite contract)
     sysroot_sync_portage_confdir
 
-    # 4c. host-side ARM ccache dir (separate from the host's own x86 cache)
+    # 4c. host-side ARM ccache dir (separate from the host's own x86 cache).
+    # ramstart1 usually pre-creates and bind-mounts it, so the init check is
+    # "no ccache.conf inside yet", not "dir missing"
     if command -v ccache >/dev/null 2>&1; then
-        if [[ ! -d /var/cache/ccache-xarm ]]; then
-            mkdir -p /var/cache/ccache-xarm
-            chown portage:portage /var/cache/ccache-xarm
-            chmod 2775 /var/cache/ccache-xarm
-            CCACHE_DIR=/var/cache/ccache-xarm ccache -M 10G >/dev/null
-            info "Created /var/cache/ccache-xarm (aarch64 objects only, 10G cap)"
+        if [[ ! -f ${XCCACHE_DIR}/ccache.conf ]]; then
+            mkdir -p "${XCCACHE_DIR}"
+            chown portage:portage "${XCCACHE_DIR}"
+            chmod 2775 "${XCCACHE_DIR}"
+            CCACHE_DIR="${XCCACHE_DIR}" ccache -M 10G >/dev/null
+            info "Initialised ${XCCACHE_DIR} (aarch64 objects, -mtune=${CPU}, 10G cap)"
         fi
     else
         warn "No host ccache — FEATURES=ccache in sysroot make.conf will fail; emerge dev-util/ccache"
