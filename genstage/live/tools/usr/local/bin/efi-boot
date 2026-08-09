@@ -129,6 +129,15 @@ Examples:
   # entry "Gentoo EFI Stub (sdb-gentoo)" loading EFI/sdb-gentoo/vmlinuz-signed.efi
   sudo efi-boot --disk /dev/sdb --method stub-signed --name sdb-gentoo \
        --root /dev/sdb3 --kernel /mnt/gentoo/boot/kernel-6.12.4
+
+Multi-entry traps (learned the hard way):
+  - An entry for ANOTHER install needs --root, or its cmdline embeds the
+    RUNNING system's root UUID and the entry boots the wrong system.
+  - Some firmwares prune all but one NVRAM entry pointing into the SAME ESP
+    partition at reboot (the signed kernels survive on the ESP). If your
+    named entry vanishes: put the second system's stub on its own disk's ESP
+    (--disk/--esp), boot it via the firmware's "Boot from file" browser, or
+    use one boot manager entry that lists both kernels.
 EOF
 }
 

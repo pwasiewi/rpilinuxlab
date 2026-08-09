@@ -168,7 +168,10 @@ CONFIG_PATA_JMICRON=m
 CONFIG_SCSI=y
 CONFIG_BLK_DEV_SD=y
 CONFIG_BLK_DEV_SR=y
-CONFIG_CHR_DEV_SG=m
+# builtin, not =m: like i2c-dev, sg has no hardware modalias so nothing ever
+# autoloads it — as a module sg_map/sg3_utils silently see zero /dev/sg*
+# (hit on the installed nvidiahard system 2026-08-09)
+CONFIG_CHR_DEV_SG=y
 # common SAS/RAID HBAs (workstations, homelab hand-me-down servers)
 CONFIG_SCSI_MPT3SAS=m
 CONFIG_MEGARAID_SAS=m
