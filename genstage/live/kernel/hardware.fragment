@@ -175,3 +175,16 @@ CONFIG_MEGARAID_SAS=m
 CONFIG_SCSI_AACRAID=m
 CONFIG_USB_STORAGE=y
 CONFIG_USB_UAS=y
+
+# --- SMBus / I2C userspace access (OpenRGB, i2c-tools, DDC) ---
+# i2c-dev is the /dev/i2c-* chardev — nothing ever autoloads it (no hardware
+# match), so it is built in. The chipset SMBus drivers are PCI devices and
+# autoload via modalias as modules: PIIX4 = AMD chipsets (defconfig leaves it
+# OFF — this was the OpenRGB "i2c-dev not loaded" report on the AMD target),
+# I801 = Intel (defconfig has it =y; pinned here so that cannot silently
+# change). GPU RGB needs none of these — the NVIDIA/amdgpu drivers expose
+# their own i2c adapters.
+CONFIG_I2C=y
+CONFIG_I2C_CHARDEV=y
+CONFIG_I2C_PIIX4=m
+CONFIG_I2C_I801=m
