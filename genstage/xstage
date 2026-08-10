@@ -2252,6 +2252,25 @@ cmd_live_kernel() {
     grep -q '^CONFIG_DEBUG_INFO_BTF=y' "${LIVE_ROOT}/usr/src/linux/.config" ||
         die "CONFIG_DEBUG_INFO_BTF lost in genkernel's oldconfig — kernel has no BTF"
 
+    # CONFIG_STATIC_USERMODEHELPER (hardened.fragment) funnels every kernel
+    # usermode-helper exec through one fixed path. The option without the
+    # binary at that path is not hardening, it is a kernel that cannot
+    # autoload modules: mount reports "unknown filesystem type", iptables
+    # "Table does not exist" (installed nvhard host, 2026-08-10). So the two
+    # ship strictly as a pair: whenever the final .config carries the option,
+    # compile the whitelist shim into the rootfs and refuse to ship without it.
+    if grep -q '^CONFIG_STATIC_USERMODEHELPER=y' "${LIVE_ROOT}/usr/src/linux/.config"; then
+        install -m 0644 "${HERE}/live/kernel/usermode-helper.c" \
+            "${LIVE_ROOT}/tmp/usermode-helper.c"
+        live_chroot usermode-helper <<-'EOF'
+	gcc -O2 -Wall -Wextra -s -o /sbin/usermode-helper /tmp/usermode-helper.c
+	rm -f /tmp/usermode-helper.c
+	EOF
+        [[ -x ${LIVE_ROOT}/sbin/usermode-helper ]] ||
+            die "CONFIG_STATIC_USERMODEHELPER=y but /sbin/usermode-helper missing in rootfs"
+        info "usermode-helper shim installed (STATIC_USERMODEHELPER pair intact)"
+    fi
+
     # Final audit of /lib/modules — a CHECK, deliberately not a strip pass.
     #
     # Stripping here would be the obvious thing to do and it is wrong: the

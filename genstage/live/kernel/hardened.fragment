@@ -46,6 +46,14 @@ CONFIG_RELOCATABLE=y
 CONFIG_STRICT_KERNEL_RWX=y
 CONFIG_STRICT_MODULE_RWX=y
 CONFIG_DEBUG_WX=y
+# STATIC_USERMODEHELPER freezes modprobe_path and friends into read-only
+# kernel data: the ONLY binary the kernel ever execs is
+# /sbin/usermode-helper, which re-execs an audited whitelist (source:
+# live/kernel/usermode-helper.c, compiled into the rootfs by
+# cmd_live_kernel). Without that binary this option silently kills ALL
+# kernel-initiated module autoloading — mount says "unknown filesystem
+# type 'binfmt_misc'", iptables says "Table does not exist" (found on the
+# installed nvhard host, 2026-08-10). The build dies if the pair splits.
 CONFIG_STATIC_USERMODEHELPER=y
 
 # --- structure layout randomisation (needs the gcc plugin) -------------------
