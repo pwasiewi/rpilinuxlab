@@ -2212,13 +2212,20 @@ cmd_live_kernel() {
     # --quiet-build=y is spelled out because --ignore-default-opts also drops
     # it from EMERGE_DEFAULT_OPTS (full compile spew on the operator's
     # terminal, 2026-08-10).
-    local kp kmods=""
-    while read -r kp; do
-        [[ -n ${kp} ]] || continue
-        if grep -qs '^obj /lib/modules/' "${LIVE_ROOT}/var/db/pkg/${kp}"-[0-9]*/CONTENTS; then
-            kmods+="${kp} "
-        fi
-    done <<< "${LIVE_KMOD_PKGS}"
+    # The rebuild set is derived from the vdb, NOT from LIVE_KMOD_PKGS: that
+    # list exists to EXCLUDE packages from 'pkgs' (they die before the kernel
+    # tree is built), which is a different concept — sys-apps/openrazer built
+    # fine in the original cycle, was never listed, and so shipped gcc
+    # modules against the clang kernel (found on the installed host,
+    # 2026-08-10: razer*.ko refused with the struct-module size error).
+    # Every vdb package owning files under /lib/modules follows the kernel's
+    # toolchain, whether or not the pkgs phase needed it excluded.
+    local kc kmods=""
+    while read -r kc; do
+        [[ -n ${kc} ]] || continue
+        kmods+="$(echo "${kc}" | sed -E 's/-[0-9][0-9a-zA-Z._]*(-r[0-9]+)?$//') "
+    done < <(grep -ls '^obj /lib/modules/' "${LIVE_ROOT}"/var/db/pkg/*/*/CONTENTS 2>/dev/null |
+             sed 's|.*/var/db/pkg/||; s|/CONTENTS$||')
     if [[ -n ${kmods} ]]; then
         info "Rebuilding kernel-module packages against the fresh tree: ${kmods}"
         live_chroot kmod-rebuild <<-EOF

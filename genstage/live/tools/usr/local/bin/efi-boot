@@ -269,6 +269,36 @@ info "cmdline: $CMDLINE"
 # ---------------------------------------------------------------------------
 # ESP check
 # ---------------------------------------------------------------------------
+# The kernel file is copied under $ESP (a MOUNT POINT), the NVRAM entry is
+# registered on --disk/--part — two independent inputs that silently diverge:
+# on 2026-08-10 '--disk /dev/sdd' with the default /boot/efi mounted from
+# nvme0n1p1 put the signed kernel on the WRONG ESP, the entry kept pointing
+# at sdd1's stale kernel, and the machine booted a kernel whose modules did
+# not match. So the target partition, not the mount table, decides: if the
+# --disk/--part partition is mounted somewhere, that path becomes $ESP; if
+# not, it is mounted on a private temp dir for the duration of the run. An
+# explicit --esp is validated against the same rule and refused on mismatch.
+TARGET_PART="${DISK}$([[ ${DISK} == *[0-9] ]] && echo p)${PARTITION}"
+[[ -b $TARGET_PART ]] || die "No such partition: $TARGET_PART (--disk $DISK --part $PARTITION)"
+_esp_src=$(findmnt -rno SOURCE "$ESP" 2>/dev/null || true)
+if [[ ${_esp_src} != "$TARGET_PART" ]]; then
+    _part_mnt=$(findmnt -rno TARGET "$TARGET_PART" 2>/dev/null | head -1 || true)
+    if [[ -n ${_esp_src} && ${ESP} != /boot/efi ]]; then
+        # operator explicitly asked for a mount point that is NOT the target
+        # partition — that is exactly the file/entry split this check exists
+        # to prevent, so refuse rather than second-guess
+        die "--esp $ESP is $_esp_src, but --disk/--part is $TARGET_PART — refusing to split file and entry"
+    elif [[ -n ${_part_mnt} ]]; then
+        info "ESP: $TARGET_PART is mounted at $_part_mnt (not $ESP) — using it"
+        ESP="$_part_mnt"
+    else
+        ESP=$(mktemp -d /tmp/efi-boot-esp.XXXXXX)
+        mount "$TARGET_PART" "$ESP" || die "Cannot mount $TARGET_PART"
+        ESP_TMP_MOUNT="$ESP"
+        trap '[[ -n ${ESP_TMP_MOUNT:-} ]] && { umount "$ESP_TMP_MOUNT" 2>/dev/null; rmdir "$ESP_TMP_MOUNT" 2>/dev/null; }' EXIT
+        info "ESP: mounted $TARGET_PART at $ESP for this run"
+    fi
+fi
 mountpoint -q "$ESP" || die "ESP not mounted at $ESP"
 
 # ---------------------------------------------------------------------------
