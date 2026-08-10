@@ -1,0 +1,5 @@
+# CUDA-only accelerator flags, split out of common/host.use (2026-08-10):
+# caffe2's REQUIRED_USE ties each of these to cuda||rocm, so on a profile
+# without the nvidia layer they abort the resolve outright. Lives here so
+# only the CUDA profiles (amdkde, nvidiahard) ever see them.
+sci-ml/caffe2 flash memefficient cusparselt

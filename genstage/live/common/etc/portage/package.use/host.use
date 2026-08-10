@@ -104,7 +104,10 @@ dev-qt/qtdeclarative qmlls
 dev-qt/qtpositioning geoclue
 dev-util/bcc lua_single_target_luajit
 app-arch/xz-utils extra-filters nls -pgo static-libs
-sci-ml/caffe2 distributed numpy flash memefficient cusparselt gloo
+# flash/memefficient/cusparselt moved to the nvidia layer (nvidia.use):
+# their REQUIRED_USE demands cuda||rocm, which aborted amdkdehard's resolve
+# (2026-08-10). This shared file must stay valid with CUDA off.
+sci-ml/caffe2 distributed numpy gloo
 dev-python/vllm humming rust
 dev-python/mistral-common image
 dev-libs/cutlass -headers-only cublas cudnn
