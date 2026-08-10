@@ -29,6 +29,8 @@
 #   XARM_TARGET   CHOST tuple           (default aarch64-unknown-linux-gnu)
 #   XARM_PROFILE  target profile        (default default/linux/arm64/23.0)
 #   XARM_CPU      -mcpu/-mtune value    (default cortex-a72 = Pi 400/4)
+#   XARM_GCC      cross gcc version     (default: the HOST's own gcc version, so
+#                 cross, target and host never drift apart; see cmd_setup)
 #   XARM_CHROOT_ROOT  alternate root for 'chroot' (e.g. an aarch64 stage3)
 #   XARM_STAGE3   stage3 path used as the 1by1 fallback chroot — the sysroot has
 #                 no native gcc, so compile fallbacks need a stage3 with one
@@ -89,6 +91,10 @@ SYSROOT="/usr/${TARGET}"
 # profile can safely share), so an openrc <-> systemd switch cannot serve
 # stale packages. default/linux/arm64/23.0/systemd -> binpkgs-arm64-23.0-systemd
 PKGDIR_NAME="binpkgs-$(echo "${PROFILE#default/linux/}" | tr '/' '-')"
+# Portage keyword of the target, taken from the profile's arch component
+# (default/linux/arm64/23.0 -> arm64). Not the same string as the CHOST tuple:
+# package.accept_keywords needs 'arm64', never 'aarch64'.
+TARCH="$(echo "${PROFILE#default/linux/}" | cut -d/ -f1)"
 PKGDIR_PATH="${SYSROOT}/var/cache/${PKGDIR_NAME}"
 XEMERGE="emerge-${TARGET}"
 LOGDIR="/var/tmp/xarm"
@@ -303,14 +309,89 @@ cmd_setup() {
         fi
     fi
 
-    # 2. toolchain (idempotent: skip if gcc already present)
+    # 2. toolchain — gcc version follows the HOST's gcc, everything else stable.
+    #
+    # crossdev --stable keywords the cross packages with the TARGET arch's
+    # STABLE keyword (it writes 'cross-<tuple>/gcc arm64 -amd64 -~amd64'), and
+    # gcc-16 is ~arch on every arch — so plain --stable pins the cross compiler
+    # at gcc-15 while the host itself runs 16. An explicit --g overrides that;
+    # it beats --stable regardless of flag order (crossdev does
+    # GVER=${GVER:-${DEFAULT_VER}} AFTER parsing), so binutils/glibc/headers
+    # stay stable.
+    #
+    # The '=' is LOAD-BEARING — a bare '--g 16.2.0' breaks the run (proved
+    # 2026-08-10). crossdev has two paths in set_keywords(): a bare version
+    # writes 'cross-<tuple>/gcc * ~* **' and masks only '>gcc-16.2.0', while a
+    # version WITH an operator writes 'gcc -*' plus '=gcc-16.2.0 * ~* **' and
+    # additionally masks '>=gcc-9999'. Under the bare form the '**' exposes
+    # LIVE ebuilds, and the mask does not cover them because 15.3.9999 sorts
+    # BELOW 16.2.0 — so crossdev's 'emerge -u' scheduled two packages: the
+    # wanted gcc-16.2.0 (SLOT 16) plus an in-slot "upgrade" of the installed
+    # SLOT 15 cross gcc to gcc-15.3.9999, which died in src_unpack trying to
+    # git-ls-remote gcc.gnu.org. The operator form pins the exact version and
+    # disables live ebuilds outright.
+    #
+    # Tracking the host is the point (user decision 2026-08-10): one gcc major
+    # across host, cross and target means no mixed-compiler distcc objects and
+    # no confusion about which gcc is active. The invariant that actually bites
+    # is cross-gcc == TARGET gcc — 'distcc chroot-setup' dies on that mismatch —
+    # so step 2c keywords the target to the same major.
+    local want_gcc want_major have_major
+    want_gcc="${XARM_GCC:-$(gcc -dumpfullversion 2>/dev/null)}"
+    [[ -n ${want_gcc} ]] || die "cannot read host gcc version — set XARM_GCC explicitly"
+    want_major="${want_gcc%%.*}"
     if command -v "${TARGET}-gcc" >/dev/null 2>&1; then
-        info "Toolchain ${TARGET} already present: $(${TARGET}-gcc -dumpversion)"
+        have_major=$(${TARGET}-gcc -dumpversion | cut -d. -f1)
+        if [[ ${have_major} == "${want_major}" ]]; then
+            info "Toolchain ${TARGET} already present: $(${TARGET}-gcc -dumpversion)"
+        else
+            info "Rebuilding toolchain ${TARGET}: gcc ${have_major} -> ${want_gcc} (~15-30 min)"
+            crossdev --stable --g "=${want_gcc}" --target "${TARGET}" ||
+                die "crossdev failed — full log: /var/log/portage/cross-${TARGET}-*.log"
+            warn "cross gcc major changed — target C++ objects built with the old"
+            warn "compiler are ABI-stale: rebuild the sysroot (sudo xarm clean, then setup+emerge)"
+        fi
     else
-        info "Building toolchain ${TARGET} (stable, ~15-30 min)"
-        crossdev --stable --target "${TARGET}" ||
+        info "Building toolchain ${TARGET} (gcc ${want_gcc}, rest stable, ~15-30 min)"
+        crossdev --stable --g "=${want_gcc}" --target "${TARGET}" ||
             die "crossdev failed — full log: /var/log/portage/cross-${TARGET}-*.log"
     fi
+
+    # 2b'. crossdev can exit 0 and still leave the OLD slot selected — gcc's
+    # postinst only switches gcc-config on a fresh merge, so when the wanted
+    # version is already installed (e.g. a previous run died AFTER merging it)
+    # both slots sit there and ${TARGET}-gcc keeps resolving to the old one.
+    # Observed 2026-08-10: slots 15 and 16 installed, gcc-config still on 15,
+    # setup reported "Done", and the runtime libs below were then seeded out of
+    # the gcc-15 directory. Select explicitly, then PROVE the switch took —
+    # everything downstream (lib seeding, distcc offload, the keyword file just
+    # written) silently describes the wrong compiler otherwise.
+    local active
+    active=$(gcc-config -c "${TARGET}" 2>/dev/null || true)
+    if [[ ${active} != *-${want_major} ]]; then
+        info "Selecting cross compiler ${TARGET}-${want_major} (was ${active:-none})"
+        gcc-config "${TARGET}-${want_major}" ||
+            die "gcc-config could not select ${TARGET}-${want_major}"
+        env-update >/dev/null 2>&1 || true
+    fi
+    have_major=$(${TARGET}-gcc -dumpversion | cut -d. -f1)
+    [[ ${have_major} == "${want_major}" ]] ||
+        die "cross gcc still reports ${have_major} after selecting ${want_major} — toolchain did not switch"
+
+    # 2c. target gcc must share the cross compiler's major (see above). The
+    # sysroot make.conf carries ACCEPT_KEYWORDS="${ARCH}" (stable), which for a
+    # testing-only gcc major resolves to the previous stable one — hence a
+    # scoped exception rather than loosening the whole sysroot. Upper-bounded
+    # at the next major on purpose: a bare '~arm64' would also expose whatever
+    # gcc-<next> snapshot the tree carries.
+    mkdir -p "${SYSROOT}/etc/portage/package.accept_keywords"
+    cat > "${SYSROOT}/etc/portage/package.accept_keywords/xarm-toolchain" <<-EOF
+	# Managed by xarm — do not edit; regenerated by 'xarm setup'.
+	# Keeps the sysroot's gcc on the same major as the cross toolchain
+	# (${TARGET}-gcc ${want_gcc}); a major gap between them means ICEs or
+	# silent miscompilation, and 'xarm distcc chroot-setup' refuses to run.
+	<sys-devel/gcc-$((want_major + 1)) ~${TARCH}
+	EOF
 
     # 2b. usr-merge the sysroot — crossdev creates split-usr dirs, but 23.0
     # profiles are merged-usr: profile.bashrc hard-fails every setup phase once
