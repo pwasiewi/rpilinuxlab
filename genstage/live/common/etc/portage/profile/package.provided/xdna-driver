@@ -1,0 +1,11 @@
+# dev-libs/xdna-driver = the out-of-tree amdxdna kernel module (+ firmware
+# hook). Retired on every amd image since kernel 7.1.5: the driver is in-tree
+# (live.fragment sets CONFIG_DRM_ACCEL_AMDXDNA=m, kernel/drivers/accel/amdxdna/
+# amdxdna.ko ships with the kernel), while the packaged 2.21.75 source targets
+# pre-6.15 APIs (11-arg drm_sched_init, drm_gem_vmap_unlocked) and cannot
+# compile against this tree at all — it killed the whole livekernel step via
+# genkernel's @module-rebuild on 2026-08-10. Worse, a stale extra/amdxdna.ko
+# SHADOWS the in-tree module in depmod's search order while failing to load.
+# Provided satisfies the one consumer (sci-ml/fastflowlm RDEPEND), which talks
+# to the NPU through XRT and works against the in-tree driver.
+dev-libs/xdna-driver-2.21.75-r2

@@ -10,3 +10,25 @@
 # bootstrap keeps -openmp globally, so pick the cheapest backend — sparsehash
 # is header-only. Chain: plasma-meta -> spectacle -> opencv[eigen] -> eigen.
 dev-cpp/eigen sparsehash
+
+# -gtk drops app-admin/system-config-printer, whose chain ends in
+# libnotify[introspection] -> gobject-introspection: unbuildable with crossdev
+# (glib vendors the scanner since 2.88). Printing itself is untouched — CUPS
+# and the KDE print dialog stay; only the GTK printer-setup tool goes.
+kde-plasma/print-manager -gtk
+
+# Cellular-modem protocol backends: libqmi[qrtr] -> libqrtr-glib and libmbim
+# are GLib libraries that ship introspection data, the same cross wall as
+# above. Chain: plasma-meta[networkmanager] -> plasma-nm -> modemmanager-qt ->
+# modemmanager. A Pi 400 has no WWAN modem; ModemManager itself stays.
+net-misc/modemmanager -qmi -qrtr -mbim
+
+# Both flags exist to keep a bare "-I/usr/include" out of the cross compile.
+# media-gfx/graphite2 ships a pkg-config file that is literally
+# "Cflags: -I/usr/include" with no prefix variable, so pkg-config's
+# PKG_CONFIG_SYSROOT_DIR has nothing to rewrite; every consumer (harfbuzz ->
+# pango -> ...) then parses the HOST glibc headers next to the sysroot's and
+# dies on -Werror=redundant-decls. cairo drags the same closure in through
+# libharfbuzz-cairo. Neither is needed by Qt/KDE: graphite is SIL smart-font
+# shaping, libharfbuzz-cairo serves hb-view.
+media-libs/harfbuzz -cairo -graphite

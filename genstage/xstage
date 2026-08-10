@@ -1265,11 +1265,29 @@ cmd_live_conf() {
         mkdir -p "${LIVE_ROOT}/var/db/repos/${r}"
         rsync -a --delete --exclude='/distfiles' --exclude='/packages' \
             "${rp}/" "${LIVE_ROOT}/var/db/repos/${r}/"
-        cat > "${LIVE_ROOT}/etc/portage/repos.conf/${r}.conf" <<-EOF
-		[${r}]
-		location = /var/db/repos/${r}
-		auto-sync = no
-		EOF
+        # An overlay that is a git checkout carries its origin into the image.
+        # Without sync-type/sync-uri portage calls the repo "sync disabled" and
+        # refuses even an explicit 'emaint sync -r <repo>' — which is exactly
+        # what a freshly installed system hits when it tries to update ::pwr or
+        # ::stuff (2026-08-09). auto-sync stays 'no' on purpose: an overlay must
+        # never move under a running build because someone ran 'emerge --sync';
+        # an explicit 'emaint sync -r <repo>' works regardless of that setting
+        # (verified), and the installed system can flip it by hand.
+        # plain 'if', not '[[ ... ]] && ...': under 'set -e' the && form aborts
+        # the whole run on the first overlay that is not a git checkout
+        local rurl=""
+        if [[ -d ${rp}/.git ]]; then
+            rurl=$(git -C "${rp}" remote get-url origin 2>/dev/null || true)
+        fi
+        {
+            echo "[${r}]"
+            echo "location = /var/db/repos/${r}"
+            if [[ -n ${rurl} ]]; then
+                echo "sync-type = git"
+                echo "sync-uri = ${rurl}"
+            fi
+            echo "auto-sync = no"
+        } > "${LIVE_ROOT}/etc/portage/repos.conf/${r}.conf"
     done
 
     # binpkg verification trust: seed the image's portage keyring from the
@@ -1433,7 +1451,11 @@ live_prep_kconfig() {
     # profile fragments merged later can still override single symbols
     frags+=("${LIVE_TPL}/kernel/hardware.fragment")
     # extra symbols the post-merge check insists on, per flavour
-    local kcheck=""
+    # BTF is the whole point of building with clang (tracee's CO-RE reads
+    # /sys/kernel/btf/vmlinux), and it is exactly the kind of symbol
+    # olddefconfig drops without a word when a dependency is unmet — so it is
+    # checked, not hoped for. See live.fragment's netfilter/BTF comments.
+    local kcheck=" CONFIG_DEBUG_INFO_BTF"
     # systemd as PID 1 has its own mandatory Kconfig list (its README); an
     # OpenRC image has no use for it, so it is a separate fragment
     if [[ ${LIVE_RC} == systemd ]]; then
@@ -1509,7 +1531,13 @@ live_prep_kconfig() {
 	#    a config target yet; olddefconfig then answers every new symbol with
 	#    its default instead of prompting (a chroot has no one to prompt).
 	./scripts/kconfig/merge_config.sh -m .config /tmp/xstage-kconfig/[0-9]-*
-	make olddefconfig
+	# LLVM=1 here too, not just in cmd_live_kernel: olddefconfig RESOLVES the
+	# symbols, and the answer depends on the compiler. Under gcc,
+	# CC_HAS_RANDSTRUCT is n, so RANDSTRUCT_FULL falls back to
+	# GCC_PLUGIN_RANDSTRUCT=y and DEBUG_INFO_BTF stops being a visible symbol
+	# altogether — the check below would then fail every build (verified
+	# 2026-08-10 by running both variants over this fragment set).
+	make LLVM=1 olddefconfig
 
 	# 3. fail loudly if the boot chain did not survive the merge — a live ISO
 	#    without squashfs or loop is a two-hour build that cannot boot
@@ -2088,7 +2116,32 @@ cmd_live_kernel() {
 	[ -f /usr/src/linux/.config ] || { echo "no /usr/src/linux/.config" >&2; exit 1; }
 
 	sed -i 's/CDROOT="0"/CDROOT="1"/' /usr/share/genkernel/defaults/initrd.defaults
-	genkernel --makeopts=-j${JOBS} --kernel-config=/usr/src/linux/.config \\
+	# LLVM=1 (env, which kbuild imports) builds the whole kernel with clang.
+	# It is what makes CONFIG_DEBUG_INFO_BTF possible at all: BTF 'depends on
+	# !GCC_PLUGIN_RANDSTRUCT', and the hardened images set RANDSTRUCT_FULL, so
+	# under gcc the two are mutually exclusive and olddefconfig silently drops
+	# BTF. Under clang, RANDSTRUCT goes through CC_HAS_RANDSTRUCT instead and
+	# both survive (verified 2026-08-10 on 7.1.5-zen + clang 22.1.8).
+	# --strip=modules is NOT genkernel's default (it ships them
+	# unstripped): with DWARF5 on, /lib/modules goes 129M -> 1.5G without it.
+	# The toolchain must ride genkernel's OWN flags: compile_generic passes
+	# CC/LD/AR/NM/... explicitly on the make command line (tc-get*), and make
+	# command-line variables beat any environment — a plain 'LLVM=1 genkernel'
+	# builds with gcc anyway, re-resolves the config, and silently drops BTF
+	# AFTER live_prep_kconfig's check has passed (observed 2026-08-10: the
+	# image kernel came out CC_IS_GCC with no .BTF). LLVM=1 stays in the env
+	# for the parts genkernel does not override (integrated assembler,
+	# feature probes).
+	# --no-module-rebuild: genkernel's @module-rebuild pass is a hard-dying
+	# duplicate of the post-kernel package pass below (which has package.env
+	# context and --keep-going); one broken kmod package there kills the
+	# whole kernel step otherwise.
+	LLVM=1 genkernel --makeopts=-j${JOBS} --kernel-config=/usr/src/linux/.config \\
+	    --kernel-cc=clang --kernel-ld=ld.lld --kernel-ar=llvm-ar \\
+	    --kernel-nm=llvm-nm --kernel-objcopy=llvm-objcopy \\
+	    --kernel-objdump=llvm-objdump --kernel-readelf=llvm-readelf \\
+	    --kernel-strip=llvm-strip --kernel-as=clang \\
+	    --strip=modules --no-module-rebuild \\
 	    --luks --lvm --btrfs --busybox --no-clean all
 	sed -i 's/CDROOT="1"/CDROOT="0"/' /usr/share/genkernel/defaults/initrd.defaults
 	EOF
@@ -2116,7 +2169,14 @@ cmd_live_kernel() {
     info "Building the stub kernel (integrated initramfs) for direct UEFI boot"
     live_chroot kernel-stub <<-EOF
 	sed -i 's/CDROOT="0"/CDROOT="1"/' /usr/share/genkernel/defaults/initrd.defaults
-	genkernel --makeopts=-j${JOBS} --kernel-config=/usr/src/linux/.config \\
+	# same toolchain as pass 1 — a gcc relink here would produce a stub whose
+	# modules the pass-1 kernel cannot load (different vermagic/RANDSTRUCT hash)
+	LLVM=1 genkernel --makeopts=-j${JOBS} --kernel-config=/usr/src/linux/.config \\
+	    --kernel-cc=clang --kernel-ld=ld.lld --kernel-ar=llvm-ar \\
+	    --kernel-nm=llvm-nm --kernel-objcopy=llvm-objcopy \\
+	    --kernel-objdump=llvm-objdump --kernel-readelf=llvm-readelf \\
+	    --kernel-strip=llvm-strip --kernel-as=clang \\
+	    --strip=modules --no-module-rebuild \\
 	    --luks --lvm --btrfs --busybox --no-clean --integrated-initramfs all
 	sed -i 's/CDROOT="1"/CDROOT="0"/' /usr/share/genkernel/defaults/initrd.defaults
 	EOF
@@ -2135,6 +2195,38 @@ cmd_live_kernel() {
     # EMERGE_DEFAULT_OPTS carrying --update, everything already merged drops
     # out of the graph and only the module packages (plus whatever their
     # failure dropped via --keep-going) merge here.
+    # Kernel-module packages are rebuilt UNCONDITIONALLY, before the list
+    # pass: that one runs under --update (default opts), which skips a
+    # same-version installed package — on a rebuilt image after a toolchain
+    # or config change (gcc -> clang, 2026-08-10) the stale gcc modules kept
+    # their gcc-plugin symbol refs (latent_entropy) and could never load.
+    # --ignore-default-opts also drops --usepkg on purpose: an old binpkg of
+    # the same version IS the stale module, resurrected.
+    # Only the halves that actually install kernel modules are force-rebuilt:
+    # LIVE_KMOD_PKGS also carries pure-userland partners excluded for graph
+    # reasons (app-emulation/virtualbox pairs its ~PV modules), and a
+    # 20-minute userland rebuild because the KERNEL changed is waste — the
+    # installed copy already satisfies the ~PV dep of the fresh modules. A
+    # never-merged kmod package is skipped here too: absent from the vdb, it
+    # reaches the --update list pass below as a NEW install anyway.
+    # --quiet-build=y is spelled out because --ignore-default-opts also drops
+    # it from EMERGE_DEFAULT_OPTS (full compile spew on the operator's
+    # terminal, 2026-08-10).
+    local kp kmods=""
+    while read -r kp; do
+        [[ -n ${kp} ]] || continue
+        if grep -qs '^obj /lib/modules/' "${LIVE_ROOT}/var/db/pkg/${kp}"-[0-9]*/CONTENTS; then
+            kmods+="${kp} "
+        fi
+    done <<< "${LIVE_KMOD_PKGS}"
+    if [[ -n ${kmods} ]]; then
+        info "Rebuilding kernel-module packages against the fresh tree: ${kmods}"
+        live_chroot kmod-rebuild <<-EOF
+	emerge --ignore-default-opts --verbose --keep-going --oneshot --quiet-build=y \\
+	    ${kmods}
+	EOF
+    fi
+
     local list; list=$(live_pkg_list)
     if [[ -n ${list} || -n ${LIVE_SETS} ]]; then
         info "Post-kernel pass: retrying packages that needed the built kernel tree"
@@ -2142,6 +2234,40 @@ cmd_live_kernel() {
 	emerge --verbose --keep-going --with-bdeps=y \\
 	    ${LIVE_SETS} $(printf '%s ' ${list})
 	EOF
+    fi
+
+    # The config check in live_prep_kconfig cannot protect against genkernel
+    # itself: its oldconfig re-resolves with ITS toolchain, after the check.
+    # So verify the artifact, not the intent — this is what failed on
+    # 2026-08-10 (gcc kernel, no .BTF) and it must never ship silently.
+    grep -q '^CONFIG_CC_IS_CLANG=y' "${LIVE_ROOT}/usr/src/linux/.config" ||
+        die "kernel resolved to gcc — genkernel's --kernel-cc=clang did not take"
+    grep -q '^CONFIG_DEBUG_INFO_BTF=y' "${LIVE_ROOT}/usr/src/linux/.config" ||
+        die "CONFIG_DEBUG_INFO_BTF lost in genkernel's oldconfig — kernel has no BTF"
+
+    # Final audit of /lib/modules — a CHECK, deliberately not a strip pass.
+    #
+    # Stripping here would be the obvious thing to do and it is wrong: the
+    # image sets CONFIG_MODULE_SIG_ALL=y, and scripts/Makefile.modinst strips
+    # (cmd_strip, :88) BEFORE it signs (cmd_sign, :107). A --strip-debug sweep
+    # after installation rewrites the ELF and drops the appended
+    # "~Module signature appended~" trailer, so every module silently becomes
+    # unsigned: it still loads today only because MODULE_SIG_FORCE is off, and
+    # it would be refused outright once lockdown/Secure Boot is enforced —
+    # which is the entire point of this image. So DWARF is removed at install
+    # time by genkernel's --strip=modules, and all that is left to do is
+    # prove it happened.
+    local modsz debugko
+    modsz=$(du -sm "${LIVE_ROOT}/lib/modules" 2>/dev/null | cut -f1)
+    debugko=$(find "${LIVE_ROOT}/lib/modules" -name '*.ko' -exec sh -c \
+        'readelf -S "$1" 2>/dev/null | grep -q ".debug_info" && echo "$1"' _ {} \; \
+        2>/dev/null | head -5)
+    if [[ -n ${debugko} ]]; then
+        warn "modules still carry DWARF (${modsz} MB) — genkernel ignored --strip=modules:"
+        printf '  %s\n' ${debugko} >&2
+        warn "fix: strip at INSTALL time (INSTALL_MOD_STRIP=1), never after — signing happens last"
+    else
+        info "modules: ${modsz} MB, no .debug_info, signatures intact"
     fi
 }
 

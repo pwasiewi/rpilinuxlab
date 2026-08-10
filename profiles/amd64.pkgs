@@ -279,6 +279,10 @@ sys-devel/m4
 sys-devel/distcc
 llvm-core/clang
 llvm-core/llvm
+# ld.lld — mandatory for the LLVM=1 kernel build (xstage cmd_live_kernel);
+# it only arrived as an implicit dependency before, which is too fragile for
+# something the kernel cannot link without
+llvm-core/lld
 llvm-core/lldb
 dev-build/cmake
 dev-build/scons

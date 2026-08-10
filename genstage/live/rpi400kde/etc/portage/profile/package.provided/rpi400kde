@@ -1,0 +1,22 @@
+# Packages portage must treat as already installed for this profile.
+#
+# sys-power/switcheroo-control is an unconditional RDEPEND of
+# kde-frameworks/kio (kio-6.27.0.ebuild:64) — i.e. of all of Plasma. It pulls
+# dev-python/pygobject -> dev-libs/gobject-introspection -> glib[introspection],
+# and glib vendors the introspection scanner since 2.88: giscanner builds a
+# Python extension for the TARGET which the cross build's host python then
+# cannot import, so the whole chain is unbuildable with crossdev
+# (see the -introspection note in profiles/rpi400kde.conf).
+#
+# What is lost: the dbus daemon that reports a second GPU, i.e. Plasma's
+# "Launch using Discrete Graphics Card" menu entry. The Pi 400 has one GPU.
+# This file also rides the overlay onto the card, so the running system keeps
+# the same view and never tries to pull the chain in on-device either.
+sys-power/switcheroo-control-3.0
+
+# kde-plasma/powerdevil takes any-of ( tuned[ppd] | power-profiles-daemon |
+# tlp ). tlp is ~arm64-masked and both others are python/pygobject, i.e. the
+# same gobject-introspection wall. Provided: Plasma's power-profile switch is
+# a laptop feature (net.hadess.PowerProfiles); the Pi 400 has no platform
+# profile to switch, so the KCM section simply stays empty.
+sys-power/power-profiles-daemon-0.30

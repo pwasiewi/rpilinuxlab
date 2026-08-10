@@ -215,6 +215,12 @@ sysroot_write_makeconf() {
 	# Per CPU tune family; the mount comes from ramstart1 (backing /home/tmp)
 	FEATURES="\${FEATURES} ccache"
 	CCACHE_DIR="${XCCACHE_DIR}"
+	# Some builds run a freshly cross-built TARGET binary (gocryptfs' build.bash
+	# does, 2026-08-09) — binfmt hands it to qemu-aarch64, which then looks for
+	# the ELF interpreter under the HOST root and dies with "Could not open
+	# /lib/ld-linux-aarch64.so.1". Pointing qemu at the sysroot fixes the whole
+	# class; it is inert for every build that never execs a target binary.
+	QEMU_LD_PREFIX="${SYSROOT}"
 	EOF
     # xp-profile additions land inside the managed block, so the next
     # setup/tune under a different profile removes them with the rest
@@ -235,7 +241,13 @@ sysroot_write_makeconf() {
 # the layer grows them under profile-specific names by hand.
 sysroot_sync_portage_confdir() {
     local sub src dst f n=0
-    for sub in package.use package.accept_keywords package.env package.mask package.license; do
+    # profile/package.provided is in the list because a cross sysroot sometimes
+    # has to declare a package "already there": kio RDEPENDs unconditionally on
+    # sys-power/switcheroo-control, whose introspection chain cannot be cross
+    # built at all (rpi400kde, 2026-08-09). Portage accepts the directory form
+    # for every name here.
+    for sub in package.use package.accept_keywords package.env package.mask \
+               package.license profile/package.provided; do
         dst="${SYSROOT}/etc/portage/${sub}"
         [[ -d ${dst} ]] && find "${dst}" -maxdepth 1 -type f -name 'xprofile-*' -delete
         if [[ -n ${PORTAGE_CONFDIR} && -d ${PORTAGE_CONFDIR}/${sub} ]]; then
@@ -320,6 +332,28 @@ cmd_setup() {
                 cp -a usr/sbin/. usr/bin/; rm -rf usr/sbin; ln -s bin usr/sbin
             fi
         ) || die "sysroot usr-merge failed"
+    fi
+
+    # 2b-2. target runtime libs where qemu-user can find them. Ebuilds that run
+    # a freshly cross-built TARGET binary during src_compile (gocryptfs'
+    # build.bash, 2026-08-09) reach qemu through binfmt; its guest loader then
+    # searches QEMU_LD_PREFIX (= the sysroot) only, while crossdev keeps
+    # libgcc_s/libstdc++ in the HOST tree /usr/lib/gcc/<tuple>/<ver>/ — the run
+    # dies with "libgcc_s.so.1: cannot open shared object file". Copies, not
+    # symlinks: an absolute link would be re-resolved inside the prefix.
+    local gcclibdir
+    gcclibdir=$(dirname "$("${TARGET}-gcc" -print-file-name=libgcc_s.so.1 2>/dev/null)")
+    if [[ -d ${gcclibdir} ]]; then
+        local so n=0
+        mkdir -p "${SYSROOT}/usr/lib64"
+        for so in "${gcclibdir}"/*.so.[0-9]*; do
+            [[ -f ${so} ]] || continue
+            cp -f "${so}" "${SYSROOT}/usr/lib64/" || die "could not seed $(basename "${so}") into the sysroot"
+            n=$((n + 1))
+        done
+        info "Seeded ${n} target runtime lib(s) from ${gcclibdir}"
+    else
+        warn "No target runtime lib dir — qemu-user runs of cross-built binaries will fail on libgcc_s.so.1"
     fi
 
     # 2c. pin the gentoo repo path in the sysroot config — on hosts where the

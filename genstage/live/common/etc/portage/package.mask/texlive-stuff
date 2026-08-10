@@ -1,0 +1,9 @@
+# ::stuff tracks TeX Live's rolling tlnet archive, whose per-revision
+# tarballs are DELETED upstream within days — by the time a synced ebuild
+# reaches this image the distfile is a 404 on every CTAN mirror
+# (texlive-luatex r79730, 2026-08-10: gone from tu-chemnitz and gust.org.pl
+# alike, killed the whole post-kernel emerge). The installed ::pwr copies
+# keep working and nothing in the image needs the newer snapshots; unmask
+# deliberately after a sync if a texlive bump is actually wanted, and fetch
+# the same day.
+dev-texlive/*::stuff
