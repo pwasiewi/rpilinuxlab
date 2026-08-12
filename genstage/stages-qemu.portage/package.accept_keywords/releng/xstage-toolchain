@@ -1,0 +1,18 @@
+# Managed by xstage — rendered into the arm64 catalyst confdir by
+# 'xstage arm64 setup' (confdir_sync_overlay). Never edit the copy inside the
+# releng clone: it is regenerated, and releng is an upstream checkout that
+# xstage clones once and never pulls, so a hand edit there would exist on one
+# machine only.
+#
+# Why the chroot may not build stable gcc: every compile inside it is shipped
+# by distcc to the HOST's crossdev gcc (distcc_hosts in catalyst-arm64.conf),
+# and 'xarm distcc chroot-setup' refuses a major mismatch outright — mixing
+# majors means ICEs or silent miscompilation. Without this file the chroot
+# resolves STABLE arm64 gcc (15.3.0 today) while the cross toolchain is
+# gcc-@GCC_PREV@, and the stage3 it produces would ship a libstdc++ older than
+# everything later cross-built against it.
+#
+# Upper-bounded at the next major on purpose — the same rule xarm applies to
+# the sysroot's own xarm-toolchain file. A bare '~@SUBARCH@' would also expose
+# whatever gcc-<next> snapshot the tree happens to carry that week.
+<sys-devel/gcc-@GCC_NEXT@ ~@SUBARCH@

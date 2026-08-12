@@ -32,3 +32,31 @@ net-misc/modemmanager -qmi -qrtr -mbim
 # libharfbuzz-cairo. Neither is needed by Qt/KDE: graphite is SIL smart-font
 # shaping, libharfbuzz-cairo serves hb-view.
 media-libs/harfbuzz -cairo -graphite
+
+# Bootstrap cycle on a fresh ROOT (nothing installed yet): sys-libs/gpm needs
+# ncurses to build, and the arm64 desktop profile default is ncurses[+gpm],
+# which needs gpm back (buildtime_slot_op). -gpm on ncurses breaks the cycle;
+# gpm itself still merges fine once ncurses exists. Cost: ncurses-linked
+# terminal apps lose gpm mouse support in text UIs — irrelevant under Plasma.
+sys-libs/ncurses -gpm
+
+# The pam flag (profile default, no reverse dep requires it) builds
+# pam_gnome_keyring — a GNOME-keyring login-unlock module, meaningless on a
+# KDE/kwallet image — AND its pam_test binary, which meson links against the
+# HOST's x86 libpamtest.so whenever the host also has pam_wrapper installed
+# ("file in wrong format"). Cutting the flag removes both.
+app-crypt/libsecret -pam
+
+# wpa_gui-qt4 (USE=gui) is built with qmake, which has no cross awareness:
+# it loads the HOST's /usr/lib64/qt6/mkspecs and injects the x86-only
+# -mno-direct-extern-access into the aarch64 compile. Nothing is lost:
+# plasma-nm is the WiFi UI on this image, wpa_gui is a redundant X11 tool.
+net-wireless/wpa_supplicant -gui
+
+# Cross-compile autoconf trap, not a real feature gap: eventfd(2) is a
+# RUNTIME test the configure script cannot execute under cross (no target
+# binary can run natively), so it falls back to "assuming no" — and the
+# ebuild's default +eventfd USE explicitly requests --enable-itc=eventfd
+# regardless, which conflicts with that "no" and hard-fails configure.
+# -eventfd switches to --enable-itc=pipe, which has no such runtime check.
+net-libs/libmicrohttpd -eventfd

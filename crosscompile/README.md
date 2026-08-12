@@ -401,6 +401,22 @@ Planned additions, each again a separate new file, only when the need appears:
    `/etc/portage/env/dev-lang/rust` with
    `RUST_CROSS_TARGETS=("AArch64:aarch64-unknown-linux-gnu:aarch64-unknown-linux-gnu")`
    then `emerge -1 dev-lang/rust` (rust-bin cannot do this).
+   Three traps, each producing a build that "succeeds" with X86-only std
+   (all hit and verified on rust-1.95.0, 2026-08-11):
+   - the ebuild wraps its whole cross section in
+     `[[ -n ${I_KNOW_WHAT_I_AM_DOING_CROSS} ]]` — set that in the same env
+     file or `RUST_CROSS_TARGETS` is read and silently ignored;
+   - each cross entry `die`s without `llvm_targets_<LLVM target>` enabled on
+     rust itself — but only once the gate above is set; before that it is
+     part of the skipped block, so add `dev-lang/rust llvm_targets_AArch64`
+     to package.use up front;
+   - with `--update`/`--newuse` in `EMERGE_DEFAULT_OPTS` the re-emerge is a
+     silent no-op (env-file edits are not USE changes) — use
+     `emerge --ignore-default-opts --oneshot dev-lang/rust`.
+   Verify with `ls /usr/lib/rust/*/lib/rustlib/ | grep aarch64` and a
+   `rustc --target aarch64-unknown-linux-gnu -C linker=aarch64-unknown-linux-gnu-gcc`
+   smoke build; check `[target.aarch64-…]` appears in the work dir's
+   `bootstrap.toml` early in the build.
 2. **distcc GCC USE parity** (only if distcc to the Pi is used): extend
    `package.use/cross-aarch64-unknown-linux-gnu` with the same gcc USE as the Pi's
    (e.g. `graphite`); keep gcc major versions identical on both sides.

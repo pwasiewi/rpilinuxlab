@@ -12,6 +12,13 @@
 #                    XARM_CPU (cheap profile/CPU switch without a full setup)
 #   status           toolchain / profile / binfmt / qemu / sysroot summary
 #   emerge ARGS      cross-emerge into sysroot (emerge-aarch64-unknown-linux-gnu)
+#   rootgcc [ROOT]   put ROOT's native gcc on the cross toolchain's major:
+#                    cross-emerge sys-devel/gcc:<major>, select it with
+#                    ROOT= gcc-config, rebuild ROOT's ld.so.cache. No-op when
+#                    they already match. 'xp <board> pkgs' refuses until it has run
+#   qca-fix          re-patch app-crypt/qca's non-relocatable cmake export in the
+#                    sysroot (upstream bug: bakes host-absolute paths); idempotent,
+#                    no-op if qca isn't installed or is already patched
 #   chroot [CMD]     QEMU user chroot into sysroot (mounts + trap umount)
 #   1by1 [--fresh] ARGS  resolve deps (any emerge args, e.g. -e @world), build each
 #                    package --nodeps: cross first, fall back to qemu chroot;
@@ -153,6 +160,40 @@ binfmt_register() {
 }
 
 # ---------------------------------------------------------------------------
+# target-ELF helpers (used by rootgcc)
+# ---------------------------------------------------------------------------
+# Highest GLIBCXX_3.4.N a libstdc++ exports — the number the board enforces at
+# load time. Host readelf reads aarch64 ELF fine, so this stays host-side.
+glibcxx_max() {  # glibcxx_max <path/to/libstdc++.so.6>
+    readelf --dyn-syms -W "$1" 2>/dev/null |
+        grep -o 'GLIBCXX_3\.4\.[0-9]\+' | sort -uV | tail -1
+}
+
+# Rebuild a foreign-arch ROOT's /etc/ld.so.cache.
+#
+# NOT with the host ldconfig: on x86_64 it rejects every aarch64 object
+# ("is for unknown machine 183") and writes an EMPTY cache — strictly worse
+# than a stale one, because glibc then finds nothing outside the default dirs
+# and /usr/lib/gcc/<tuple>/<ver> is not one of them. The ROOT ships its own
+# static-pie ldconfig; binfmt (OC flags: the interpreter is resolved in the
+# HOST root) hands it to qemu-aarch64 and ldconfig -r chroots itself. Nothing
+# is written INTO the tree — unlike 'xarm chroot', which installs a static
+# qemu and overwrites /etc/resolv.conf with no cleanup, and would therefore
+# pollute the shipped image. -X mirrors portage's own env_update, which runs
+# this exact binary the same way at the end of every cross-emerge.
+root_ldconfig() {  # root_ldconfig <root>
+    local root="${1%/}" ld="" c
+    for c in /usr/sbin/ldconfig /sbin/ldconfig /usr/bin/ldconfig; do
+        [[ -f ${root}${c} && -x ${root}${c} ]] && { ld="${c}"; break; }
+    done
+    [[ -n ${ld} ]] ||
+        die "No ldconfig inside ${root} — its ld.so.cache cannot be rebuilt, and the board would keep loading the old libstdc++"
+    binfmt_register
+    "${root}${ld}" -X -r "${root}" ||
+        die "${ld} failed inside ${root} — ld.so.cache left stale (is binfmt ${BINFMT_NAME} really active?)"
+}
+
+# ---------------------------------------------------------------------------
 # sysroot make.conf — marker-delimited managed block, rewritten every time
 # (the old "# xarm settings" block was append-once, which made XARM_CPU a
 # silent no-op after the first setup)
@@ -252,8 +293,12 @@ sysroot_sync_portage_confdir() {
     # sys-power/switcheroo-control, whose introspection chain cannot be cross
     # built at all (rpi400kde, 2026-08-09). Portage accepts the directory form
     # for every name here.
+    # 'env' rides along because package.env entries are dead letters without
+    # the env/*.conf files they name — the layer's package.env header says
+    # exactly that. Synced files get the same xprofile- prefix, so a layer's
+    # package.env must reference them AS xprofile-<name>.conf.
     for sub in package.use package.accept_keywords package.env package.mask \
-               package.license profile/package.provided; do
+               package.license env profile/package.provided; do
         dst="${SYSROOT}/etc/portage/${sub}"
         [[ -d ${dst} ]] && find "${dst}" -maxdepth 1 -type f -name 'xprofile-*' -delete
         if [[ -n ${PORTAGE_CONFDIR} && -d ${PORTAGE_CONFDIR}/${sub} ]]; then
@@ -535,6 +580,153 @@ cmd_status() {
 cmd_emerge() {
     need_root; need_toolchain
     exec "${XEMERGE}" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# rootgcc — put a board ROOT's native gcc on the cross toolchain's major
+# ---------------------------------------------------------------------------
+# A cross-emerge COMPILES with ${TARGET}-gcc and LINKS C++ against THAT gcc's
+# libstdc++, but the binaries RUN against whatever the ROOT's gcc-config has
+# selected. The gap is invisible: the build succeeds and the board dies with
+# "GLIBCXX_3.4.35 not found" the first time a Plasma binary starts. Measured
+# 2026-08-10 after the crossdev move to gcc-16 — rootfs on gcc-15.3.0 caps at
+# GLIBCXX_3.4.34, cross gcc-16 emits up to 3.4.36.
+#
+# Everything here is host-side. gcc-config honours ROOT (see the ROOT/EROOT
+# normalisation at the top of /usr/bin/gcc-config), and the one step x86 cannot
+# do — the ld.so.cache — goes through root_ldconfig above. No interactive
+# 'enter', no qemu binary left behind in the image.
+cmd_rootgcc() {
+    need_root; need_toolchain
+    local root="${1:-${XARM_ROOTFS:-}}"
+    [[ -n ${root} ]] || die "Usage: sudo xarm rootgcc /path/to/rootfs"
+    root="${root%/}"
+    [[ -d ${root}/var/db/pkg ]] || die "${root} is not a portage ROOT (no var/db/pkg)"
+
+    local want have
+    want=$("${TARGET}-gcc" -dumpversion | cut -d. -f1)
+    # the SELECTED compiler, not merely an installed one: gcc-config's choice is
+    # what writes ld.so.conf.d, hence what the board actually loads
+    have=$(ROOT="${root}/" gcc-config -c "${TARGET}" 2>/dev/null |
+           sed -n "s|^${TARGET}-\([0-9]\+\).*|\1|p")
+
+    if [[ -z ${have} ]]; then
+        # a tiny/crossstage tree may legitimately carry no compiler at all —
+        # do not bolt a gcc onto something that never asked for one
+        if ! compgen -G "${root}/var/db/pkg/sys-devel/gcc-[0-9]*" >/dev/null; then
+            info "No sys-devel/gcc in ${root} — nothing to align (cross gcc-${want})"
+            return 0
+        fi
+        warn "${root} has gcc installed but gcc-config selects nothing — selecting ${want}"
+    elif [[ ${have} == "${want}" ]]; then
+        info "${root} already on gcc-${have}, same major as the cross toolchain — nothing to do"
+        return 0
+    fi
+
+    info "ROOT gcc major ${have:-none} vs cross ${want} — merging sys-devel/gcc:${want} into ${root}"
+    warn "this is a native gcc built under cross emulation: expect hours"
+    [[ -f ${SYSROOT}/etc/portage/package.accept_keywords/xarm-toolchain ]] ||
+        warn "No ${SYSROOT}/etc/portage/package.accept_keywords/xarm-toolchain — gcc-${want} is ~${TARCH} and the merge will die on keywords: sudo xarm setup"
+
+    # :${want} pins the SLOT, so this can never drift onto a major NEWER than
+    # the compiler doing the build. Visibility comes from the SYSROOT config —
+    # the emerge wrapper sets PORTAGE_CONFIGROOT=${SYSROOT}, where cmd_setup
+    # wrote '<sys-devel/gcc-$((want+1)) ~${TARCH}'.
+    #
+    # USE=openmp is deliberate and scoped to this one atom: the sysroot
+    # make.conf carries a global -openmp whose stated reason is "openmp needs
+    # target libgomp = sys-devel/gcc in ROOT" — the bootstrap chicken-and-egg
+    # that this very command resolves. Without it the image's only compiler
+    # cannot build OpenMP code, and libgomp.so.1 disappears the moment the old
+    # slot is pruned.
+    USE="openmp" "${XEMERGE}" --root="${root}" --root-deps=rdeps \
+        --usepkg --buildpkg --oneshot -q "sys-devel/gcc:${want}" ||
+        die "cross-emerge of sys-devel/gcc:${want} into ${root} failed"
+
+    compgen -G "${root}/var/db/pkg/sys-devel/gcc-${want}.*" >/dev/null ||
+        die "sys-devel/gcc:${want} is not in ${root}/var/db/pkg after the merge"
+
+    # A gcc merged as a NEW SLOT stays UNSELECTED — deliberate upstream
+    # behaviour, not a race: toolchain.eclass's should_we_gcc_config() sees a
+    # valid config on a different branch and makes do_gcc_config() run
+    # 'gcc-config --use-old --force'. The same trap xstage's live_chroot
+    # toolchain-select documents for the native track. Skip this and the merge
+    # "succeeds" while the ROOT keeps resolving libstdc++ out of the old dir.
+    ROOT="${root}/" gcc-config "${TARGET}-${want}" ||
+        die "gcc-config could not select ${TARGET}-${want} in ${root}"
+
+    # --- assert the EFFECT, not the copy ------------------------------------
+    local sel
+    sel=$(ROOT="${root}/" gcc-config -c "${TARGET}" 2>/dev/null || true)
+    [[ ${sel} == "${TARGET}-${want}"* ]] ||
+        die "gcc-config in ${root} still reports '${sel:-none}' after selecting ${TARGET}-${want}"
+    grep -qx "/usr/lib/gcc/${TARGET}/${want}" \
+        "${root}/etc/ld.so.conf.d/05gcc-${TARGET}.conf" ||
+        die "${root}/etc/ld.so.conf.d/05gcc-${TARGET}.conf does not name the gcc-${want} libdir"
+
+    # gcc-config skips env-update and ldconfig whenever ROOT != "/", so the
+    # cache still maps libstdc++.so.6 onto the OLD directory. glibc resolves
+    # through the cache, so this one file decides what the board loads.
+    root_ldconfig "${root}"
+
+    # host ldconfig cannot WRITE a foreign cache but reads one fine, so the
+    # proof stays host-side. LC_ALL=C: only the header is localised, but do not
+    # bet a guard on that.
+    local hit rootmax crossmax
+    hit=$(LC_ALL=C ldconfig -r "${root}" -p 2>/dev/null |
+          awk '$1 == "libstdc++.so.6" { print $NF; exit }')
+    [[ ${hit} == "/usr/lib/gcc/${TARGET}/${want}/"* ]] ||
+        die "ld.so.cache in ${root} resolves libstdc++.so.6 to '${hit:-nothing}', not the gcc-${want} libdir — the board would still fail at runtime"
+
+    crossmax=$(glibcxx_max "$("${TARGET}-gcc" -print-file-name=libstdc++.so.6)")
+    rootmax=$(glibcxx_max "${root}${hit}")
+    [[ -n ${rootmax} && -n ${crossmax} ]] ||
+        die "could not read GLIBCXX versions (root='${rootmax:-}' cross='${crossmax:-}')"
+    [[ $(printf '%s\n%s\n' "${crossmax}" "${rootmax}" | sort -V | tail -1) == "${rootmax}" ]] ||
+        die "${root} tops out at ${rootmax} but the cross toolchain emits up to ${crossmax} — cross-built C++ would still fail on the board"
+
+    info "${root}: gcc-${want} selected, libstdc++ ${hit} (up to ${rootmax}; cross emits ${crossmax})"
+    # Left installed on purpose: the two slots coexist harmlessly (gcc-config
+    # writes exactly one 05gcc-<tuple>.conf, so the old libdir drops out of the
+    # search path), and pruning mid-pipeline is irreversible — a failed postrm
+    # would leave the ROOT with no selected compiler at all.
+    [[ -z ${have} ]] ||
+        info "Old slot gcc-${have} left installed; prune it deliberately with: sudo ${XEMERGE} --root=${root} --unmerge sys-devel/gcc:${have}"
+}
+
+# ---------------------------------------------------------------------------
+# qca-fix — patch app-crypt/qca's non-relocatable cmake export in the sysroot
+# ---------------------------------------------------------------------------
+# Upstream qca's installed Qca-qt6Targets*.cmake bakes IMPORTED_LOCATION and
+# INTERFACE_INCLUDE_DIRECTORIES as bare absolute paths ("/usr/lib64/...",
+# "/usr/include/...") instead of a relocatable ${_IMPORT_PREFIX}-based path —
+# a cross-install bug in qca's own CMakeLists, not a portage/find-path issue.
+# Any consumer that finds qca correctly (Qca-qt6_DIR does point into the
+# sysroot; CMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY works as designed) still
+# links against the HOST's x86_64 libqca-qt6.so, since the exported target's
+# *content* names it directly (found: kwallet-runtime, 2026-08-12). Portage
+# has no hook for "fix files after a package installs", so this re-applies on
+# demand; safe to call whether or not qca is installed, and idempotent (the
+# grep guard skips an already-patched or absent file).
+cmd_qca_fix() {
+    need_toolchain
+    local dir="${SYSROOT}/usr/lib64/cmake/Qca-qt6"
+    local cfg="${dir}/Qca-qt6Targets.cmake" rwdi="${dir}/Qca-qt6Targets-relwithdebinfo.cmake"
+    if [[ ! -f ${cfg} ]]; then
+        info "No ${cfg} — app-crypt/qca not in the sysroot, nothing to fix"
+        return 0
+    fi
+    if grep -q "\"${SYSROOT}/usr/include/Qca-qt6/QtCrypto\"" "${cfg}" 2>/dev/null; then
+        info "qca cmake export already sysroot-prefixed — nothing to do"
+        return 0
+    fi
+    sed -i "s#\"/usr/include/Qca-qt6/QtCrypto\"#\"${SYSROOT}/usr/include/Qca-qt6/QtCrypto\"#" "${cfg}"
+    [[ -f ${rwdi} ]] && sed -i -E \
+        "s#\"(/usr/lib64/libqca-qt6\.so[0-9.]*)\"#\"${SYSROOT}\1\"#g" \
+        "${rwdi}"
+    grep -q "\"${SYSROOT}/usr/include/Qca-qt6/QtCrypto\"" "${cfg}" ||
+        die "sed did not take on ${cfg} — check the upstream string still matches"
+    info "Patched ${dir}/*.cmake to sysroot-relative paths"
 }
 
 # ---------------------------------------------------------------------------
@@ -826,6 +1018,8 @@ case "${CMD}" in
     tune)           cmd_tune "$@" ;;
     status)         cmd_status "$@" ;;
     emerge)         cmd_emerge "$@" ;;
+    rootgcc)        cmd_rootgcc "$@" ;;
+    qca-fix)        cmd_qca_fix "$@" ;;
     chroot)         cmd_chroot "$@" ;;
     1by1)           cmd_1by1 "$@" ;;
     binhost)        cmd_binhost "$@" ;;

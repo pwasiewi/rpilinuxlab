@@ -27,6 +27,18 @@
 # Board profiles — rootfs to SD card, in order:
 #   build           make the rootfs: 'arm64 unpack' (stage3 method) or
 #                   'tiny build' (rootfs method)                        [root]
+#   rootgcc         align the rootfs' native gcc with the cross
+#                   toolchain's major — 'pkgs' refuses until they match  [root]
+#   sysroot-prep    OPTIONAL, only needed after a from-scratch sysroot
+#                   (xarm clean / fresh setup): cross-emerge
+#                   $PROF_SYSROOT_PKGS into the SYSROOT (not the rootfs)
+#                   and re-run 'xarm qca-fix' — pre-seeds packages that
+#                   'pkgs' resolver can never pull in on its own (BDEPEND-
+#                   only tools consumed via cmake find_package, acct-*
+#                   groups fowners checks against the sysroot). No-op if
+#                   the profile sets no PROF_SYSROOT_PKGS. Safe to skip
+#                   when the sysroot already has a completed build in it
+#                   (see rpilinuxlab/crosscompile skill for why)         [root]
 #   pkgs            cross-emerge $PROF_PKGS into the profile rootfs     [root]
 #   conf            overlay PROF_BOARD_OVERLAY_DIR layers onto the
 #                   rootfs (also runs first inside 'image')             [root]
@@ -141,7 +153,7 @@ case "$1" in
 esac
 
 # a profile file named like a verb would shadow it — refuse such confs
-RESERVED=" status setup enter emerge 1by1 pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel livekernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
+RESERVED=" status setup enter emerge 1by1 rootgcc sysroot-prep pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel livekernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
 
 PROF=""
 if [[ -f ${PROFDIR}/$1.conf ]]; then
@@ -212,10 +224,45 @@ emerge|1by1)
     # live image, with the same bind mounts (distfiles, build dir, ccache) that
     # 'pkgs' runs with
     if ! is_board && [[ ${VERB} == emerge ]]; then
+        # exit, do not fall through: need_board below would die with
+        # "'emerge' needs a board profile" AFTER the live-emerge had already
+        # run and succeeded — a non-zero exit and a wrong diagnosis on a
+        # working command (found 2026-08-11). 'enter' above avoids this by
+        # using exec; 'timed' is a function, so this branch needs an exit.
         timed "${XSTAGE}" "${T}" live-emerge "$@"
+        exit $?
     fi
     need_board
     timed "$(xarm_bin)" "${VERB}" "$@"
+    ;;
+rootgcc)
+    need_board; no_args "$@"
+    root="$(prof_build_dir)/rootfs"
+    [[ -d ${root} ]] || die "No ${root} — run: sudo xp ${PROF} build"
+    timed "$(xarm_bin)" rootgcc "${root}"
+    ;;
+sysroot-prep)
+    need_board; no_args "$@"
+    # Everything 'pkgs' needs is either in the profile's package.use/env
+    # layer (synced automatically) or already sitting in the sysroot from a
+    # previous build. The two things that are NEITHER — a from-scratch
+    # sysroot has neither — are: (1) packages that are BDEPEND-only in their
+    # ebuild (host-resolved by the cross wrapper, so the pkgs resolver never
+    # installs them into the sysroot) yet get discovered via cmake
+    # find_package() by OTHER cross packages under MODE_PACKAGE=ONLY; and
+    # (2) sysroot-local file patches applied after a package installs, which
+    # portage has no hook for. Both only bite on a wiped sysroot — see the
+    # gentoo-crosscompile skill's pitfalls table for the full mechanism.
+    if [[ -z ${PROF_SYSROOT_PKGS:-} ]]; then
+        info "Profile ${PROF} sets no PROF_SYSROOT_PKGS — nothing to pre-seed"
+    else
+        info "Pre-seeding sysroot: ${PROF_SYSROOT_PKGS}"
+        # shellcheck disable=SC2086 — word splitting of the package list is intended
+        timed "$(xarm_bin)" emerge --oneshot -q ${PROF_SYSROOT_PKGS}
+    fi
+    # Idempotent and safe even if qca wasn't in PROF_SYSROOT_PKGS or isn't
+    # installed yet — re-run once qca lands (e.g. after the real 'pkgs').
+    "$(xarm_bin)" qca-fix
     ;;
 pkgs)
     no_args "$@"
@@ -225,6 +272,17 @@ pkgs)
     [[ -n ${PROF_PKGS:-} ]] || die "Profile ${PROF} sets no PROF_PKGS"
     root="$(prof_build_dir)/rootfs"
     [[ -d ${root} ]] || die "No ${root} — run: sudo xp ${PROF} build"
+    # The emerge below COMPILES with the cross gcc and LINKS against ITS
+    # libstdc++, while the binaries RUN against whatever gcc-config selected
+    # inside the rootfs. A major gap is invisible here and fatal on the board
+    # ("GLIBCXX_3.4.35 not found"), so refuse rather than build something
+    # unloadable. Not fixed automatically: aligning them can mean an hours-long
+    # native gcc build, which must not start as a surprise inside another verb.
+    _xg=$("${PROF_TUPLE}-gcc" -dumpversion 2>/dev/null | cut -d. -f1)
+    _rg=$(ROOT="${root}/" gcc-config -c "${PROF_TUPLE}" 2>/dev/null |
+          sed -n "s|^${PROF_TUPLE}-\([0-9]\+\).*|\1|p")
+    [[ -z ${_xg} || -z ${_rg} || ${_xg} == "${_rg}" ]] ||
+        die "${root} is on gcc-${_rg}, cross toolchain is gcc-${_xg} — cross-built C++ would not load on the board. Run first: sudo xp ${PROF} rootgcc"
     info "Installing into ${root}: ${PROF_PKGS}"
     # shellcheck disable=SC2086 — word splitting of the package list is intended
     timed "${PROF_TUPLE}-emerge" --root="${root}" --root-deps=rdeps \

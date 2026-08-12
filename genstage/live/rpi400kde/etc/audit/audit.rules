@@ -1,0 +1,51 @@
+# arm64 override of genstage/live/hardened/etc/audit/audit.rules — this
+# profile's overlay layer applies AFTER 'hardened' (PROF_BOARD_OVERLAY_DIR),
+# so rsync's additive semantics let this replace just the two broken lines
+# instead of forking the whole hardened tree per-arch.
+#
+# Root cause (retrieved from the board's OWN ausyscall, not guessed):
+#   sudo xp rpi400kde enter "ausyscall --dump aarch64"
+# shows aarch64's native 64-bit ABI never had open/fstat/dup2/stat — Linux's
+# policy for new architectures drops "legacy" syscalls that already have a
+# modern equivalent (openat/newfstatat/dup3 cover them). auditctl fails to
+# translate a name it can't find and aborts the WHOLE rule load — matching
+# the boot's "[FAILED] Failed to start Load Audit Rules". This is a real
+# arch mismatch, not a QEMU gate artifact: it would fail identically on the
+# physical Pi. The b32 line is dropped outright, not just corrected: this
+# board's audit-userspace build reports "Arm eabi processor support is not
+# enabled" (`ausyscall --dump arm`), so the b32 arch token itself has no
+# syscall table on this device — verify before re-adding it (a `USE`/configure
+# change to sys-process/audit could enable it later).
+#
+# Gentoo's auditd.service is plain ExecStart=/sbin/auditd: it loads THIS file
+# and never runs augenrules, so rules.d/ alone would be silently inert. Keep
+# this file and rules.d/10-base.rules in sync — if augenrules --load is ever
+# run, it regenerates this file from rules.d/ with identical content.
+
+# First rule - delete all
+# This is to clear out old rules, so we don't append to them.
+-D
+
+# Feel free to add below this line. See auditctl man page
+
+# The following rule would cause all of the syscalls listed to be ignored in
+# logging. aarch64 only (no 32-bit compat table on this board — see header);
+# openat/newfstatat/dup3 replace the legacy open/fstat+stat/dup2 that don't
+# exist in aarch64's native syscall ABI.
+-a exit,never -F arch=b64 -S read -S write -S openat -S newfstatat -S mmap -S brk -S munmap -S nanosleep -S fcntl -S close -S dup3 -S rt_sigaction
+
+# The following rule would cause the capture of all systems not caught above.
+# -a exit,always -S all
+
+# Increase the buffers to survive stress events
+-b 8192
+
+
+-w /etc/passwd -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d -p wa -k sudoers
+-w /var/lib/aide/aide.db -p wa -k aide
+-w /etc/audit -p wa -k auditconfig

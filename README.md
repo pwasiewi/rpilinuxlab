@@ -31,17 +31,77 @@ root. `xp` exports these together with `XP_LAB_DIR`, so they reach
 `xstage <track> setup` + `spec` (or sed them).
 
 ```
-xp profiles                      # rpi400, rpi3, zero2w, amd64
-export XPROFILE=rpi3             # per-tab active profile
-sudo xp setup                    # xarm toolchain + xstage catalyst dirs
-sudo xp build                    # rootfs: stage3 unpack (arm64) / tiny build
-sudo xp rpi && sudo xp image     # Pi payload + board sd.img (192.168.0.201)
-xp gate                          # qemu boot gate (raspi3b for the Pi 3)
-sudo xp sd /dev/sdX              # dd to the card
-sudo xp rpi400 enter             # aarch64 shell in the Pi 400 rootfs (qemu-user)
-sudo xp rpi400 stage1            # catalyst under qemu; distccd auto-starts
-sudo xp rpi400 log               # watch it (also: log emerge, qlop)
+xp profiles                      # rpi3 rpi400 rpi400kde rpi400hard rpi400openrc
+                                 #   zero zero2w | amd64 amdkde amdkdehard
+                                 #   nvidiahard intelhard intelgnome
+sudo xp rpi400kde setup          # xarm toolchain + xstage catalyst dirs
+     xp rpi400kde seed           # stage3 in the profile's flavour -> dl/,
+                                 #   sha256 + releng GPG verified (no root)
+sudo xp rpi400kde build          # unpack it -> build/<PROF_BUILD_SUBDIR>/rootfs
+sudo xp rpi400kde rootgcc        # only when the stage3's gcc major differs from
+                                 #   the crossdev toolchain's: cross-emerge that
+                                 #   gcc into the rootfs, select it, rebuild its
+                                 #   ld.so.cache. 'pkgs' refuses until they match
+                                 #   (hours — a native gcc built under cross)
+sudo xp rpi400kde sysroot-prep   # OPTIONAL, only after a from-scratch sysroot
+                                 #   (xarm clean / fresh setup): pre-seeds
+                                 #   PROF_SYSROOT_PKGS + re-patches qca's cmake
+                                 #   export — things 'pkgs' resolver can never
+                                 #   reach on its own. No-op if the sysroot
+                                 #   already has a completed build in it
+sudo xp rpi400kde pkgs           # PROF_PKGS into the rootfs (cross-emerge).
+                                 #   NOT optional for a desktop profile: an
+                                 #   upstream stage3 ships no session .desktop,
+                                 #   and 'image' dies when PROF_BOARD_XSESSION
+                                 #   names one it cannot find
+sudo xp rpi400kde rpi            # Pi payload: kernel8.img, start*.elf, DTBs
+sudo xp rpi400kde image          # conf + configure + sd.img (FAT32 boot + ext4)
+     xp rpi400kde gate           # qemu boot gate (raspi3b / raspi4b per board)
+sudo xp rpi400kde sd /dev/sdX    # dd to the card                     [confirm]
+sudo xp rpi400kde enter          # aarch64 shell in the rootfs (qemu-user)
+     xp rpi400kde log            # watch a long build (also: log emerge, qlop)
 ```
+
+The profile is named on every line on purpose. `export XPROFILE=rpi400kde`
+replaces that argument — but **only for commands that do not go through
+`sudo`**: sudoers runs `env_reset` and nothing keeps `XPROFILE`, so
+`sudo xp build` after an export loses it and stops with "No profile" (it
+refuses rather than guessing, so nothing runs against the wrong tree). Either
+spell the profile out as above, or use `sudo -E xp build`.
+
+`build` unpacks the newest `dl/stage3-arm64-<flavour>-*.tar.xz`, so the block
+above is the whole path from nothing to a bootable card. Building the stage3
+**yourself** instead is a separate, optional branch — catalyst under qemu-user
+with the compiles offloaded to the host's crossdev gcc, hours rather than
+minutes:
+
+```
+sudo xp rpi400kde snapshot       # gentoo.git -> catalyst snapshot, records the treeish
+     xp rpi400kde spec           # render stage1/2/3 specs for the profile's portage profile
+sudo xp rpi400kde stage1         # toolchain subset of @system, from the seed
+sudo xp rpi400kde stage3         # emerge -e @system                     ← hours
+sudo xp rpi400kde verify         # unpack + qemu-chroot smoke test
+sudo XSTAGE_ARM64_TARBALL=<built tarball> xp rpi400kde build   # rejoin at 'pkgs'
+```
+
+Note where the assignment sits on that last line: `VAR=... sudo xp ...` would
+set the variable for `sudo` only, and `env_reset` drops it — `build` would then
+quietly unpack the newest **downloaded** seed instead of the stage3 just built,
+with no error to notice. `sudo VAR=... xp ...` (or `sudo -E`) is the form that
+reaches the script.
+
+`stage2` exists as an explicit educational step (bootstrap.sh inside the
+stage1 chroot); the default path goes stage1 → stage3 like modern releng, and
+`xp <profile> all` runs seed + snapshot + spec + stage1 + stage3 in one go.
+
+This branch also **needs no `rootgcc`**: `setup` layers a repo-owned keyword
+fragment (`genstage/stages-qemu.portage/`) into the catalyst confdir, so the
+chroot builds the same gcc major as the cross toolchain from stage1 on, and
+`spec` refuses to render if that bound ever drifts. Both halves matter for the
+same reason — those compiles ship to the host distccd, so the chroot's gcc and
+the crossdev gcc must share a major or you get ICEs and silent miscompilation
+(`xarm distcc chroot-setup` refuses the mismatch outright), and the stage3 that
+comes out is the seed a board rootfs is unpacked from.
 
 Variant profiles: copy a conf, set `PROF_BUILD_SUBDIR` (own build tree,
 shared sysroot + binpkgs) and optionally `PROF_PKGS` (`xp <p> pkgs`). All ARM

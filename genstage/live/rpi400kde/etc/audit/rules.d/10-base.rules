@@ -1,0 +1,23 @@
+# arm64 override of genstage/live/hardened/etc/audit/rules.d/10-base.rules —
+# kept in sync with ../audit.rules per that file's header comment (auditd
+# loads audit.rules directly and never runs augenrules, so this copy is only
+# a fallback for the day augenrules --load is used). Full rationale for the
+# syscall-list change and the dropped b32 line: see ../audit.rules.
+
+# First rule - delete all
+# This is to clear out old rules, so we don't append to them.
+-D
+
+# Feel free to add below this line. See auditctl man page
+
+# aarch64 only — see ../audit.rules for why b32 is dropped and why
+# open/fstat/dup2/stat became openat/newfstatat/dup3.
+-a exit,never -F arch=b64 -S read -S write -S openat -S newfstatat -S mmap -S brk -S munmap -S nanosleep -S fcntl -S close -S dup3 -S rt_sigaction
+
+# The following rule would cause the capture of all systems not caught above.
+# -a exit,always -S all
+
+# Increase the buffers to survive stress events
+-b 8192
+
+# vim:ft=conf:

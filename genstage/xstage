@@ -365,6 +365,12 @@ STATE="${XDIR}/state"
 LOGDIR="${XDIR}/logs"
 RELENG="${XDIR}/releng"
 CONFDIR="${RELENG}/releases/portage/stages"
+# Repo-owned fragments layered onto the releng confdir. releng is an upstream
+# clone that setup creates once and nothing ever pulls or cleans, so anything
+# the lab needs in there has to be a file in THIS repo that setup copies in —
+# otherwise it exists on one machine only. Empty for amd64: that confdir is
+# used exactly as upstream ships it.
+CONFDIR_OVERLAY=""
 # the sync mirror, not repo/gentoo.git: only it has the CI-verified 'stable'
 # branch, plus the generated metadata/md5-cache catalyst profits from
 GENTOO_GIT="https://anongit.gentoo.org/git/repo/sync/gentoo.git"
@@ -488,6 +494,7 @@ use_arm64_stage_conf() {
     AUTOBUILDS="${ARM64_AUTOBUILDS}"
     REL_TYPE="${XSTAGE_REL_TYPE:-lab-arm64}"
     CONFDIR="${RELENG}/releases/portage/stages-qemu"
+    CONFDIR_OVERLAY="${HERE}/stages-qemu.portage"
     CONF="${XDIR}/conf/catalyst-arm64.conf"
     SPECDIR="${XDIR}/specs-arm64"
     STATE="${XDIR}/state-arm64"
@@ -689,6 +696,69 @@ render_spec() {  # render_spec <stage1|stage2|stage3> <stamp> <tree> <seed_subpa
     info "Rendered ${SPECDIR}/${st}.spec"
 }
 
+# The arm64 chroot's gcc must share the cross toolchain's major: every compile
+# in it is shipped by distcc to the host's crossdev gcc, and the stage3 it
+# produces is the seed a board rootfs is unpacked from. stages-qemu carries no
+# package.accept_keywords at all, so without this the chroot builds STABLE
+# arm64 gcc — 15.3.0 while the cross toolchain sits on 16.
+#
+# The 'releng' path component is not decoration: 'portage_prefix: releng' in
+# the specs makes catalyst delete etc/portage/<type>/releng from the finished
+# stage. A fragment outside that prefix would be SHIPPED INSIDE the stage3
+# tarball. The xstage-* naming is what lets the delete-then-render pass below
+# be idempotent without ever touching upstream's own files.
+confdir_sync_overlay() {
+    [[ -n ${CONFDIR_OVERLAY} ]] || return 0
+    [[ -d ${CONFDIR_OVERLAY} ]] || die "CONFDIR_OVERLAY=${CONFDIR_OVERLAY} is not a directory"
+    [[ -d ${CONFDIR} ]] || die "No releng confdir ${CONFDIR} — the clone step of setup did not run"
+    local cur next
+    cur=$("${TUPLE}-gcc" -dumpversion 2>/dev/null | cut -d. -f1)
+    [[ -n ${cur} ]] || die "Cannot read ${TUPLE}-gcc version — run: sudo xarm setup"
+    next=$((cur + 1))
+    # a bound left over from an earlier toolchain major is worse than none: it
+    # would keep pinning the chroot to a gcc the host no longer has
+    find "${CONFDIR}" -type f -name 'xstage-*' -delete
+    local src rel dst n=0
+    while IFS= read -r src; do
+        rel="${src#"${CONFDIR_OVERLAY}/"}"
+        [[ $(basename "${rel}") == xstage-* ]] ||
+            die "confdir overlay file '${rel}' is not named xstage-* — the cleanup pass only removes those, so it could never be updated or withdrawn"
+        case "${rel}" in
+            package.accept_keywords/releng/*|package.mask/releng/*|\
+            package.unmask/releng/*|package.use/releng/*|package.env/releng/*|\
+            env/releng/*|profile/package.use.force/releng/*|\
+            profile/package.use.mask/releng/*) ;;
+            *) die "confdir overlay path '${rel}' is outside the 'releng' prefix catalyst strips (portage_prefix: releng) — it would ship inside the stage3 tarball" ;;
+        esac
+        dst="${CONFDIR}/${rel}"
+        mkdir -p "$(dirname "${dst}")"
+        sed -e "s|@GCC_NEXT@|${next}|g" \
+            -e "s|@GCC_PREV@|${cur}|g" \
+            -e "s|@SUBARCH@|${SUBARCH}|g" "${src}" > "${dst}"
+        n=$((n + 1))
+    done < <(find "${CONFDIR_OVERLAY}" -type f)
+    info "Layered ${n} confdir fragment(s) into ${CONFDIR} (gcc bound <${next}, cross toolchain gcc-${cur})"
+}
+
+# 'spec' runs without root (releng is root-owned) so it cannot write the
+# fragment — it asserts the EFFECT instead: the bound on disk must admit
+# exactly today's cross toolchain. catalyst rsyncs the confdir at
+# setup_confdir and sets an autoresume flag, so a fragment that only appears
+# after stage1 started is never picked up.
+confdir_assert_overlay() {
+    [[ -n ${CONFDIR_OVERLAY} ]] || return 0
+    local cur next f have
+    cur=$("${TUPLE}-gcc" -dumpversion 2>/dev/null | cut -d. -f1)
+    [[ -n ${cur} ]] || die "Cannot read ${TUPLE}-gcc version — run: sudo xarm setup"
+    next=$((cur + 1))
+    f="${CONFDIR}/package.accept_keywords/releng/xstage-toolchain"
+    [[ -f ${f} ]] ||
+        die "No ${f} — the catalyst chroot would build stable ${SUBARCH} gcc and skew against the cross toolchain (gcc-${cur}): sudo $0 ${TGT:-arm64} setup"
+    have=$(sed -n 's|^<sys-devel/gcc-\([0-9]\+\).*|\1|p' "${f}")
+    [[ ${have} == "${next}" ]] ||
+        die "${f} bounds gcc at <${have:-?} but the cross toolchain is gcc-${cur} (wants <${next}) — sudo $0 ${TGT:-arm64} setup"
+}
+
 cmd_spec() {
     # the profile decides what @system is; the flavour only names the tarball.
     # Catch a mismatch here, before six hours of catalyst mislabels its output.
@@ -711,6 +781,7 @@ cmd_spec() {
     local stamp; stamp=$(date -u +%Y%m%dT%H%M%SZ)
     echo "${stamp}" > "${STATE}/stamp"
     [[ -d ${CONFDIR} ]] || die "No releng confdir ${CONFDIR} — run: sudo $0 ${TGT:-amd64} setup"
+    confdir_assert_overlay
     local st
     for st in stage1 stage2 stage3; do
         render_spec "${st}" "${stamp}" "${tree}" "${seed_subpath}"
@@ -3338,7 +3409,9 @@ arm64_stage_preflight() {
 
 cmd_arm64_stage_setup() {
     arm64_stage_preflight
+    # cmd_setup is what creates the releng clone, so the overlay goes after it
     cmd_setup
+    confdir_sync_overlay
 }
 
 # --- crossstage: @system at native speed, no catalyst ----------------------
