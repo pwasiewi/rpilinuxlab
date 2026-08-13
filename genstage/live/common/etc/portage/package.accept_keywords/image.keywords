@@ -112,3 +112,10 @@ dev-python/httpx-sse
 dev-python/sse-starlette
 dev-python/pybase64
 dev-python/mcp
+
+# app-misc/ddcci-driver-linux (::pwr, written 2026-08-13): an out-of-tree
+# kernel module pinned to an upstream master commit. Bare atom, not '**' —
+# unlike the live ebuilds at the top of this file it has a real version and
+# KEYWORDS="~amd64", and the pin means 'pkgs' fetches a fixed tarball rather
+# than cloning HEAD, so it does not carry their reproducibility caveat.
+app-misc/ddcci-driver-linux

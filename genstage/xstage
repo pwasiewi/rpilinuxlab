@@ -2306,11 +2306,36 @@ cmd_live_kernel() {
     fi
 
     local list; list=$(live_pkg_list)
-    if [[ -n ${list} || -n ${LIVE_SETS} ]]; then
+    # The overlay half rides along, not just live_pkg_list. Until 2026-08-13
+    # this pass replayed PROF_LIVE_PKGS only, which quietly meant no ::pwr
+    # package could ever be an out-of-tree kernel module: 'pkgs' has to
+    # exclude such a package (linux-mod-r1 dies before the tree is built), and
+    # with no replay here nothing would ever merge it — the image would ship
+    # without it and no step would fail. app-misc/ddcci-driver-linux is the
+    # first overlay kmod package and is what exposed this.
+    # Costs nothing when there is no such package: EMERGE_DEFAULT_OPTS carries
+    # --update, so everything already merged in 'pkgs' drops straight out of
+    # the graph, exactly as it does for the list above.
+    # Same repo guard as the merge in cmd_live_pkgs — without the overlays
+    # configured in the image these atoms do not resolve at all, and an
+    # unresolvable atom aborts the pass rather than being skipped.
+    local overlay_list=""
+    if [[ -n ${LIVE_OVERLAY_PKGS} ]]; then
+        local r missing=""
+        for r in ${LIVE_REPOS}; do
+            [[ -d ${LIVE_ROOT}/var/db/repos/${r} ]] || missing+=" ${r}"
+        done
+        if [[ -n ${missing} ]]; then
+            warn "Post-kernel pass: skipping overlay packages — missing repos:${missing}"
+        else
+            overlay_list="${LIVE_OVERLAY_PKGS}"
+        fi
+    fi
+    if [[ -n ${list} || -n ${LIVE_SETS} || -n ${overlay_list} ]]; then
         info "Post-kernel pass: retrying packages that needed the built kernel tree"
         live_chroot module-pkgs <<-EOF
 	emerge --verbose --keep-going --with-bdeps=y \\
-	    ${LIVE_SETS} $(printf '%s ' ${list})
+	    ${LIVE_SETS} $(printf '%s ' ${list}) ${overlay_list}
 	EOF
     fi
 

@@ -1,0 +1,24 @@
+# TPM2 support in systemd itself, for the hardened images.
+#
+# NOT the same thing as app-crypt/tpm2-tools, which these profiles have
+# shipped all along (amdkdehard.conf PROF_LIVE_PKGS). tpm2-tools is the CLI;
+# USE=tpm is what puts TPM2 into systemd's own paths — systemd-cryptenroll
+# --tpm2-device, systemd-pcrlock, the measured-boot units, and the
+# /usr/lib/udev/tpm2_id callout.
+#
+# That callout is why this file exists. systemd installs
+# /usr/lib/udev/rules.d/60-tpm2-id.rules UNCONDITIONALLY, but the tpm2_id
+# binary it calls only gets built with USE=tpm. On a machine with a TPM the
+# result is an error at every boot and no TPM2 device properties in udev:
+#
+#   (udev-worker): tpmrm0: Failed to find and pin callout binary
+#   "/usr/lib/udev/tpm2_id": No such file or directory
+#
+# Observed on the installed nvidiahard system 2026-08-13 (bootctl reports
+# "TPM2 Support: yes"), which is a stock build of this profile — so it is a
+# profile-level gap, not host drift.
+#
+# Cost: one dependency, app-crypt/tpm2-tss (systemd-261.1.ebuild:102).
+# Placed in the 'hardened' layer rather than 'common' because it is these
+# profiles that carry the TPM2/PCR material from intro-hardening.md.
+sys-apps/systemd tpm

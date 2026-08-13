@@ -219,3 +219,24 @@ CONFIG_I2C=y
 CONFIG_I2C_CHARDEV=y
 CONFIG_I2C_PIIX4=m
 CONFIG_I2C_I801=m
+# The class device app-misc/ddcci-driver-linux registers a DDC/CI monitor
+# into. Pinned rather than left to defconfig because the ebuild's
+# CONFIG_CHECK dies without it, which would abort 'pkgs' late and for a
+# reason that reads like a package problem rather than a kernel one.
+CONFIG_BACKLIGHT_CLASS_DEVICE=y
+
+# --- uinput: userspace-created input devices --------------------------------
+# Not optional in practice, despite sounding like a niche debugging feature.
+# bluetoothd creates a uinput device per connected A2DP/AVRCP headset to
+# deliver the remote's transport keys (play/pause, volume, next) to the
+# desktop; without /dev/uinput it logs
+#   avctp.c:init_uinput() AVRCP: failed to create uinput for <device>
+# at every connect and the headset's buttons simply do nothing. Observed on
+# the installed nvidiahard system with a Sennheiser Momentum 3, 2026-08-13.
+# Same node is what ydotool/wtype and the Wayland remote-input paths use.
+# =m is safe here, unlike i2c-dev and sg above: uinput.c carries
+#   MODULE_ALIAS("devname:" UINPUT_NAME)   (drivers/input/misc/uinput.c:1167)
+# so it lands in modules.devname, systemd-tmpfiles creates /dev/uinput from
+# kmod-static-nodes at boot, and the first open() autoloads it. No
+# modules-load.d entry needed — checked in the 7.1.5 tree, not assumed.
+CONFIG_INPUT_UINPUT=m

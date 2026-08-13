@@ -1,0 +1,57 @@
+# Attach app-misc/ddcci-driver-linux to the DDC/CI buses at boot.
+#
+# WHY THIS UNIT HAS TO EXIST: loading the module is not enough on a modern
+# kernel. ddcci used to walk the i2c adapters itself, but that was removed —
+# the driver says so out loud on load:
+#
+#   ddcci: WARNING: Auto-probing of displays is not available on kernel 6.8
+#   and later
+#
+# so without an explicit instantiation the module sits there having done
+# nothing, no /sys/class/backlight entry appears, and the failure is silent.
+# Verified on the installed nvidiahard host 2026-08-13: after
+# 'echo "ddcci 0x37" > /sys/bus/i2c/devices/i2c-6/new_device' the driver
+# registered ddcci6 for an AOC Q32G1WG4 and ddcci-backlight autoloaded on its
+# own alias.
+#
+# The address is fixed by the standard: 0x37 is the DDC/CI slave address.
+#
+# WHY THE LOOP INSTEAD OF A UDEV RULE ON THE RIGHT BUS: the tidy way would be
+# to follow each DRM connector's 'ddc' symlink, but the NVIDIA proprietary
+# driver does not publish one (checked: /sys/class/drm/card1-DP-1 has no ddc
+# attribute, unlike amdgpu/i915). There is no reliable connector -> i2c map in
+# sysfs here, so every candidate bus is offered and the driver's own probe
+# decides. A bus with nothing on the DDC line simply NAKs and no device is
+# created.
+#
+# *SMBus* is filtered out deliberately and is the one dangerous case: the
+# chipset SMBus adapters (i2c-0..2 here, "SMBus PIIX4 adapter") carry the DIMM
+# SPD EEPROMs and assorted board devices, and poking an unrelated address
+# there is not something to do on a hunch. GPU DDC lines are the only place
+# 0x37 means what we think it means.
+
+[Unit]
+Description=Attach the ddcci driver to DDC/CI-capable I2C buses
+Documentation=https://gitlab.com/ddcci-driver-linux/ddcci-driver-linux
+After=systemd-modules-load.service
+ConditionPathExists=/sys/bus/i2c
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Never fails the boot: a monitor that does not speak DDC/CI, or a GPU whose
+# outputs are all empty, is a normal state and not an error worth a red unit.
+#
+# EVERY '$' IS DOUBLED. systemd does its own variable expansion on ExecStart
+# and replaces an unknown ${...} with the empty string before /bin/sh ever
+# sees it; '$$' is how the manual says to pass a literal dollar through. The
+# first version of this unit used single dollars and looked like it worked —
+# the buses were instantiated — but the "already bound" guard had silently
+# become '[ -e /sys/bus/i2c/devices/-0037 ]', so a restart re-poked every bus
+# and the log filled with "Failed to register i2c client ddcci at 0x37 (-16)".
+# The same snippet run by hand under 'sh -c' behaved correctly, which is what
+# makes this one worth a comment rather than a quiet fix.
+ExecStart=/bin/sh -c 'for b in /sys/bus/i2c/devices/i2c-*; do [ -e "$$b/name" ] || continue; case "$$(cat "$$b/name")" in *SMBus*) continue ;; esac; n=$${b##*/i2c-}; [ -e "/sys/bus/i2c/devices/$${n}-0037" ] && continue; echo "ddcci 0x37" > "$$b/new_device" 2>/dev/null || true; done'
+
+[Install]
+WantedBy=multi-user.target
