@@ -526,7 +526,7 @@ setup_efistub_luks() {
         _raw=$(dmsetup info -c --noheadings -o uuid 2>/dev/null | head -1 \
             | sed 's/^CRYPT-LUKS2-//' | sed 's/-[^-]*$//' || true)
         if [[ -z "$_raw" ]]; then
-            die "Provide LUKS UUID via --luks-uuid UUID or open container: cryptsetup luksOpen /dev/... gentoo_crypt"
+            die "Provide LUKS UUID via --luks-uuid UUID or open container: cryptsetup luksOpen /dev/... root"
         fi
         # dmsetup strips dashes — reformat to xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
         LUKS_UUID=$(echo "$_raw" | sed \
@@ -535,8 +535,15 @@ setup_efistub_luks() {
     fi
 
     # Build cmdline: kernel CONFIG_CMDLINE is base, efibootmgr --unicode appends
-    # rd.luks.uuid tells dracut/genkernel initramfs which device to unlock
-    local LUKS_CMDLINE="crypt_root=UUID=$LUKS_UUID root=/dev/mapper/gentoo_crypt $CMDLINE_EXTRA"
+    # rd.luks.uuid tells dracut/genkernel initramfs which device to unlock.
+    # genkernel's initrd.scripts hardcodes the mapper name to "root" for
+    # crypt_root (openLUKS "root" / REAL_ROOT="/dev/mapper/root" in
+    # start_LUKS_root() — verified against the installed genkernel package,
+    # not configurable via crypttab or crypt_root_options). root= MUST say
+    # /dev/mapper/root or genkernel unlocks the container successfully and
+    # then reports "Could not find the root block device" because it's
+    # looking for a different mapper name than the one it just created.
+    local LUKS_CMDLINE="crypt_root=UUID=$LUKS_UUID root=/dev/mapper/root $CMDLINE_EXTRA"
     info "LUKS cmdline (appended to CONFIG_CMDLINE): $LUKS_CMDLINE"
 
     sbsign \
@@ -561,7 +568,8 @@ setup_efistub_luks() {
     echo ""
     echo "  Requirements:"
     echo "  - genkernel built with --luks: genkernel --luks initramfs"
-    echo "  - /etc/crypttab: gentoo_crypt UUID=$LUKS_UUID none luks"
+    echo "  - genkernel always names the unlocked root mapper /dev/mapper/root"
+    echo "    (hardcoded in initrd.scripts' start_LUKS_root, not configurable)"
 }
 setup_efi_shell() {
     info "METHOD: EFI Shell..."

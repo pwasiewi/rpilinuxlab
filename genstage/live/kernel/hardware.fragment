@@ -148,6 +148,34 @@ CONFIG_CARL9170=m
 CONFIG_ZD1211RW=m
 CONFIG_RTL8187=m
 
+# --- Bluetooth, per-vendor halves of the WiFi combo cards above -------------
+# On a laptop the Bluetooth radio sits on the SAME card as the WiFi, so this
+# list must track the WiFi list above vendor-for-vendor. live.fragment ships
+# the generic CONFIG_BT_HCIBTUSB; that alone is NOT enough — btusb needs the
+# vendor sub-option compiled in or it binds the USB interface and then never
+# registers an HCI controller. Symptom: WiFi works, `rfkill list` shows no
+# Bluetooth line at all, and bluetoothctl says "No default controller
+# available" while dmesg looks clean.
+# The MTK gap was the concrete case (2026-08-13): the fragment enabled
+# MT7921E/MT7925E ("everywhere on AMD laptops") but not BT_HCIBTUSB_MTK, so
+# every MediaTek MT7922/RZ616 machine — e.g. ThinkPad T14 AMD — booted with
+# working WiFi and no Bluetooth controller. Intel and Realtek machines were
+# unaffected, which is why sibling images on those cards looked fine.
+CONFIG_BT_HCIBTUSB_MTK=y
+CONFIG_BT_HCIBTUSB_RTL=y
+CONFIG_BT_HCIBTUSB_BCM=y
+CONFIG_BT_INTEL=m
+CONFIG_BT_MTK=m
+# Intel BE200/BE201 (WiFi 7) carry Bluetooth over PCIe, not USB — a separate
+# driver from btusb, and increasingly common on new laptops.
+CONFIG_BT_INTEL_PCIE=m
+# Qualcomm/Atheros and some Broadcom parts attach over UART instead of USB.
+CONFIG_BT_HCIUART=m
+CONFIG_BT_HCIUART_H4=y
+CONFIG_BT_HCIUART_BCM=y
+CONFIG_BT_HCIUART_QCA=y
+CONFIG_BT_QCA=m
+
 # --- disk controllers: SATA / NVMe / SCSI / USB ----------------------------
 # =y for the boot path (the live medium and the target disks must be visible
 # without an initrd module round-trip), =m for the exotic HBAs.
