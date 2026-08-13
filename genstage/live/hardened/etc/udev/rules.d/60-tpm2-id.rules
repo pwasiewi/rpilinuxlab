@@ -1,0 +1,32 @@
+# Local override of /usr/lib/udev/rules.d/60-tpm2-id.rules (same filename in
+# /etc wins). One word changed: IMPORT{program} -> IMPORT{builtin}.
+#
+# systemd-261.1 ships this rule calling "tpm2_id identify" as an external
+# PROGRAM, but its own build compiles tpm2_id as a udev BUILTIN — upstream's
+# src/udev/meson.build adds udev-builtin-tpm2_id.c under `if
+# conf.get('HAVE_TPM2') == 1`, and there is no /usr/lib/udev/tpm2_id binary in
+# the tree at all. So on any machine with a TPM the rule cannot fire and udev
+# logs, at every boot and every trigger:
+#
+#   tpmrm0: Failed to find and pin callout binary "/usr/lib/udev/tpm2_id"
+#   60-tpm2-id.rules:7 IMPORT{program}="tpm2_id identify": Failed to execute
+#
+# This is NOT a missing USE flag — USE=tpm (package.use/tpm2.use) is required
+# and does register the builtin, but it does not help while the rule looks for
+# a program. Verified on nvhard 2026-08-13, systemd-261.1, AMD fTPM:
+#   udevadm test-builtin "tpm2_id identify" /sys/class/tpmrm/tpmrm0
+#   -> ID_TPM2_MANUFACTURER=AMD, ID_TPM2_MODALIAS=fi2.0:lv0:rv1.38:...
+#
+# Upstream has already fixed it: systemd main's rules.d/60-tpm2-id.rules line 7
+# reads IMPORT{builtin}. DELETE THIS FILE once the tree carries a systemd whose
+# own copy says builtin — an /etc override of a package file is exactly the
+# kind of thing that silently rots.
+
+ACTION=="remove", GOTO="tpm2_id_end"
+SUBSYSTEM!="tpmrm", GOTO="tpm2_id_end"
+KERNEL!="tpmrm[0-9]*", GOTO="tpm2_id_end"
+
+IMPORT{builtin}="tpm2_id identify"
+ENV{ID_TPM2_MODALIAS}!="", IMPORT{builtin}="hwdb 'tpm2:$env{ID_TPM2_MODALIAS}'"
+
+LABEL="tpm2_id_end"
