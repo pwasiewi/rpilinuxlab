@@ -205,6 +205,18 @@ CONFIG_DEBUG_INFO_BTF=y
 
 # firewalling + containers (docker/lxc are in the package list)
 CONFIG_NETFILTER=y
+# The SECOND menu gate in this section, and it behaves exactly like
+# NETFILTER_XTABLES_LEGACY below: with ADVANCED=n the kernel only offers "the
+# ones used in common setups" and every other xt match/target is INVISIBLE —
+# not disabled-but-selectable, simply absent from Kconfig. Asking for one of
+# them in a fragment is then a no-op that leaves no trace anywhere.
+#
+# Measured on the installed nvidiahard host 2026-08-13: the whole kernel had
+# four xt matches (addrtype, conntrack, policy, state). 'hashlimit' could not
+# be enabled at all, and CONFIG_BRIDGE_NETFILTER below had been silently
+# dropped from every image built so far despite this fragment asking for it.
+# Upstream's own default here is y; something in the zen defconfig turns it off.
+CONFIG_NETFILTER_ADVANCED=y
 CONFIG_NF_TABLES=m
 CONFIG_NF_CONNTRACK=m
 # legacy xtables path too: the hardened layer ships a default-deny
@@ -224,6 +236,15 @@ CONFIG_NETFILTER_XTABLES_LEGACY=y
 CONFIG_NETFILTER_XT_MATCH_CONNTRACK=m
 CONFIG_NETFILTER_XT_MATCH_STATE=m
 CONFIG_NETFILTER_XT_NAT=m
+# Per-source-IP rate limiting for the sshd rule in the hardened layer's
+# iptables/ip6tables rules-save. Only reachable because ADVANCED=y above.
+# NOTE THE COUPLING: those rules and these symbols must ship together. A
+# rules-save containing '-m hashlimit' on a kernel without the module makes
+# iptables-restore FAIL, and a failed restore means the machine boots with no
+# firewall at all — fail-open, the worst outcome of the three. Never add the
+# rule to a layer without this line, or the line without rebuilding the kernel.
+CONFIG_NETFILTER_XT_MATCH_HASHLIMIT=m
+CONFIG_NETFILTER_XT_MATCH_LIMIT=m
 CONFIG_IP_NF_IPTABLES=m
 CONFIG_IP_NF_IPTABLES_LEGACY=m
 CONFIG_IP_NF_FILTER=m
@@ -231,11 +252,46 @@ CONFIG_IP_NF_MANGLE=m
 # docker publishes ports through the nat table; without it 'docker run -p'
 # fails at container start
 CONFIG_IP_NF_NAT=m
+# ...and docker >= 29 needs the RAW table as well, for every container, not
+# just published ones. It installs a "direct access filtering" guard at
+# container start:
+#   iptables -t raw -A PREROUTING -d <container ip> ! -i docker0 -j DROP
+# and without the table the daemon refuses to create the endpoint at all:
+#   failed to set up container networking: Unable to enable DIRECT ACCESS
+#   FILTERING - DROP rule: can't initialize iptables table `raw'
+# i.e. NO container starts, not even 'docker run hello-world'. Found on the
+# installed nvidiahard host 2026-08-13 — the whole AI stack (ollama,
+# open-webui, searxng) was dead on a system where docker.service itself was
+# happily "active". Same shape as the XTABLES_LEGACY gate above: a missing
+# table shows up as a daemon-level error that reads like a docker bug.
+CONFIG_IP_NF_RAW=m
 CONFIG_IP6_NF_IPTABLES=m
 CONFIG_IP6_NF_IPTABLES_LEGACY=m
 CONFIG_IP6_NF_FILTER=m
-# docker's bridge networking wants netfilter on the bridge path
-CONFIG_BRIDGE_NETFILTER=m
+CONFIG_IP6_NF_RAW=m
+# br_netfilter is deliberately OFF, stated explicitly rather than left to a
+# default — until 2026-08-13 this line read CONFIG_BRIDGE_NETFILTER=m with the
+# comment "docker's bridge networking wants netfilter on the bridge path", and
+# that was wrong twice over: the symbol was invisible (ADVANCED=n, see above)
+# so no image ever shipped br_netfilter.ko, and docker does not need it anyway.
+#
+# What it actually does is push L2-BRIDGED frames through the ipv4/ipv6
+# iptables hooks and conntrack. Everything docker relies on is routed, not
+# bridged — published ports (nat PREROUTING), inter-network isolation
+# (FORWARD), egress masquerading, container->host on the bridge address (INPUT).
+# Checked on a running installation: containers work and 'docker info' reports
+# no warning with the module absent.
+#
+# It is genuinely required for kubernetes (kube-proxy needs
+# bridge-nf-call-iptables=1), for docker --icc=false, and for filtering traffic
+# between containers on the SAME bridge — none of which these images do.
+#
+# The cost is not zero: every bridged frame enters the IP stack and conntrack,
+# IP defragmentation is forced on the bridge path, and FORWARD rules suddenly
+# apply to traffic nobody expected — with FORWARD policy DROP in the hardened
+# ruleset that is a quiet-breakage risk. Upstream is moving the other way
+# (nftables has a proper 'bridge' family). Flip this to =m if k8s ever lands.
+# CONFIG_BRIDGE_NETFILTER is not set
 CONFIG_BRIDGE=m
 CONFIG_VETH=m
 CONFIG_MACVLAN=m

@@ -2,12 +2,49 @@
 # (enabled via the wants/ symlink in this overlay). Outbound stays open — this
 # is a workstation, not a server. SSH is allowed because the live image runs
 # sshd; tighten or drop the rule after installation if the host policy says so.
+#
+# ORDERING vs docker, and why it must not be "fixed" by hand: iptables-restore
+# REPLACES the whole filter table, so it has to run before docker.service or it
+# wipes the DOCKER/DOCKER-USER/DOCKER-FORWARD chains and containers lose
+# networking until dockerd is restarted. Boot ordering gives that for free
+# (measured on nvhard: restore 16:57:52, docker 16:57:59). To change rules on a
+# RUNNING system use 'iptables -I/-D' against the live table, never a restore.
+#
+# This is the legacy xtables backend (CONFIG_*_IPTABLES_LEGACY, live.fragment).
+# 'nft list ruleset' prints NOTHING here even though the firewall is fully
+# active — check with 'iptables -S'. That mistake was made during the
+# 2026-08-13 audit of the installed host and reported as "no firewall at all".
 *filter
 :INPUT DROP [0:0]
 :FORWARD DROP [0:0]
 :OUTPUT ACCEPT [0:0]
 -A INPUT -i lo -j ACCEPT
 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# Container -> host. Docker manages FORWARD and nat, never INPUT, so without
+# these two lines every container->host connection dies on the policy. Not
+# hypothetical on these images: aillama binds llama-server to the docker0
+# address and the Open WebUI container reaches it there (8080/8093/8094), and
+# airag's embedding/rerank servers work the same way.
+# Verified on nvhard 2026-08-13: a listener on 10.20.0.1:18093 was unreachable
+# from a container until these rules existed. An earlier test against port 22
+# wrongly looked fine — the ssh rule below is not interface-scoped, so it let
+# container traffic through on that one port and hid the problem.
+# br-+ covers docker's user-defined networks (br-<netid>, e.g. ollama-net).
+# Blanket accept from the container bridges: any container may reach any host
+# port. Deliberate for a single-user workstation running its own images; on a
+# host running untrusted containers, narrow this to the specific ports.
+-A INPUT -i docker0 -j ACCEPT
+-A INPUT -i br-+ -j ACCEPT
 -A INPUT -p icmp --icmp-type echo-request -j ACCEPT
+# Brute-force brake on sshd, per SOURCE ADDRESS (--hashlimit-mode srcip), so
+# one noisy peer cannot lock anyone else out. Thresholds chosen to be invisible
+# to legitimate use and still fatal to a scanner: burst 30 lets a script open
+# thirty connections back-to-back, then the sustained rate is 15/minute. Human
+# use and rsync/scp loops never approach that; password-guessing runs at
+# hundreds per minute and starts hitting the DROP within seconds.
+# REQUIRES CONFIG_NETFILTER_XT_MATCH_HASHLIMIT (live.fragment). Without the
+# module iptables-restore fails on this line and the machine boots with NO
+# firewall — see the coupling note at that symbol.
+-A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -m hashlimit --hashlimit-name ssh --hashlimit-mode srcip --hashlimit-above 15/minute --hashlimit-burst 30 -j DROP
 -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
 COMMIT

@@ -1,5 +1,26 @@
 # IPv6 counterpart of ../iptables/rules-save. ICMPv6 must pass broadly —
 # neighbour discovery and PMTU die without it, unlike ICMPv4.
+#
+# SSH IS SCOPED HERE AND NOT IN THE IPv4 FILE, on purpose. IPv4 hosts sit
+# behind NAT, so port 22 is only reachable if someone deliberately forwards it.
+# IPv6 has no NAT: a machine with a global address is reachable from the whole
+# internet on every open port, and the only thing in the way is whatever the
+# ISP's router happens to filter. An unscoped "-p tcp --dport 22 ACCEPT" on
+# IPv6 therefore publishes sshd to the world — that is the single most obvious
+# exposure these images had (found on nvhard 2026-08-13, global 2a02:… address).
+#
+# The scope is deliberately layered so a prefix change cannot lock anyone out:
+#   fe80::/10  link-local. NEVER changes, works from any machine on the same
+#              segment ('ssh user@fe80::…%eth0'). This is the safety net, and
+#              it is why narrowing the GUA below is not a lockout risk.
+#   fd00::/8   ULA, for a site that runs its own stable prefix.
+# A site-specific global prefix is NOT baked into the image — it would be
+# wrong on every machine but one. Add it per host, e.g.
+#   ip6tables -I INPUT 4 -s <prefix>::/64 -p tcp --dport 22 \
+#       -m conntrack --ctstate NEW -j ACCEPT
+# and mirror it into this file on that host. If the ISP rotates the prefix the
+# rule stops matching: IPv4 on the LAN and IPv6 link-local both still work, so
+# the failure mode is "GUA ssh quietly stops", not "no way in".
 *filter
 :INPUT DROP [0:0]
 :FORWARD DROP [0:0]
@@ -7,5 +28,12 @@
 -A INPUT -i lo -j ACCEPT
 -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 -A INPUT -p ipv6-icmp -j ACCEPT
--A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
+# Same brute-force brake as the IPv4 file, and it matters more here: IPv6 has
+# no NAT in front of it. Separate bucket name — v4 and v6 keep independent
+# hashtables (/proc/net/ipt_hashlimit vs ip6t_hashlimit), and one name per
+# table keeps them readable. Must come BEFORE the ACCEPTs below to have any
+# effect. REQUIRES CONFIG_NETFILTER_XT_MATCH_HASHLIMIT (live.fragment).
+-A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -m hashlimit --hashlimit-name ssh6 --hashlimit-mode srcip --hashlimit-above 15/minute --hashlimit-burst 30 -j DROP
+-A INPUT -s fe80::/10 -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
+-A INPUT -s fd00::/8 -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
 COMMIT
