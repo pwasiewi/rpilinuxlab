@@ -1,0 +1,40 @@
+# Version locks for the CUDA/ML stack shipped by the nvidia-flavoured images.
+#
+# WHY THIS FILE EXISTS: 'pkgs' runs
+#     emerge --update --deep --newuse @world @installed        (xstage:1757)
+# so every run re-proposes the newest ::stuff versions of the ML packages.
+# dev-python/vllm-9999 (::pwr) pins several of them to an exact version, and a
+# newer sibling cannot share slot 0 with the pinned one — the result is a wall
+# of "slot conflict" and emerge merging NOTHING AT ALL ("Nothing to merge;
+# quitting"), i.e. the whole image update stalls rather than degrading.
+#
+# Note the asymmetry that makes this confusing: the "skipped due to unsatisfied
+# dependencies" notices (xgrammar, openai, mcp) are harmless chatter; only the
+# slot conflicts below actually stop the merge.
+#
+# Each pin names the package that imposes it, so a future bump knows what has to
+# move first. Lifting any of these means rebuilding vLLM (hours) against the new
+# API — see the pin at vllm-9999.ebuild:143 and memory project_pwr_overlay.
+
+# --- pinned by dev-python/vllm-9999 (~exact-version deps in the ebuild) -------
+>dev-python/tilelang-0.1.9
+>dev-python/humming-kernels-0.1.4
+>dev-python/nvidia-cutlass-dsl-4.5.2
+# the CUTLASS sub-packages move in lockstep with the parent; 4.6.x also split
+# out a NEW one (nvidia-cutlass-dsl-libs-core) that does not exist at 4.5.2
+>dev-python/nvidia-cutlass-dsl-libs-base-4.5.2
+>dev-python/nvidia-cutlass-dsl-libs-cu13-4.5.2
+
+# --- flashinfer: python and cubin halves must match exactly ------------------
+# flashinfer-python-0.6.12 requires ~flashinfer-cubin-0.6.12, and 0.6.17 would
+# drag in CUTLASS 4.6.2, which the vLLM pin above forbids.
+>dev-python/flashinfer-python-0.6.12
+>dev-python/flashinfer-cubin-0.6.12
+
+# --- pinned by other installed packages, not by vLLM -------------------------
+# dev-python/model-hosting-container-standards needs <dev-python/fastapi-0.137.0
+>=dev-python/fastapi-0.137.0
+# sci-ml/transformers-5.15 needs =sci-ml/tokenizers-0.22*
+>=sci-ml/tokenizers-0.23
+# sci-ml/caffe2-9999 needs <dev-python/pybind11-3.0.5
+>=dev-python/pybind11-3.0.5

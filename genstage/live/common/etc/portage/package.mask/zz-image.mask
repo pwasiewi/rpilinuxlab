@@ -14,3 +14,11 @@
 # PYTHON_TARGETS both wheels arrive as a single word and cp dies. ::pwr
 # carries the fixed copy (2026-08-08).
 =dev-python/cuda-tile-bin-1.5.0::stuff
+
+# Slot conflicts against packages the image already has installed. Same failure
+# mode as nvidia/package.mask/ml-stack-pins: without these, 'pkgs' merges
+# nothing at all instead of merging what it can.
+# sys-apps/usbguard-1.1.3 requires <dev-cpp/catch-3
+>=dev-cpp/catch-3
+# app-emulation/qemu-10.2.3 requires ~sys-firmware/edk2-bin-202408
+>sys-firmware/edk2-bin-202408
