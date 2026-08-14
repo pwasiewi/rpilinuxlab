@@ -48,6 +48,14 @@ net-misc/networkmanager ovs
 # DNS-SD in cups itself: without it the daemon ignores avahi entirely and
 # mDNS-discovered printers never appear as queues (nvhard, 2026-08-14)
 net-print/cups zeroconf
+# …and the cycle that flag creates: cups[zeroconf] -> avahi -> avahi[qt6] ->
+# qtbase (buildtime_slot_op) -> cups (qtbase builds against cups). Nothing in
+# the tree USE-depends on avahi's Qt6 bindings (checked md5-cache 2026-08-14),
+# so that edge is free to cut; -gtk kills the sibling loop through gtk+3 (its
+# only consumer is sane-backends's escl OR-dep, satisfied by avahi's default
+# +dbus). GUI toolkits and cups's own daemon deps must not meet in one
+# optional edge.
+net-dns/avahi -qt6 -gtk
 net-print/cups-pdf ppds
 net-print/gutenprint ppds
 sys-apps/systemd fido2
