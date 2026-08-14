@@ -1591,6 +1591,21 @@ live_prep_kconfig() {
 	[ -e /usr/src/linux ] || { echo "no /usr/src/linux symlink" >&2; exit 1; }
 	cd /usr/src/linux
 
+	# 'make LLVM=1 olddefconfig' below needs clang IN THIS CHROOT, and a fresh
+	# stage3 ships only gcc — the LLVM packages arrive in pass 2, which runs
+	# AFTER this step. First-fresh-build gap, found on intelhard 2026-08-14
+	# ("clang: command not found"); amdkdehard/nvidiahard never hit it because
+	# their first kconfig predates the LLVM=1 change (2026-08-10) and clang was
+	# already installed when they re-ran. Merge the slot the image will carry
+	# anyway (LLVM_SLOT from the deployed make.conf) so nothing builds twice;
+	# clang alone suffices here — olddefconfig compiles host tools with HOSTCC,
+	# the full lld/llvm-* set is only needed at livekernel, after pkgs.
+	if ! command -v clang >/dev/null 2>&1; then
+	    _slot=\$(portageq envvar LLVM_SLOT 2>/dev/null | awk '{print \$1}') || _slot=""
+	    echo ">>> kconfig bootstrap: merging llvm-core/clang\${_slot:+:\${_slot}} (fresh stage3 has no clang)"
+	    emerge --ignore-default-opts --verbose --oneshot "llvm-core/clang\${_slot:+:\${_slot}}"
+	fi
+
 	# 1. the base config
 	if [ -f /tmp/xstage-kconfig/base.config ]; then
 	    cp /tmp/xstage-kconfig/base.config .config
