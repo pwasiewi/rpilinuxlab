@@ -45,6 +45,9 @@ media-video/webcamoid faac
 net-analyzer/nagios-plugin-check_raid dmraid
 net-dns/dnsmasq script
 net-misc/networkmanager ovs
+# DNS-SD in cups itself: without it the daemon ignores avahi entirely and
+# mDNS-discovered printers never appear as queues (nvhard, 2026-08-14)
+net-print/cups zeroconf
 net-print/cups-pdf ppds
 net-print/gutenprint ppds
 sys-apps/systemd fido2

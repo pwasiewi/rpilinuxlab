@@ -36,4 +36,7 @@
 -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -m hashlimit --hashlimit-name ssh6 --hashlimit-mode srcip --hashlimit-above 15/minute --hashlimit-burst 30 -j DROP
 -A INPUT -s fe80::/10 -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
 -A INPUT -s fd00::/8 -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
+# mDNS/DNS-SD (printer discovery, 2026-08-14) — multicast ff02::fb replies
+# never match ESTABLISHED; dport-only for symmetry with the v4 rule.
+-A INPUT -p udp --dport 5353 -j ACCEPT
 COMMIT

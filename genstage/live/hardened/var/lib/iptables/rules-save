@@ -47,4 +47,9 @@
 # firewall — see the coupling note at that symbol.
 -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -m hashlimit --hashlimit-name ssh --hashlimit-mode srcip --hashlimit-above 15/minute --hashlimit-burst 30 -j DROP
 -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
+# mDNS/DNS-SD (printer discovery via avahi, 2026-08-14). Multicast replies to
+# 224.0.0.251 never match ESTABLISHED (no conntrack state for multicast) and
+# some printers answer unicast to port 5353, so match on dport alone. LAN-only
+# protocol, but note it is open in EVERY network the laptop joins.
+-A INPUT -p udp --dport 5353 -j ACCEPT
 COMMIT
