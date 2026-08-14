@@ -1598,13 +1598,39 @@ live_prep_kconfig() {
 	# their first kconfig predates the LLVM=1 change (2026-08-10) and clang was
 	# already installed when they re-ran. Merge the slot the image will carry
 	# anyway (LLVM_SLOT from the deployed make.conf) so nothing builds twice;
-	# clang alone suffices here — olddefconfig compiles host tools with HOSTCC,
-	# the full lld/llvm-* set is only needed at livekernel, after pkgs.
-	if ! command -v clang >/dev/null 2>&1; then
+	# clang AND lld AND pahole: Kconfig.include probes that CC and LD exist
+	# ("linker 'ld.lld' not found" aborts olddefconfig just as hard), and
+	# DEBUG_INFO_BTF depends on PAHOLE_VERSION >= 116 resolved at kconfig
+	# time — no pahole means version 0, the symbol goes unselectable without
+	# a word, and the BTF boot-chain check below fires. The rest of the
+	# llvm-* set is only needed at livekernel, after pkgs.
+	# PATH refresh FIRST, emerge second: emerge only writes /etc/profile.env
+	# on disk — this shell keeps the PATH it entered the chroot with, so a
+	# merged clang in /usr/lib/llvm/<slot>/bin stays invisible to 'command -v'
+	# (intelhard 2026-08-14: bootstrap merged clang-22 fine, 'make LLVM=1'
+	# still died on "clang: command not found"). Refresh-before-emerge also
+	# keeps a re-run from rebuilding the already-merged clang from scratch.
+	refresh_llvm_path() {
+	    _llvmbin=\$(ls -d /usr/lib/llvm/*/bin 2>/dev/null | sort -V | tail -n 1) || _llvmbin=""
+	    if [ -n "\${_llvmbin}" ]; then export PATH="\${_llvmbin}:\${PATH}"; fi
+	}
+	have_kconfig_tools() {
+	    command -v clang >/dev/null 2>&1 && command -v ld.lld >/dev/null 2>&1 &&
+	        command -v pahole >/dev/null 2>&1
+	}
+	have_kconfig_tools || refresh_llvm_path
+	if ! have_kconfig_tools; then
 	    _slot=\$(portageq envvar LLVM_SLOT 2>/dev/null | awk '{print \$1}') || _slot=""
-	    echo ">>> kconfig bootstrap: merging llvm-core/clang\${_slot:+:\${_slot}} (fresh stage3 has no clang)"
-	    emerge --ignore-default-opts --verbose --oneshot "llvm-core/clang\${_slot:+:\${_slot}}"
+	    _missing=""
+	    command -v clang  >/dev/null 2>&1 || _missing="llvm-core/clang\${_slot:+:\${_slot}}"
+	    command -v ld.lld >/dev/null 2>&1 || _missing="\${_missing} llvm-core/lld\${_slot:+:\${_slot}}"
+	    command -v pahole >/dev/null 2>&1 || _missing="\${_missing} dev-util/pahole"
+	    echo ">>> kconfig bootstrap: merging\${_missing:+ \${_missing}} (fresh stage3 has none)"
+	    emerge --ignore-default-opts --verbose --oneshot \${_missing}
+	    refresh_llvm_path
 	fi
+	have_kconfig_tools ||
+	    { echo "FATAL: clang/ld.lld/pahole still not in PATH after bootstrap" >&2; exit 1; }
 
 	# 1. the base config
 	if [ -f /tmp/xstage-kconfig/base.config ]; then
