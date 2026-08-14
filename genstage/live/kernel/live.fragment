@@ -427,6 +427,14 @@ CONFIG_KEXEC=y
 CONFIG_KEXEC_FILE=y
 CONFIG_INTEGRITY=y
 CONFIG_IMA=y
+# Measurement hash: sha256, not the kernel's sha1 default. The deployed
+# policy (/etc/ima/ima-policy) is measure-only — no appraisal xattrs exist
+# that a hash change could invalidate; the switch only affects each boot's
+# fresh measurement list and its PCR-10 extends, and nothing on these
+# machines seals secrets against PCR 10. Host nvhard switched 2026-08-14.
+# CONFIG_IMA_DEFAULT_HASH_SHA1 is not set
+CONFIG_IMA_DEFAULT_HASH_SHA256=y
+CONFIG_IMA_DEFAULT_HASH="sha256"
 CONFIG_IMA_APPRAISE=y
 CONFIG_EVM=y
 CONFIG_TCG_TPM=y

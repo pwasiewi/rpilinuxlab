@@ -1,0 +1,171 @@
+# Kconfig fragment: webcam / laptop-camera breadth.
+#
+# The base configs (x86_64 defconfig and this host's .config) carry NO media
+# subsystem at all — CONFIG_MEDIA_SUPPORT is unset, so there is no /dev/video*
+# and no /dev/media* whatever camera is plugged in. This fragment adds the
+# capture path only.
+#
+# Camera class ONLY. CONFIG_EXPERT=y makes MEDIA_SUPPORT_FILTER default to n,
+# and with the filter OFF every media class (analog TV, DVB, radio, SDR)
+# defaults to y — that is how an unfiltered config reaches ~420 media symbols
+# without anyone choosing it. The filter is therefore set explicitly and the
+# non-camera classes are pinned off: no DVB frontends, no tuners, no SDR, no
+# PCI TV-capture bridges. Those are large USB/PCI-facing parsers that no
+# hardware on these machines binds.
+#
+# Everything is =m, the core included: no capture code is resident until udev
+# matches real hardware. Cost is squashfs bytes, not RAM.
+#
+# Merged like every other flavour fragment by live_prep_kconfig; a profile
+# fragment listed later in LIVE_KFRAGS can still override any single symbol.
+
+# --- core gates ------------------------------------------------------------
+# The "Media core support" menu is invisible while the filter is on, so
+# VIDEO_DEV/MEDIA_CONTROLLER are resolved from their defaults — pinned here
+# anyway, because a tristate under `if MEDIA_SUPPORT` is capped at the value of
+# MEDIA_SUPPORT, and a bare =y would silently come back as =m.
+CONFIG_MEDIA_SUPPORT=m
+CONFIG_MEDIA_SUPPORT_FILTER=y
+CONFIG_MEDIA_SUBDRV_AUTOSELECT=y
+CONFIG_MEDIA_CAMERA_SUPPORT=y
+CONFIG_VIDEO_DEV=m
+CONFIG_MEDIA_CONTROLLER=y
+CONFIG_VIDEO_V4L2_SUBDEV_API=y
+# COMMON_CLK selects HAVE_CLK, and the whole camera-sensor menu is gated on it
+# (VIDEO_CAMERA_SENSOR depends on MEDIA_CAMERA_SUPPORT && I2C && HAVE_CLK).
+# x86 desktop configs ship without it, so the first merge on nvhard silently
+# dropped every sensor =m below. A few KB of builtin core; distro x86_64
+# kernels carry it unconditionally.
+CONFIG_COMMON_CLK=y
+
+# classes deliberately NOT built (see header)
+# CONFIG_MEDIA_ANALOG_TV_SUPPORT is not set
+# CONFIG_MEDIA_DIGITAL_TV_SUPPORT is not set
+# CONFIG_MEDIA_RADIO_SUPPORT is not set
+# CONFIG_MEDIA_SDR_SUPPORT is not set
+# CONFIG_MEDIA_TEST_SUPPORT is not set
+
+# --- bus gates -------------------------------------------------------------
+# Menu gates first: without these, 'make olddefconfig' silently drops every
+# leaf =m underneath them.
+CONFIG_MEDIA_USB_SUPPORT=y
+CONFIG_MEDIA_PCI_SUPPORT=y
+CONFIG_MEDIA_PLATFORM_SUPPORT=y
+
+# --- UVC: every webcam made in roughly the last 15 years -------------------
+# USB Video Class. Covers the current Logitech line (C270/C920/C922/Brio,
+# StreamCam), all modern laptop-internal USB cameras, and every generic
+# "UVC 1.x compliant" module. This is the one driver that matters on kdehard:
+# 30c9:00f4 Luxvisions Innotech Integrated RGB Camera, bInterfaceClass 0e,
+# bcdUVC 1.50.
+CONFIG_USB_VIDEO_CLASS=m
+CONFIG_USB_VIDEO_CLASS_INPUT_EVDEV=y
+CONFIG_UVC_COMMON=m
+
+# --- Philips / older Logitech QuickCam (pwc) -------------------------------
+# Explicitly the pre-UVC Logitech QuickCam Pro 3000/4000/Zoom/Notebook Pro and
+# Orbit/Sphere, plus Philips PCVC/SPC900NC, Creative Webcam 5/Pro Ex.
+CONFIG_USB_PWC=m
+CONFIG_USB_PWC_INPUT_EVDEV=y
+# CONFIG_USB_PWC_DEBUG is not set
+
+# --- GSPCA: the pre-UVC USB webcam framework -------------------------------
+# One framework, ~50 bridge chips. These are the 2000s-era cheap webcams whose
+# vendor IDs say nothing about the silicon; the whole family is enabled because
+# picking individual bridges requires knowing the chip inside a given plastic
+# shell. Sub-directory drivers (m5602/stv06xx/gl860) carry their own symbols.
+CONFIG_USB_GSPCA=m
+CONFIG_USB_GSPCA_BENQ=m
+CONFIG_USB_GSPCA_CONEX=m
+CONFIG_USB_GSPCA_CPIA1=m
+CONFIG_USB_GSPCA_DTCS033=m
+CONFIG_USB_GSPCA_ETOMS=m
+CONFIG_USB_GSPCA_FINEPIX=m
+CONFIG_USB_GSPCA_JEILINJ=m
+CONFIG_USB_GSPCA_JL2005BCD=m
+CONFIG_USB_GSPCA_KINECT=m
+CONFIG_USB_GSPCA_KONICA=m
+CONFIG_USB_GSPCA_MARS=m
+CONFIG_USB_GSPCA_MR97310A=m
+CONFIG_USB_GSPCA_NW80X=m
+CONFIG_USB_GSPCA_OV519=m
+CONFIG_USB_GSPCA_OV534=m
+CONFIG_USB_GSPCA_OV534_9=m
+CONFIG_USB_GSPCA_PAC207=m
+CONFIG_USB_GSPCA_PAC7302=m
+CONFIG_USB_GSPCA_PAC7311=m
+CONFIG_USB_GSPCA_SE401=m
+CONFIG_USB_GSPCA_SN9C2028=m
+CONFIG_USB_GSPCA_SN9C20X=m
+CONFIG_USB_GSPCA_SONIXB=m
+CONFIG_USB_GSPCA_SONIXJ=m
+CONFIG_USB_GSPCA_SPCA1528=m
+CONFIG_USB_GSPCA_SPCA500=m
+CONFIG_USB_GSPCA_SPCA501=m
+CONFIG_USB_GSPCA_SPCA505=m
+CONFIG_USB_GSPCA_SPCA506=m
+CONFIG_USB_GSPCA_SPCA508=m
+CONFIG_USB_GSPCA_SPCA561=m
+CONFIG_USB_GSPCA_SQ905=m
+CONFIG_USB_GSPCA_SQ905C=m
+CONFIG_USB_GSPCA_SQ930X=m
+CONFIG_USB_GSPCA_STK014=m
+CONFIG_USB_GSPCA_STK1135=m
+CONFIG_USB_GSPCA_STV0680=m
+CONFIG_USB_GSPCA_SUNPLUS=m
+CONFIG_USB_GSPCA_T613=m
+CONFIG_USB_GSPCA_TOPRO=m
+CONFIG_USB_GSPCA_TOUPTEK=m
+CONFIG_USB_GSPCA_TV8532=m
+CONFIG_USB_GSPCA_VC032X=m
+CONFIG_USB_GSPCA_VICAM=m
+CONFIG_USB_GSPCA_XIRLINK_CIT=m
+CONFIG_USB_GSPCA_ZC3XX=m
+# gspca drivers living in their own subdirectories
+CONFIG_USB_GL860=m
+CONFIG_USB_M5602=m
+CONFIG_USB_STV06XX=m
+
+# --- other USB capture -----------------------------------------------------
+CONFIG_USB_S2255=m
+CONFIG_VIDEO_USBTV=m
+
+# --- laptop-internal MIPI CSI-2 cameras (not USB) --------------------------
+# Newer thin laptops wire the sensor to an on-CPU ISP over MIPI instead of
+# internal USB, so UVC never sees it. Intel's receivers plus the IPU bridge
+# that synthesises the ACPI/fwnode graph on machines shipped with Windows.
+# INTEL_VSC covers the Visual Sensing Controller that mediates camera
+# ownership on recent ThinkPad/Dell models.
+CONFIG_IPU_BRIDGE=m
+CONFIG_VIDEO_IPU3_CIO2=m
+CONFIG_VIDEO_INTEL_IPU6=m
+CONFIG_INTEL_VSC=m
+# NOTE: the AMD ISP (isp4) has no Kconfig symbol in 7.1.5-zen, and the
+# atomisp/ipu3-imgu drivers live under drivers/staging, which these images do
+# not enable (CONFIG_STAGING is unset). Nothing to add for the Krackan iGPU —
+# kdehard's own camera is plain USB UVC anyway.
+
+# --- MIPI sensor sub-drivers ----------------------------------------------
+# MEDIA_SUBDRV_AUTOSELECT=y already pulls whatever a platform driver selects;
+# these are the sensors common in x86 laptop lids, listed so a portable image
+# has them even when no platform driver names them.
+CONFIG_VIDEO_CAMERA_SENSOR=y
+CONFIG_VIDEO_OV01A10=m
+CONFIG_VIDEO_OV02C10=m
+CONFIG_VIDEO_OV2680=m
+CONFIG_VIDEO_OV2740=m
+CONFIG_VIDEO_OV5670=m
+CONFIG_VIDEO_OV5675=m
+CONFIG_VIDEO_OV5693=m
+CONFIG_VIDEO_OV8856=m
+CONFIG_VIDEO_OV8865=m
+CONFIG_VIDEO_OV13B10=m
+CONFIG_VIDEO_HI556=m
+CONFIG_VIDEO_HI846=m
+CONFIG_VIDEO_IMX208=m
+CONFIG_VIDEO_IMX219=m
+CONFIG_VIDEO_IMX258=m
+CONFIG_VIDEO_IMX319=m
+CONFIG_VIDEO_IMX355=m
+CONFIG_VIDEO_GC0308=m
+CONFIG_VIDEO_GC2145=m
