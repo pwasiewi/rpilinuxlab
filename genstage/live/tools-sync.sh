@@ -17,6 +17,9 @@ SCRIPTS=(
     e ve vec vep ves veu vex vic vie vip vis viu vix
     # make.conf tuning on new hardware
     nativeflags cflagsdiff
+    # AIDE lifecycle (baseline refresh, check, report) — was in tools/ but
+    # missing from this list, so it never refreshed (found 2026-08-14)
+    aidectl
 )
 
 mkdir -p "${HERE}"
