@@ -2712,13 +2712,30 @@ cmd_live_usb() {
     uuid=$(lsblk -no UUID "${p2}" | head -n1)
     [[ -n ${uuid} ]] || die "No filesystem UUID on ${p2}"
     info "LIVE partition ${p2}: UUID=${uuid}"
-    # the initrd is rebuilt per stick (UUID is baked in); the static busybox
-    # it embeds caches in dl/ and survives across profiles and sticks
+    # The initrd is rebuilt per stick (UUID is baked in). Its busybox must
+    # match the IMAGE's ISA floor, not the build host's: a static host build
+    # links the host's libc.a, and nvhard's znver3 glibc put AVX2 into an
+    # intelhard stick's /init — "trap invalid opcode in busybox" panic on
+    # Ivy Bridge (Lenovo Z500, 2026-08-15). genkernel already compiled a
+    # static busybox INSIDE the chroot with the image's own toolchain during
+    # 'kernel' — reuse that; the host compile inside the tool is fallback.
+    local bb_tar bb_dir=""
+    bb_tar=$(ls -v "${LIVE_ROOT}"/var/cache/genkernel/*/busybox-*.tar.xz 2>/dev/null | tail -n1) || bb_tar=""
+    if [[ -n ${bb_tar} ]]; then
+        bb_dir=$(mktemp -d /tmp/xstage-bb-XXXXXX)
+        tar -C "${bb_dir}" -xf "${bb_tar}" bin/busybox ||
+            die "cannot extract bin/busybox from ${bb_tar}"
+        info "initrd busybox: $(basename "${bb_tar}") from the image chroot (ISA = image floor)"
+    else
+        warn "no genkernel-built busybox in the image — host-compiled fallback (host glibc ISA leaks into static binaries)"
+    fi
     mkdir -p "${DL_DIR}/uuid-initrd"
     ( cd "${DL_DIR}/uuid-initrd" &&
       "${USB_TOOLS}/build-initrd-uuid-next" --uuid "${uuid}" \
-          --init "${LIVE_INIT}" --tmpfs-mb 8192 ) ||
+          --init "${LIVE_INIT}" --tmpfs-mb 8192 \
+          ${bb_dir:+--busybox-bin "${bb_dir}/bin/busybox"} ) ||
         die "build-initrd-uuid-next failed"
+    [[ -n ${bb_dir} ]] && command rm -rf "${bb_dir}"
 
     local mnt
     mnt=$(mktemp -d /tmp/xstage-usb-XXXXXX)
