@@ -24,3 +24,61 @@ app-forensics/lynis **
 dev-util/glslang
 dev-util/spirv-tools
 dev-util/spirv-headers
+
+# --- amdkdehard QoL transplant batch (2026-08-15) ---------------------------
+# Departure from the per-verified-failure rule above, backed by the cheaper
+# probe instead: an md5-cache keyword scan (skill gentoo-live-image #1b) of
+# the whole transplanted list. Every atom below is ~arm64-only in ::gentoo
+# and listed in PROF_PKGS — a missing entry is a guaranteed resolver abort.
+app-admin/awscli-bin
+app-admin/bitwarden-cli-bin
+app-admin/keepassxc
+app-admin/passwordsafe
+app-admin/pydf
+app-benchmarks/sysbench
+app-crypt/johntheripper-jumbo
+app-crypt/yubikey-manager
+app-editors/vscodium
+app-forensics/yara
+app-misc/bb
+app-misc/cmatrix
+app-misc/evtest
+app-misc/linux-logo
+app-misc/solaar
+app-portage/diffmask
+app-portage/elogv
+app-portage/euses
+app-portage/ufed
+app-text/podofo
+app-text/qpdfview
+dev-db/dbeaver-bin
+dev-debug/bpftrace
+dev-lang/cfortran
+dev-python/yara-python
+media-gfx/mypaint
+media-plugins/audacious-plugins
+media-sound/audacious
+media-sound/pavucontrol
+media-sound/strawberry
+net-analyzer/iftop
+net-analyzer/iptraf-ng
+net-misc/putty
+net-print/cups-pdf
+net-vpn/networkmanager-openvpn
+sys-apps/most
+sys-apps/pcsc-tools
+sys-auth/pam_u2f
+sys-auth/yubico-piv-tool
+sys-block/gparted
+sys-fs/compsize
+sys-fs/ddrescue
+sys-fs/exfat-utils
+sys-fs/fuse-exfat
+sys-fs/lxcfs
+sys-power/powertop
+www-client/firefox-l10n
+x11-apps/xlogo
+
+# Pure PPD data with no arm64 keywords at all; printers are an explicit
+# parity goal (the amd64 images got Kyocera/Samsung discovery 2026-08-14)
+net-print/foomatic-db-ppds **
