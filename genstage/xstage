@@ -2746,6 +2746,26 @@ cmd_live_usb() {
     info "ESP ${p1}: kernel -> /gentoo, initrd.uuid.cpio.gz"
     command cp -f "${LIVE_BLD}/bzImage" "${mnt}/gentoo"
     command cp -f "${DL_DIR}/uuid-initrd/initrd.uuid.cpio.gz" "${mnt}/initrd.uuid.cpio.gz"
+    # Early microcode: the CPU fix must be in front of the initrd chain BEFORE
+    # the kernel evaluates bugs/mitigations — nothing ever loads it from the
+    # squashfs's /boot at runtime (i7-4710MQ booted intelhard at revision 0x21
+    # with the old_microcode taint, 2026-08-16). GRUB concatenates every file
+    # on one initrd line and the kernel peels vendor cpios off the front, so
+    # ship BOTH vendors when the rootfs has them: the stick boots arbitrary
+    # machines and a foreign-vendor cpio is skipped, not fatal.
+    local uc uc_files=""
+    for uc in intel-uc.img amd-uc.img; do
+        if [[ -f ${LIVE_ROOT}/boot/${uc} ]]; then
+            command cp -f "${LIVE_ROOT}/boot/${uc}" "${mnt}/${uc}"
+            uc_files+="/${uc} "
+            info "ESP ${p1}: early microcode -> /${uc}"
+        fi
+    done
+    # rewrite the menuentry's initrd line instead of appending: a reused stick
+    # carries the grub.cfg from an earlier run, so this must be idempotent
+    # (the commented debug lines start with '#' and don't match the anchor)
+    sed -i "s|^\( *\)initrd .*|\1initrd ${uc_files}/initrd.uuid.cpio.gz|" \
+        "${mnt}/boot/grub/grub.cfg" || die "grub.cfg initrd-line rewrite failed"
     # stub kernel with builtin initramfs: bootable straight from the firmware
     # menu / efibootmgr without GRUB (kernel EFI stub, no cmdline needed)
     if [[ -f ${LIVE_BLD}/bzImage-stub ]]; then
