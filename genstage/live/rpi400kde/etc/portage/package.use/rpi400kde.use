@@ -60,3 +60,45 @@ net-wireless/wpa_supplicant -gui
 # regardless, which conflicts with that "no" and hard-fails configure.
 # -eventfd switches to --enable-itc=pipe, which has no such runtime check.
 net-libs/libmicrohttpd -eventfd
+
+# REQUIRED_USE any-of(keyring pass): pick keyring like the amdkdehard parent
+# (libsecret backend; stable arm64). Pulled in by the 2026-08-15 QoL
+# transplant's docker group.
+app-containers/docker-credential-helpers keyring
+
+# [gui] pulls dev-perl/Gtk3 (~arm64) whose chain ends in
+# gobject-introspection — unbuildable with crossdev (same class as
+# print-manager -gtk above). pcsc_scan and the CLI tools stay.
+sys-apps/pcsc-tools -gui
+
+# bpftrace links libbpf statically
+dev-libs/libbpf static-libs
+
+# podman's containers-common wants the nft backend compiled in
+net-firewall/iptables nftables
+
+# wxpython hard-requires the gstreamer backend in its wxGTK
+x11-libs/wxGTK gstreamer
+
+# pfl's default network-cron (weekly file-list upload) demanded
+# util-linux[caps] in the sysroot, whose rebuild resurrected the
+# systemd<->util-linux buildtime cycle — drop the cron instead of
+# touching util-linux; 'e-file' searching works without it.
+app-portage/pfl -network-cron
+
+# Sysroot bootstrap cycle (probe 2026-08-16): the Qt/KDE host-tooling
+# closure schedules systemd AND util-linux as new sysroot merges, and
+# systemd <-> util-linux[systemd] is a buildtime loop. -systemd cuts it.
+# Card impact: none in practice — the rootfs util-linux came with the
+# stage3 and 'pkgs' runs without --newuse, so it is never rebuilt here.
+sys-apps/util-linux -systemd
+# ...and the same loop one hop later through pam[systemd] (buildtime_slot_op
+# both ways). Same reasoning, same zero card impact.
+sys-libs/pam -systemd
+# Third lap of the same sysroot loop: util-linux[udev] -> virtual/libudev
+# -> full systemd (runtime; the systemd PROFILE use.forces the flag, so the
+# virtual can never be pointed at systemd-utils) -> util-linux. The only
+# available cut is udev support off in the bootstrap util-linux — lsblk
+# loses some device metadata in the SYSROOT only; the card copy is the
+# stage3's and never rebuilds here.
+sys-apps/util-linux -udev

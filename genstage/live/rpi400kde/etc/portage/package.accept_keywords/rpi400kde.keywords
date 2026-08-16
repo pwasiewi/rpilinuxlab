@@ -82,3 +82,29 @@ x11-apps/xlogo
 # Pure PPD data with no arm64 keywords at all; printers are an explicit
 # parity goal (the amd64 images got Kyocera/Samsung discovery 2026-08-14)
 net-print/foomatic-db-ppds **
+
+# Sysroot slot conflict (probe 2026-08-16): arm64-stable wayland-1.24.0
+# BDEPENDs exactly ~wayland-scanner-1.24.0, but the sysroot already runs
+# scanner-1.26.0 — lift wayland itself to the matching ~arm64 version.
+dev-libs/wayland
+
+# sys-apps/pcsc-tools (QoL transplant) needs its perl binding, ~arm64 only
+dev-perl/pcsc-perl
+
+# media-sound/strawberry dep, plain Qt C++ helper lib, ~arm64 only
+dev-libs/kdsingleapplication
+
+# strawberry (and eigen's chosen backend) build-dep; header-only, ~arm64
+dev-cpp/sparsehash
+
+# Autounmask batch (probe 2026-08-16), all ~arm64-only deps of QoL atoms:
+# bpftrace -> bcc + blazesym_c; yubikey-manager -> signxml + python-pskc +
+# ccid; johntheripper-jumbo -> two perl modules; sysbench -> concurrencykit.
+dev-util/bcc
+dev-libs/blazesym_c
+dev-python/signxml
+dev-python/python-pskc
+app-crypt/ccid
+dev-perl/Compress-Raw-Lzma
+dev-perl/Digest-MD2
+dev-libs/concurrencykit
