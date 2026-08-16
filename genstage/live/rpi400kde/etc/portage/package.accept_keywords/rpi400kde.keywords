@@ -112,3 +112,9 @@ dev-libs/concurrencykit
 # wayland-scanner of the SAME version, and the host runs 1.26.0 — the
 # arm64-stable 1.24.0 can therefore never cross-build here.
 dev-util/wayland-scanner
+
+# Cross-compiling guile hard-requires a HOST guile of the SAME version (the
+# native binary precompiles the target's .go bytecode): host carries 3.0.11
+# while arm64-stable is 3.0.10 -> "building Guile 3.0.10 but /usr/bin/guile
+# has version 3.0.11". 3.0.11 is ~arm64; keyword it to match the host.
+dev-scheme/guile
