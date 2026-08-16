@@ -111,3 +111,11 @@ sys-apps/util-linux -udev
 # for the cross pass; wxwidgets remains the interactive backend, and the
 # chroot-fallback pass (profile comment) restores qt6 natively.
 dev-python/matplotlib -qt6
+
+# The global sdl flag reaches freerdp and builds the standalone sdl-freerdp
+# client, whose CMakeLists sets CMAKE_FIND_ROOT_PATH_MODE_PROGRAM ONLY under
+# CMAKE_CROSSCOMPILING (upstream assumes the toolchain lives in the sysroot)
+# — the nested project() then cannot resolve the bare cross-g++ from PATH.
+# Nothing is lost on a KDE image: krdc is the RDP UI and the X11 xfreerdp
+# client is still built; only the redundant SDL UI goes.
+net-misc/freerdp -sdl
