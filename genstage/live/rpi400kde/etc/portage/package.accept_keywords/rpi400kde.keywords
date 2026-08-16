@@ -108,3 +108,7 @@ app-crypt/ccid
 dev-perl/Compress-Raw-Lzma
 dev-perl/Digest-MD2
 dev-libs/concurrencykit
+# ...and the scanner itself: its meson cross-build demands a NATIVE
+# wayland-scanner of the SAME version, and the host runs 1.26.0 — the
+# arm64-stable 1.24.0 can therefore never cross-build here.
+dev-util/wayland-scanner
