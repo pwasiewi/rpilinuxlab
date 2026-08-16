@@ -119,3 +119,8 @@ dev-python/mcp
 # KEYWORDS="~amd64", and the pin means 'pkgs' fetches a fixed tarball rather
 # than cloning HEAD, so it does not carry their reproducibility caveat.
 app-misc/ddcci-driver-linux
+
+# games-util/modrinth-app-bin (::pwr, packaged 2026-08-16): prebuilt Tauri
+# launcher repacked from the upstream GitHub-releases .deb — real version,
+# KEYWORDS="-* ~amd64", pinned distfile, so a bare atom like ddcci above.
+games-util/modrinth-app-bin
