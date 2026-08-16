@@ -459,6 +459,21 @@ cmd_setup() {
             fi
         ) || die "sysroot usr-merge failed"
     fi
+    # The guard above only fires when the split dirs EXIST — a fresh crossdev
+    # sysroot has no /bin at all, and the first package that installs into it
+    # then creates a REAL directory and re-splits the root (observed
+    # 2026-08-16: app-bzip2's alternatives died on the 23.0 profile check
+    # right after bzip2 seeded /bin). Pre-create the merged layout so that
+    # can never happen.
+    (
+        set -e; cd "${SYSROOT}"
+        mkdir -p usr/bin usr/lib usr/lib64
+        [[ -e bin   ]] || ln -s usr/bin   bin
+        [[ -e sbin  ]] || ln -s usr/bin   sbin
+        [[ -e lib   ]] || ln -s usr/lib   lib
+        [[ -e lib64 ]] || ln -s usr/lib64 lib64
+        [[ -e usr/sbin ]] || ln -s bin usr/sbin
+    ) || die "sysroot merged-usr symlink seed failed"
 
     # 2b-2. target runtime libs where qemu-user can find them. Ebuilds that run
     # a freshly cross-built TARGET binary during src_compile (gocryptfs'
