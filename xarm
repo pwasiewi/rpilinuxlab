@@ -475,6 +475,29 @@ cmd_setup() {
         [[ -e usr/sbin ]] || ln -s bin usr/sbin
     ) || die "sysroot merged-usr symlink seed failed"
 
+    # 2b-3. rust std for the target — dev-lang/rust-bin ships only the HOST
+    # std, so the first cargo package dies with E0463 "can't find crate for
+    # core" (aardvark-dns via podman, 2026-08-16). Install the official
+    # rust-std component into the ACTIVE rustc's sysroot, rustup-style:
+    # idempotent, and a rust-bin version bump re-triggers on the next setup
+    # because the new sysroot starts without the target dir again.
+    if command -v rustc >/dev/null 2>&1; then
+        local rust_ver rustlib rtmp
+        rust_ver=$(rustc --version | awk '{print $2}')
+        rustlib="$(rustc --print sysroot)/lib/rustlib"
+        if [[ -n ${rust_ver} && -d ${rustlib} && ! -d ${rustlib}/${TARGET} ]]; then
+            info "Installing rust-std ${rust_ver} for ${TARGET} (static.rust-lang.org)"
+            rtmp=$(mktemp -d)
+            ( set -e; cd "${rtmp}"
+              curl -fsSO "https://static.rust-lang.org/dist/rust-std-${rust_ver}-${TARGET}.tar.xz"
+              tar xf "rust-std-${rust_ver}-${TARGET}.tar.xz"
+              cp -a "rust-std-${rust_ver}-${TARGET}/rust-std-${TARGET}/lib/rustlib/${TARGET}" \
+                    "${rustlib}/"
+            ) || warn "rust-std install failed — cargo packages will NOT cross-build"
+            rm -rf "${rtmp}"
+        fi
+    fi
+
     # 2b-2. target runtime libs where qemu-user can find them. Ebuilds that run
     # a freshly cross-built TARGET binary during src_compile (gocryptfs'
     # build.bash, 2026-08-09) reach qemu through binfmt; its guest loader then
