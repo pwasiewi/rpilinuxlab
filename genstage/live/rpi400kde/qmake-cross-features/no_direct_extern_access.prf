@@ -1,0 +1,8 @@
+# Deliberately empty override of Qt's mkspecs/features/unix/ file of the same
+# name. The HOST qconfig.pri lists no_direct_extern_access in QT_CONFIG, so
+# host-qmake-driven cross builds (pyqt6 via sip-build) load the feature and
+# append the x86-only -mno-direct-extern-access to the aarch64 compile.
+# QMAKEFEATURES directories are searched before the mkspecs tree, so this
+# no-op shadows it (env/pyqt-cross-qmakefeatures.conf sets the variable).
+# The target Qt does not enable the feature at all — dropping the flag is the
+# correct answer, not a workaround.

@@ -102,3 +102,12 @@ sys-libs/pam -systemd
 # loses some device metadata in the SYSROOT only; the card copy is the
 # stage3's and never rebuilds here.
 sys-apps/util-linux -udev
+
+# matplotlib's qt6 backend needs dev-python/pyqt6, whose sip build runs
+# through the HOST qmake — qmake -query knows nothing of the sysroot, so the
+# generated Makefiles link the host's absolute /usr/lib64/libQt6Core.so into
+# the aarch64 objects (the QMAKEFEATURES flag override fixed the injected
+# -mno-direct-extern-access, but not the library paths). Drop the backend
+# for the cross pass; wxwidgets remains the interactive backend, and the
+# chroot-fallback pass (profile comment) restores qt6 natively.
+dev-python/matplotlib -qt6
