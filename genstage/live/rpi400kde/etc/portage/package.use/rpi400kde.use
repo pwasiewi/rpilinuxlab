@@ -119,3 +119,10 @@ dev-python/matplotlib -qt6
 # Nothing is lost on a KDE image: krdc is the RDP UI and the X11 xfreerdp
 # client is still built; only the redundant SDL UI goes.
 net-misc/freerdp -sdl
+
+# The image carries -openmp globally (cross-bootstrap invariant), so the
+# rootfs gcc ships no libgomp — R's pkg_pretend hard-dies in
+# tc-check-openmp with the profile-default USE=openmp. R runs fine without
+# it (loses only OMP-threaded internals; BLAS threading is flexiblas').
+# Found in the native chroot pass, 2026-08-17.
+dev-lang/R -openmp
