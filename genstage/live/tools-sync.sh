@@ -20,6 +20,9 @@ SCRIPTS=(
     # AIDE lifecycle (baseline refresh, check, report) — was in tools/ but
     # missing from this list, so it never refreshed (found 2026-08-14)
     aidectl
+    # pwr overlay maintenance (index/check/bump) — images ship ::pwr, so the
+    # tool that keeps it current ships too (added 2026-08-17)
+    pwrup
 )
 
 mkdir -p "${HERE}"
