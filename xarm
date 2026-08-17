@@ -321,7 +321,23 @@ cmd_tune() {
     need_root
     sysroot_write_makeconf
     sysroot_sync_portage_confdir
+    sysroot_ldconfig
     info "Retuned for ${CPU} — affects future builds only (all ARM profiles share this sysroot)"
+}
+
+# The HOST ldconfig writes an EMPTY cache for a foreign ROOT, and cross
+# merges (gcc's postinst especially) leave the sysroot without a usable
+# /etc/ld.so.cache — then every in-tree helper the builds run through qemu
+# binfmt dies with "libgcc_s.so.1: cannot open shared object file"
+# (libgcc_s lives only in /usr/lib/gcc/<tuple>/<ver>, a ld.so.conf.d path
+# the runtime loader never reads without the cache; w3m's mktable,
+# 2026-08-17). Regenerate with the TARGET's own ldconfig via qemu binfmt.
+# "is not a symbolic link" warnings are normal for a portage-managed root.
+sysroot_ldconfig() {
+    local lc="${SYSROOT}/sbin/ldconfig"
+    [[ -x ${lc} ]] || { warn "No ${lc} — sysroot glibc missing?"; return 0; }
+    "${lc}" -r "${SYSROOT}" 2>/dev/null || "${lc}" -r "${SYSROOT}" 2>/dev/null ||
+        warn "sysroot ldconfig failed twice — qemu-run helpers may not resolve libgcc_s"
 }
 
 # ---------------------------------------------------------------------------
