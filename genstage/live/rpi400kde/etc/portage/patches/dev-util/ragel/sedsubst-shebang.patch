@@ -1,0 +1,11 @@
+Upstream sedsubst begins with "#/bin/sh" — a malformed shebang (missing
+the bang). Native builds survive because the shell's ENOEXEC fallback
+runs it as a script anyway; under a qemu-user chroot that fallback does
+not fire and make reports exit 127 on the colm-wrap target
+(rpi400kde native pass, 2026-08-17).
+--- a/sedsubst
++++ b/sedsubst
+@@ -1,2 +1,2 @@
+-#/bin/sh
++#!/bin/sh
+ #
