@@ -840,12 +840,20 @@ cmd_chroot() {
     fi
     chroot_mount bind  /var/cache/distfiles "${ddir}"
 
+    # Portage's pid-sandbox (unshared PID namespace) breaks qemu-user: every
+    # guest process dies with "qemu: qemu_thread_create: Invalid argument"
+    # the moment qemu spawns an internal thread, so ebuild phases abort with
+    # the misleading "die_hooks … PORTAGE_BUILDDIR does not exist"
+    # (2026-08-17, first seen on acct-group/libreoffice — the simplest
+    # merge there is). Only this one FEATURES bit is affected; the other
+    # namespace sandboxes work. Native boots of the same rootfs keep the
+    # profile default — this export lives only in the qemu chroot session.
     local rc=0
     if [[ $# -eq 0 ]]; then
         info "Entering ${TARGET} chroot at ${CHROOT_BASE} (qemu user-mode) — exit to leave"
-        chroot "${CHROOT_BASE}" /bin/bash --login || rc=$?
+        chroot "${CHROOT_BASE}" /usr/bin/env FEATURES="${FEATURES:+${FEATURES} }-pid-sandbox" /bin/bash --login || rc=$?
     else
-        chroot "${CHROOT_BASE}" /bin/bash -lc "$*" || rc=$?
+        chroot "${CHROOT_BASE}" /usr/bin/env FEATURES="${FEATURES:+${FEATURES} }-pid-sandbox" /bin/bash -lc "$*" || rc=$?
     fi
     chroot_umount
     trap - EXIT INT TERM
