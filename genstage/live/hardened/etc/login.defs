@@ -213,7 +213,10 @@ KILLCHAR	025
 # 022 is the default value, but 027, or even 077, could be considered
 # for increased privacy. There is no One True Answer here: each sysadmin
 # must make up their mind.
-UMASK		022
+# Hardened images ship 027 (Lynis AUTH-9328 / CIS): nothing a user creates
+# is world-readable; group keeps read so shared-group workflows survive.
+# Applies via pam_umask on PAM logins and to useradd home modes (750).
+UMASK		027
 
 # HOME_MODE is used by useradd(8) and newusers(8) to set the mode for new
 # home directories.
