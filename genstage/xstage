@@ -2723,7 +2723,11 @@ cmd_live_usb() {
     bb_tar=$(ls -v "${LIVE_ROOT}"/var/cache/genkernel/*/busybox-*.tar.xz 2>/dev/null | tail -n1) || bb_tar=""
     if [[ -n ${bb_tar} ]]; then
         bb_dir=$(mktemp -d /tmp/xstage-bb-XXXXXX)
-        tar -C "${bb_dir}" -xf "${bb_tar}" bin/busybox ||
+        # member names vary between genkernel versions: plain 'bin/busybox'
+        # vs './bin/busybox' (4.3.17) — tar matches member names exactly,
+        # so try both spellings before giving up.
+        tar -C "${bb_dir}" -xf "${bb_tar}" bin/busybox 2>/dev/null ||
+            tar -C "${bb_dir}" -xf "${bb_tar}" ./bin/busybox ||
             die "cannot extract bin/busybox from ${bb_tar}"
         info "initrd busybox: $(basename "${bb_tar}") from the image chroot (ISA = image floor)"
     else
