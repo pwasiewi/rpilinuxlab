@@ -319,6 +319,13 @@ sysroot_sync_portage_confdir() {
 
 cmd_tune() {
     need_root
+    # Like the fragment sync below, this follows the CURRENT XPROFILE (or the
+    # default) — a bare 'tune' flips a desktop-flavoured sysroot back to plain
+    # arm64/23.0. Without this, switching boards kept the previous board's
+    # eselect profile and its USE defaults poisoned every cross-emerge.
+    PORTAGE_CONFIGROOT="${SYSROOT}" eselect profile set "${PROFILE}" ||
+        die "Profile ${PROFILE} not found — list: PORTAGE_CONFIGROOT=${SYSROOT} eselect profile list"
+    info "Sysroot profile: ${PROFILE}"
     sysroot_write_makeconf
     sysroot_sync_portage_confdir
     sysroot_ldconfig
