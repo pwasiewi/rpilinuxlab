@@ -2160,6 +2160,30 @@ cmd_live_configure() {
         fi
     fi
 
+    # Extra profile-specific accounts (PROF_LIVE_EXTRA_USERS: one raw useradd
+    # argument string per entry, login LAST — same shape as the command line).
+    # Unlike the live user these get NO password: the account ships locked and
+    # the operator sets one post-install (a pam_mount home needs the real
+    # password anyway, and a shared baked-in hash would outlive the medium).
+    local extra elogin ehome
+    for extra in "${PROF_LIVE_EXTRA_USERS[@]:-}"; do
+        [[ -n ${extra} ]] || continue
+        elogin="${extra##* }"
+        info "Extra user '${elogin}' (locked): useradd ${extra}"
+        live_chroot extra-user <<-EOF
+	id -u ${elogin} >/dev/null 2>&1 || useradd ${extra}
+	EOF
+        # With -M useradd leaves the home alone, but a mountpoint (pam_mount,
+        # fstab noauto) must still exist on the root fs — create it owned by
+        # the account, 700, when the entry names one and the tree lacks it.
+        ehome=$(sed -n 's/.*-d \([^ ]*\).*/\1/p' <<<"${extra}")
+        if [[ -n ${ehome} && ! -d ${LIVE_ROOT}${ehome} ]]; then
+            live_chroot extra-user-home <<-EOF
+	install -d -o \$(id -u ${elogin}) -g \$(id -g ${elogin}) -m 700 ${ehome}
+	EOF
+        fi
+    done
+
     live_kde_dark
 
     # Enabling services differs per flavour, and neither method can simply be
