@@ -124,3 +124,25 @@ app-misc/ddcci-driver-linux
 # launcher repacked from the upstream GitHub-releases .deb — real version,
 # KEYWORDS="-* ~amd64", pinned distfile, so a bare atom like ddcci above.
 games-util/modrinth-app-bin
+
+# nvidiahard, 2026-08-19. The Trezor set (::pwr): trezor-suite-bin is
+# KEYWORDS="-* ~amd64" (prebuilt Electron, amd64 only by construction),
+# dev-python/trezor carries the trezorctl CLI, and the four small ::pwr
+# libraries plus hidapi/libusb1 from ::gentoo are its ~amd64-only closure —
+# copied from the host's own list, where the same set was needed.
+app-crypt/trezor-suite-bin
+app-crypt/trezor-udev-rules
+dev-python/trezor
+dev-python/mnemonic
+dev-python/shamir-mnemonic
+dev-python/slip10
+dev-python/construct-classes
+dev-python/hidapi
+dev-python/libusb1
+
+# nvidiahard: the operator's own fork of the Plasma shader wallpaper (::pwr,
+# EGIT branch audio-fork). PV=9999 with empty KEYWORDS, so '**' like the live
+# ebuilds at the top of this file — and it shares their caveat: 'pkgs' clones
+# the branch HEAD, so pin EGIT_COMMIT in ::pwr if the image has to be
+# reproducible.
+kde-plasma/plasma-wallpaper-shader **

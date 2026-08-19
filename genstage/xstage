@@ -1943,6 +1943,118 @@ live_kde_dark() {
     fi
 }
 
+# Which RHI backend Qt Quick runs on, decided image-wide.
+#
+# This is not an env-var setting: plasma-integration reads
+# [QtQuickRendererSettings]SceneGraphBackend out of kdeglobals and calls
+# QQuickWindow::setGraphicsApi(), which OVERRIDES QSG_RHI_BACKEND in every KDE
+# Qt application — set the env var and nothing happens, with no warning either
+# way. Pin OpenGL, because renderers that predate the RHI abstraction are
+# QOpenGL*-only and draw into an EMPTY texture under Vulkan: a black surface,
+# blank thumbnails, and not one line in any log. kde-plasma/
+# plasma-wallpaper-shader (nvidiahard) is exactly that shape; diagnosed on the
+# host 2026-08-19, where a leftover 'vulkan' in the user's kdeglobals cost an
+# evening.
+#
+# OpenGL is also Qt's own default on Linux, so this pins today's behaviour
+# rather than changing it, and ~/.config/kdeglobals still cascades over
+# /etc/xdg — an account that wants Vulkan back just says so. Runs after
+# live_kde_dark, which writes this file from scratch.
+live_kde_scenegraph() {
+    [[ -x ${LIVE_ROOT}/usr/bin/plasmashell ]] || return 0
+    local kg="${LIVE_ROOT}/etc/xdg/kdeglobals"
+    grep -q '^\[QtQuickRendererSettings\]' "${kg}" 2>/dev/null && return 0
+    info "Plasma: OpenGL scenegraph as the system-wide default"
+    mkdir -p "${LIVE_ROOT}/etc/xdg"
+    printf '\n[QtQuickRendererSettings]\nSceneGraphBackend=opengl\n' >> "${kg}"
+}
+
+# Preselect the audio-reactive shader wallpaper (Ysin_Mist_Audio_Mix: six
+# braid strands across the spectrum, drums on the wave and the flame), so the
+# image comes up with it
+# instead of requiring a trip through Desktop Settings -> Wallpaper type.
+#
+# There is no file to preseed: Plasma keeps the wallpaper per CONTAINMENT in
+# ~/.config/plasma-org.kde.plasma.desktop-appletsrc, and containment IDs are
+# generated for each account the first time plasmashell runs — a system-wide
+# /etc/xdg copy would have to guess them, and shipping a whole appletsrc as
+# /etc/skel means also shipping a panel layout (leave one out and the account
+# logs into a desktop with no taskbar). So the supported route: plasmashell's
+# scripting interface, driven once per account at first login.
+#
+# Self-limiting by design. The marker file is written on success and checked
+# first, so the account owns its wallpaper from then on — change it in System
+# Settings and nothing here ever overrides that. Guarded on the package being
+# in this image, which makes it a no-op everywhere except the profiles that
+# list kde-plasma/plasma-wallpaper-shader.
+live_kde_shader_wallpaper() {
+    local pkg="${LIVE_ROOT}/usr/share/plasma/wallpapers/online.knowmad.shaderwallpaper"
+    [[ -f ${pkg}/contents/ui/Shaders/Ysin_Mist_Audio_Mix.frag ]] || return 0
+    info "Plasma: Ysin_Mist_Audio_Mix preselected for the first login of each account"
+
+    mkdir -p "${LIVE_ROOT}/usr/local/bin" "${LIVE_ROOT}/etc/xdg/autostart"
+    cat > "${LIVE_ROOT}/usr/local/bin/shader-wallpaper-default" <<'SCRIPT'
+#!/bin/bash
+# Written by 'xstage <profile> configure'. Sets the shader wallpaper for this
+# account exactly once; see live_kde_shader_wallpaper() for why it is a login
+# script and not a config file.
+set -euo pipefail
+
+marker="${XDG_CONFIG_HOME:-${HOME}/.config}/shader-wallpaper-default.done"
+[[ -e ${marker} ]] && exit 0
+[[ -n ${WAYLAND_DISPLAY:-}${DISPLAY:-} ]] || exit 0
+
+# plasmashell claims its bus name a moment after the session starts; without
+# the wait the very first login is the one login this never runs on.
+for _ in $(seq 30); do
+    dbus-send --session --print-reply --dest=org.kde.plasmashell \
+        /PlasmaShell org.kde.PlasmaShell.evaluateScript string:'0' \
+        >/dev/null 2>&1 && break
+    sleep 1
+done
+
+# Channel routing enum: -1 none, 0-3 textures, 10-13 buffers, 20 audio.
+# selectedShaderPath is relative to the package's contents/ui, so the same
+# string works for a system install and a ~/.local one.
+js=$(cat <<'JS'
+var ds = desktops();
+for (var i = 0; i < ds.length; ++i) {
+    var d = ds[i];
+    d.wallpaperPlugin = "online.knowmad.shaderwallpaper";
+    d.currentConfigGroup = ["Wallpaper", "online.knowmad.shaderwallpaper", "General"];
+    d.writeConfig("selectedShaderPath", "Shaders/Ysin_Mist_Audio_Mix.frag");
+    d.writeConfig("selectedShaderIndex", -1);
+    d.writeConfig("audioEnabled", true);
+    d.writeConfig("useBufferA", true);
+    d.writeConfig("imageChannel0", 20);
+    d.writeConfig("imageChannel1", 10);
+    d.writeConfig("bufferAChannel0", 20);
+    d.writeConfig("bufferAChannel1", 10);
+    d.writeConfig("shaderSpeed", 1);
+    d.writeConfig("resolutionScale", 1);
+    d.reloadConfig();
+}
+JS
+)
+
+dbus-send --session --print-reply --dest=org.kde.plasmashell \
+    /PlasmaShell org.kde.PlasmaShell.evaluateScript "string:${js}" >/dev/null
+mkdir -p "$(dirname "${marker}")"
+: > "${marker}"
+SCRIPT
+    chmod 755 "${LIVE_ROOT}/usr/local/bin/shader-wallpaper-default"
+
+    cat > "${LIVE_ROOT}/etc/xdg/autostart/zz-shader-wallpaper-default.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=Shader wallpaper (first login only)
+Exec=/usr/local/bin/shader-wallpaper-default
+OnlyShowIn=KDE;
+X-KDE-autostart-phase=2
+NoDisplay=true
+DESKTOP
+}
+
 # Sound for the desktop user. Installing PipeWire is not enough to hear
 # anything: this image has no /etc/xdg/autostart entry for it and an empty
 # /etc/systemd/user, so nothing ever starts the daemon and the desktop comes up
@@ -2185,6 +2297,8 @@ cmd_live_configure() {
     done
 
     live_kde_dark
+    live_kde_scenegraph
+    live_kde_shader_wallpaper
 
     # Enabling services differs per flavour, and neither method can simply be
     # "run the tool": no init system is running in this chroot. OpenRC's

@@ -1,0 +1,19 @@
+# nvidiahard's qwen-code, kept out of 'common' on purpose.
+#
+# common/…/image.keywords accepts a bare 'app-misc/qwen-code', which resolves
+# to the 0.19.9 release — that is what amdkde builds and it must stay that way.
+# This file makes the -9999 visible as well, so a profile reaching it resolves
+# to the highest visible version instead: ::pwr's fork branch
+# fix/peg-native-stream-retry, whose one commit adds the CHAT_FORMAT_PARSE
+# stream retry that keeps a turn alive when llama-server's chat parser rejects
+# sampled output ("does not match the expected peg-native format"). Neither the
+# release nor app-misc/qwen-code-bin has it.
+#
+# It sits in the 'hardened' layer because that is the narrowest existing layer
+# that nvidiahard uses and amdkde does not. Inert in amdkdehard, corehard and
+# intelhard: none of them lists qwen-code, and a keyword for an atom no graph
+# reaches changes nothing.
+#
+# KEYWORDS is empty at PV=9999, so nothing short of '**' accepts it; versioned
+# rather than bare so the 0.19.9 release keeps its own ~amd64 visibility.
+=app-misc/qwen-code-9999 **
