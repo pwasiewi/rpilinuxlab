@@ -1969,10 +1969,11 @@ live_kde_scenegraph() {
     printf '\n[QtQuickRendererSettings]\nSceneGraphBackend=opengl\n' >> "${kg}"
 }
 
-# Preselect the audio-reactive shader wallpaper (Ysin_Mist_Audio_Mix: six
-# braid strands across the spectrum, drums on the wave and the flame), so the
-# image comes up with it
-# instead of requiring a trip through Desktop Settings -> Wallpaper type.
+# Preselect the audio-reactive shader wallpaper (Ysin_Ember_Wave: six braid
+# strands, one frequency region each, drifting on the music's own clock, with
+# the beat reaching the braid only as a ~4 s pressure average - no per-beat
+# shiver), so the image comes up with it instead of requiring a trip through
+# Desktop Settings -> Wallpaper type.
 #
 # There is no file to preseed: Plasma keeps the wallpaper per CONTAINMENT in
 # ~/.config/plasma-org.kde.plasma.desktop-appletsrc, and containment IDs are
@@ -1989,8 +1990,8 @@ live_kde_scenegraph() {
 # list kde-plasma/plasma-wallpaper-shader.
 live_kde_shader_wallpaper() {
     local pkg="${LIVE_ROOT}/usr/share/plasma/wallpapers/online.knowmad.shaderwallpaper"
-    [[ -f ${pkg}/contents/ui/Shaders/Ysin_Mist_Audio_Mix.frag ]] || return 0
-    info "Plasma: Ysin_Mist_Audio_Mix preselected for the first login of each account"
+    [[ -f ${pkg}/contents/ui/Shaders/Ysin_Ember_Wave.frag ]] || return 0
+    info "Plasma: Ysin_Ember_Wave preselected for the first login of each account"
 
     mkdir -p "${LIVE_ROOT}/usr/local/bin" "${LIVE_ROOT}/etc/xdg/autostart"
     cat > "${LIVE_ROOT}/usr/local/bin/shader-wallpaper-default" <<'SCRIPT'
@@ -2022,7 +2023,7 @@ for (var i = 0; i < ds.length; ++i) {
     var d = ds[i];
     d.wallpaperPlugin = "online.knowmad.shaderwallpaper";
     d.currentConfigGroup = ["Wallpaper", "online.knowmad.shaderwallpaper", "General"];
-    d.writeConfig("selectedShaderPath", "Shaders/Ysin_Mist_Audio_Mix.frag");
+    d.writeConfig("selectedShaderPath", "Shaders/Ysin_Ember_Wave.frag");
     d.writeConfig("selectedShaderIndex", -1);
     d.writeConfig("audioEnabled", true);
     d.writeConfig("useBufferA", true);
