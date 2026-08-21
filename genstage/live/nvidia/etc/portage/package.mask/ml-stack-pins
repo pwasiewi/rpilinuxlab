@@ -38,3 +38,18 @@
 >=sci-ml/tokenizers-0.23
 # sci-ml/caffe2-9999 needs <dev-python/pybind11-3.0.5
 >=dev-python/pybind11-3.0.5
+
+# quack-kernels 0.6.x ALL require cutlass >=4.6.0 (0.6.1->4.6.0, 0.6.2/0.6.3->
+# 4.6.1, 0.6.4->4.6.2), so the entire 0.6 line is unreachable while the vLLM
+# pin above holds 4.5.2. Without this, @installed proposes 0.6.4 every run and
+# dies on "nvidia-cutlass-dsl-4.6.2 masked" — the failure looks like a CUTLASS
+# problem but the package that moved is this one. Installed: 0.5.0, which asks
+# for ~4.5.2 and matches the wall exactly.
+>dev-python/quack-kernels-0.5.0
+
+# dev-python/wxpython-4.3.1::stuff requires ~dev-python/sip-6.12.0, which is
+# OLDER than the installed sip-6.15.3 (::gentoo) and is not keyworded — so the
+# "update" is a downgrade of a dependency that pyqt6 also uses. ::gentoo tops
+# out at 4.2.5, which is what is installed and what nothing in this image
+# depends on anyway. Mask the ::stuff version rather than keyword an old sip.
+>=dev-python/wxpython-4.3.1

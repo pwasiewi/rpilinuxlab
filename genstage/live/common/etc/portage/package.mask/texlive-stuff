@@ -7,3 +7,13 @@
 # deliberately after a sync if a texlive bump is actually wanted, and fetch
 # the same day.
 dev-texlive/*::stuff
+
+# app-text/texlive-core is the same rot one category over: 2026-r3 pins
+# texlive-scripts.r80004, and CTAN's tlnet/archive already rotated it out
+# (2026-08-21: the mirror carries r80029 and r80039, nothing older), so every
+# SRC_URI entry — gentoo mirrors, dev.gentoo.org, tu-chemnitz, CTAN — is a 404
+# and the fetch cannot be repaired locally. The installed 2026-r1 keeps working
+# even though ::stuff has since dropped its ebuild. Masking above r1 rather
+# than the whole package leaves the older 2025 ebuild visible without letting
+# --update pick it. Drop this line once ::stuff bumps to a live revision.
+>app-text/texlive-core-2026-r1::stuff

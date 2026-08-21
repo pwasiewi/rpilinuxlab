@@ -146,3 +146,10 @@ dev-python/libusb1
 # the branch HEAD, so pin EGIT_COMMIT in ::pwr if the image has to be
 # reproducible.
 kde-plasma/plasma-wallpaper-shader **
+
+# mcp 2.0.0 split its type definitions into a new package. Only dev-python/mcp
+# itself needs it, and the sole consumer of mcp here (dev-python/vllm-9999)
+# asks for it unversioned, so the 1.28.1 -> 2.0.0 update is unobstructed once
+# the new half is keyworded. Without this, @installed proposes mcp-2.0.0 every
+# run and stops on "mcp-types-2.0.0 masked by ~amd64 keyword".
+dev-python/mcp-types
