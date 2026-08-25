@@ -2658,28 +2658,44 @@ cmd_live_rmkernel() {
         die "${ver} is what /usr/src/linux points at (${cur}) — point the symlink at another kernel first (eselect kernel list; older is fine).${names:+ Available:${names}}"
     fi
 
+    # EVERY candidate is filtered through [[ -e ]], because nullglob only drops
+    # patterns that CONTAIN a wildcard: a literal fallback like
+    # ".../lib/modules/7.1.5" survives whether or not it exists, and counting it
+    # made the "only kernel left" guard fire on a tree that plainly had two
+    # (found 2026-08-25, immediately after the verb was written).
+    local victims=() vdb=() f
     shopt -s nullglob
-    local srcs=( "${LIVE_ROOT}/usr/src/linux-${ver}" "${LIVE_ROOT}/usr/src/linux-${ver}-"* )
-    local mods=( "${LIVE_ROOT}/lib/modules/${ver}" "${LIVE_ROOT}/lib/modules/${ver}-"* )
-    local boot=( "${LIVE_ROOT}/boot/"*"-${ver}-"* "${LIVE_ROOT}/boot/"*"-${ver}" )
-    local cpio=( "${LIVE_ROOT}/var/tmp/genkernel/"*"-${ver}-"*.cpio )
-    local vdb=(  "${LIVE_ROOT}/var/db/pkg/sys-kernel/"*"sources-${ver}" \
-                 "${LIVE_ROOT}/var/db/pkg/sys-kernel/"*"sources-${ver}-"* \
-                 "${LIVE_ROOT}/var/db/pkg/sys-kernel/"*"sources-${ver}_"* )
+    for f in "${LIVE_ROOT}/usr/src/linux-${ver}"       "${LIVE_ROOT}/usr/src/linux-${ver}-"*    \
+             "${LIVE_ROOT}/lib/modules/${ver}"         "${LIVE_ROOT}/lib/modules/${ver}-"*      \
+             "${LIVE_ROOT}/boot/"*"-${ver}"            "${LIVE_ROOT}/boot/"*"-${ver}-"*         \
+             "${LIVE_ROOT}/var/tmp/genkernel/"*"-${ver}-"*.cpio; do
+        [[ -e ${f} ]] && victims+=( "${f}" )
+    done
+    for f in "${LIVE_ROOT}/var/db/pkg/sys-kernel/"*"sources-${ver}"    \
+             "${LIVE_ROOT}/var/db/pkg/sys-kernel/"*"sources-${ver}-"*  \
+             "${LIVE_ROOT}/var/db/pkg/sys-kernel/"*"sources-${ver}_"*; do
+        [[ -d ${f} ]] && vdb+=( "${f}" )
+    done
     shopt -u nullglob
 
-    local victims=( "${srcs[@]}" "${mods[@]}" "${boot[@]}" "${cpio[@]}" )
     [[ ${#victims[@]} -gt 0 || ${#vdb[@]} -gt 0 ]] ||
         die "Nothing matching kernel ${ver} in ${LIVE_ROOT}"
 
-    # a tree with exactly one kernel left is not a tree to take a kernel from
+    # a tree with exactly one kernel left is not a tree to take a kernel from.
+    # Count what does NOT belong to ${ver} rather than comparing array sizes.
+    local remaining=0 d
     shopt -s nullglob
-    local others=( "${LIVE_ROOT}/lib/modules/"* )
+    for d in "${LIVE_ROOT}/lib/modules/"*; do
+        case "$(basename "${d}")" in
+            "${ver}"|"${ver}"-*) ;;
+            *) remaining=$(( remaining + 1 )) ;;
+        esac
+    done
     shopt -u nullglob
-    [[ ${#others[@]} -gt ${#mods[@]} ]] ||
+    [[ ${remaining} -gt 0 ]] ||
         die "${ver} is the only kernel in ${LIVE_ROOT} — build its replacement first"
 
-    local atom="" d
+    local atom=""
     for d in "${vdb[@]}"; do
         atom="=sys-kernel/$(basename "${d}")"
         break
