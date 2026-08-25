@@ -62,6 +62,8 @@
 #                    built by merging live/kernel/*.fragment onto a base
 #                    (XSTAGE_LIVE_KCONFIG_BASE: defconfig | host | PATH),
 #                    re-merged here even if 'pkgs' already staged it        [root]
+#   rmkernel VER     drop one kernel (sources pkg, tree, modules,
+#                    /boot payloads) from the live tree        [root,confirm]
 #   squash           mksquashfs -> iso/livecd.squashfs + the /livecd marker [root]
 #   isolinux         populate iso/isolinux/ (optional — only 'iso' needs it) [root]
 #   iso              xorriso -> livecd.iso (optional: the qemu-gate artifact;
@@ -2619,6 +2621,79 @@ live_write_release() {
     info "Provenance: /etc/image-release + .packages ($(grep -c . "${LIVE_ROOT}/etc/image-release.packages") packages)"
 }
 
+# Remove ONE kernel version from the live tree — the sources package plus
+# everything portage cannot see. Written as a verb because a bump leaves the
+# tree carrying two complete kernels and mksquashfs does NOT exclude /usr/src:
+# measured on nvidiahard 2026-08-25, linux-7.1.5-zen was 11 GB next to
+# linux-7.1.10-zen's 4.8 GB, and skipping the cleanup ships both in the image.
+#
+# Everything after the unmerge is invisible to portage. The sources ebuild
+# records the pristine tree, so every .o, vmlinux and .config produced by the
+# build stays behind; /lib/modules/<ver> and the /boot payloads (with
+# genkernel's .old rotations) were never package-owned at all.
+#
+# Two refusals, both deliberate: the kernel /usr/src/linux points at is never
+# a candidate, and the last remaining kernel is never removed — an image with
+# no kernel is a silent two-hour loss discovered at 'gate'.
+cmd_live_rmkernel() {
+    need_root
+    local ver="${1:-}"
+    [[ -n ${ver} ]] ||
+        die "Usage: $0 ${TGT} rmkernel <version>   (e.g. rmkernel 7.1.5)"
+    [[ -d ${LIVE_ROOT} ]] || die "No live tree at ${LIVE_ROOT}"
+
+    local cur; cur=$(readlink "${LIVE_ROOT}/usr/src/linux" 2>/dev/null || true)
+    [[ ${cur} == linux-${ver}-* || ${cur} == linux-${ver} ]] &&
+        die "${ver} is what /usr/src/linux points at (${cur}) — select a newer kernel first"
+
+    shopt -s nullglob
+    local srcs=( "${LIVE_ROOT}/usr/src/linux-${ver}" "${LIVE_ROOT}/usr/src/linux-${ver}-"* )
+    local mods=( "${LIVE_ROOT}/lib/modules/${ver}" "${LIVE_ROOT}/lib/modules/${ver}-"* )
+    local boot=( "${LIVE_ROOT}/boot/"*"-${ver}-"* "${LIVE_ROOT}/boot/"*"-${ver}" )
+    local cpio=( "${LIVE_ROOT}/var/tmp/genkernel/"*"-${ver}-"*.cpio )
+    local vdb=(  "${LIVE_ROOT}/var/db/pkg/sys-kernel/"*"sources-${ver}" \
+                 "${LIVE_ROOT}/var/db/pkg/sys-kernel/"*"sources-${ver}-"* \
+                 "${LIVE_ROOT}/var/db/pkg/sys-kernel/"*"sources-${ver}_"* )
+    shopt -u nullglob
+
+    local victims=( "${srcs[@]}" "${mods[@]}" "${boot[@]}" "${cpio[@]}" )
+    [[ ${#victims[@]} -gt 0 || ${#vdb[@]} -gt 0 ]] ||
+        die "Nothing matching kernel ${ver} in ${LIVE_ROOT}"
+
+    # a tree with exactly one kernel left is not a tree to take a kernel from
+    shopt -s nullglob
+    local others=( "${LIVE_ROOT}/lib/modules/"* )
+    shopt -u nullglob
+    [[ ${#others[@]} -gt ${#mods[@]} ]] ||
+        die "${ver} is the only kernel in ${LIVE_ROOT} — build its replacement first"
+
+    local atom="" d
+    for d in "${vdb[@]}"; do
+        atom="=sys-kernel/$(basename "${d}")"
+        break
+    done
+
+    info "Removing kernel ${ver} from ${LIVE_ROOT}"
+    [[ -n ${atom} ]] && echo "     unmerge  ${atom}"
+    local f
+    for f in "${victims[@]}"; do
+        echo "     rm -rf   ${f#"${LIVE_ROOT}"}  ($(du -sh "${f}" 2>/dev/null | cut -f1))"
+    done
+    confirm "Remove kernel ${ver} from the ${XSTAGE_PROF_NAME:-live} image?"
+
+    if [[ -n ${atom} ]]; then
+        live_chroot rmkernel <<-EOF
+	emerge --ignore-default-opts --unmerge --quiet ${atom}
+	EOF
+    fi
+    for f in "${victims[@]}"; do
+        rm -rf "${f}" || warn "could not remove ${f}"
+    done
+
+    info "Kernel ${ver} gone. /usr/src/linux -> ${cur:-<unset>}"
+    info "Kernels still in the tree: $(cd "${LIVE_ROOT}/lib/modules" 2>/dev/null && echo * || echo none)"
+}
+
 cmd_live_squash() {
     need_root
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
@@ -4157,6 +4232,7 @@ amd64)
         restrict-run) need_native_profile; cmd_live_restrict_run "$@" ;;
         configure)  need_native_profile; cmd_live_configure "$@" ;;
         kernel)     need_native_profile; cmd_live_kernel "$@" ;;
+        rmkernel)   need_native_profile; cmd_live_rmkernel "$@" ;;
         squash)     need_native_profile; cmd_live_squash "$@" ;;
         isolinux)   need_native_profile; cmd_live_isolinux "$@" ;;
         iso)        need_native_profile; cmd_live_iso "$@" ;;

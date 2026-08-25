@@ -57,6 +57,8 @@
 #                   chains kept out of the main 'pkgs' graph            [root]
 #   configure       system configuration inside the image              [root]
 #   livekernel      genkernel build ('kernel' alone is the xlab verb)   [root]
+#   rmkernel VER    drop one kernel from the live tree: sources package,
+#                   source tree, modules, /boot payloads       [root,confirm]
 #   squash          livecd.squashfs + sha256 + AIDE baseline            [root]
 #   isolinux iso    optional — only the qemu 'gate' needs an ISO        [root]
 #   image           native alias for 'iso'                              [root]
@@ -153,7 +155,7 @@ case "$1" in
 esac
 
 # a profile file named like a verb would shadow it — refuse such confs
-RESERVED=" status setup enter emerge 1by1 rootgcc sysroot-prep pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel livekernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
+RESERVED=" status setup enter emerge 1by1 rootgcc sysroot-prep pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel livekernel rmkernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
 
 PROF=""
 if [[ -f ${PROFDIR}/$1.conf ]]; then
@@ -340,6 +342,12 @@ livekernel)
     # spelled out, because plain 'kernel' belongs to the xlab QEMU lab
     need_native; no_args "$@"
     timed "${XSTAGE}" "${T}" kernel
+    ;;
+rmkernel)
+    # drop one kernel version from the live tree. Takes an argument, so no
+    # no_args here; xstage does the validating and the confirming.
+    need_native
+    timed "${XSTAGE}" "${T}" rmkernel "$@"
     ;;
 usb)
     need_native
