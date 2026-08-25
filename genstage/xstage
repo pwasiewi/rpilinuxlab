@@ -2642,9 +2642,21 @@ cmd_live_rmkernel() {
         die "Usage: $0 ${TGT} rmkernel <version>   (e.g. rmkernel 7.1.5)"
     [[ -d ${LIVE_ROOT} ]] || die "No live tree at ${LIVE_ROOT}"
 
+    # Refuse the SELECTED kernel, whichever it is. Not "select a newer one":
+    # rolling BACK — point the symlink at the old kernel and drop the new one —
+    # is just as legitimate, and after a bad bump it is the likelier direction.
     local cur; cur=$(readlink "${LIVE_ROOT}/usr/src/linux" 2>/dev/null || true)
-    [[ ${cur} == linux-${ver}-* || ${cur} == linux-${ver} ]] &&
-        die "${ver} is what /usr/src/linux points at (${cur}) — select a newer kernel first"
+    if [[ ${cur} == linux-${ver}-* || ${cur} == linux-${ver} ]]; then
+        shopt -s nullglob
+        local alt=( "${LIVE_ROOT}/usr/src/linux-"* )
+        shopt -u nullglob
+        local names="" a
+        for a in "${alt[@]}"; do
+            a=$(basename "${a}")
+            [[ ${a} == "${cur}" ]] || names+=" ${a}"
+        done
+        die "${ver} is what /usr/src/linux points at (${cur}) — point the symlink at another kernel first (eselect kernel list; older is fine).${names:+ Available:${names}}"
+    fi
 
     shopt -s nullglob
     local srcs=( "${LIVE_ROOT}/usr/src/linux-${ver}" "${LIVE_ROOT}/usr/src/linux-${ver}-"* )
