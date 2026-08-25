@@ -292,6 +292,18 @@ CONFIG_IP6_NF_RAW=m
 # ruleset that is a quiet-breakage risk. Upstream is moving the other way
 # (nftables has a proper 'bridge' family). Flip this to =m if k8s ever lands.
 # CONFIG_BRIDGE_NETFILTER is not set
+# cgroup resource control. Neither symbol is on in the zen defconfig and
+# neither was ever named here, so every image so far shipped without them.
+# Measured on the installed nvidiahard host 2026-08-25: cgroup v2 lists the
+# 'cpu' and 'io' controllers, but /sys/fs/cgroup/system.slice/cpu.max and
+# io.max do not exist at all — the controllers are there, the limits are not.
+# Consequences: 'docker run --cpus=' / '--device-read-bps' cannot work, and on
+# a systemd image CPUQuota= and IOReadBandwidthMax= are silently ignored,
+# which is the worse half (a unit file asking for a limit gets none, with no
+# error). Both are pure additions: nothing changes unless something sets a
+# limit. CGROUP_SCHED/FAIR_GROUP_SCHED/BLK_CGROUP are already =y.
+CONFIG_CFS_BANDWIDTH=y
+CONFIG_BLK_DEV_THROTTLING=y
 CONFIG_BRIDGE=m
 CONFIG_VETH=m
 CONFIG_MACVLAN=m
