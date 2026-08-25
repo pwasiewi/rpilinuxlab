@@ -145,7 +145,7 @@ dev-python/libusb1
 # ebuilds at the top of this file — and it shares their caveat: 'pkgs' clones
 # the branch HEAD, so pin EGIT_COMMIT in ::pwr if the image has to be
 # reproducible.
-kde-plasma/plasma-wallpaper-shader **
+kde-misc/plasma-wallpaper-shader **
 
 # mcp 2.0.0 split its type definitions into a new package. Only dev-python/mcp
 # itself needs it, and the sole consumer of mcp here (dev-python/vllm-9999)

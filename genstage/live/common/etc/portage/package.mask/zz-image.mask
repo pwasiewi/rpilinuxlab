@@ -22,3 +22,10 @@
 >=dev-cpp/catch-3
 # app-emulation/qemu-10.2.3 requires ~sys-firmware/edk2-bin-202408
 >sys-firmware/edk2-bin-202408
+
+# Same GitHub-regenerated-tarball failure as 1.6.0 above, now on 1.7.0 (size
+# drifted 8 bytes: 3192054 -> 3192062). Content is unchanged - the tarball's
+# pax header still carries commit 1ca15a3d, which is what the
+# cuda-pathfinder-v1.7.0 tag points to - so only the gzip stream moved. ::pwr
+# carries the same ebuild with a refreshed Manifest (2026-08-24).
+=dev-python/cuda-pathfinder-1.7.0::stuff

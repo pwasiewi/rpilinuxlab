@@ -968,7 +968,10 @@ cmd_verify() {
     mount --rbind /dev "${vdir}/dev"
     mount --make-rslave "${vdir}/dev"
     # shellcheck disable=SC2064 — expand ${vdir} now, not at trap time
-    trap "umount -R '${vdir}/dev' 2>/dev/null || true; umount '${vdir}/proc' 2>/dev/null || true" EXIT INT TERM
+    local _vdir_umount="umount -R '${vdir}/dev' 2>/dev/null || true; umount '${vdir}/proc' 2>/dev/null || true"
+    trap "${_vdir_umount}" EXIT
+    trap "${_vdir_umount}; exit 130" INT
+    trap "${_vdir_umount}; exit 143" TERM
     # -e -o pipefail inside the chroot: each check must pass on its own
     chroot "${vdir}" /bin/bash -c '
         set -eo pipefail
@@ -1149,7 +1152,15 @@ live_chroot() {  # live_chroot <label>  (script on stdin)
     live_builddir_mount
     live_binpkgs_mount
     # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
-    trap "live_chroot_umount '${LIVE_ROOT}'" EXIT INT TERM
+    # INT/TERM must EXIT, not merely unmount. Bash defers a trap until the
+    # foreground command returns, so a Ctrl-C during a long step first killed
+    # the running emerge and then ran a handler that only unmounted and let
+    # the script walk on to the next step - indistinguishable, from the
+    # terminal, from "Ctrl-C does nothing". live_chroot_umount is idempotent,
+    # so the EXIT trap firing again after these is harmless.
+    trap "live_chroot_umount '${LIVE_ROOT}'" EXIT
+    trap "live_chroot_umount '${LIVE_ROOT}'; exit 130" INT
+    trap "live_chroot_umount '${LIVE_ROOT}'; exit 143" TERM
     local rc=0
     # LC_ALL=C.UTF-8: the host's pl_PL.utf8 is not generated inside a stage3,
     # and every step otherwise opens with two setlocale warnings
@@ -1306,7 +1317,12 @@ cmd_live_conf() {
 	[gentoo]
 	location = /var/db/repos/gentoo
 	sync-type = rsync
-	sync-uri = rsync://rsync.gentoo.org/gentoo-portage
+	# Pinned to a concrete PL mirror rather than the rsync.gentoo.org
+	# rotation: the alias resolves to ten hosts, four of them ULS in South
+	# Africa, so syncs regularly landed there. Applies to every live profile
+	# this function writes. Change the line if an image is meant to run
+	# elsewhere - a distant mirror only costs sync speed, never correctness.
+	sync-uri = rsync://rsync8.pl.gentoo.org/gentoo-portage
 	auto-sync = yes
 	# gemato: verify the MetaManifest against the releng key on every sync —
 	# needs sec-keys/openpgp-keys-gentoo-release installed (in the pkg lists)
@@ -1987,7 +2003,7 @@ live_kde_scenegraph() {
 # first, so the account owns its wallpaper from then on — change it in System
 # Settings and nothing here ever overrides that. Guarded on the package being
 # in this image, which makes it a no-op everywhere except the profiles that
-# list kde-plasma/plasma-wallpaper-shader.
+# list kde-misc/plasma-wallpaper-shader.
 live_kde_shader_wallpaper() {
     local pkg="${LIVE_ROOT}/usr/share/plasma/wallpapers/online.knowmad.shaderwallpaper"
     [[ -f ${pkg}/contents/ui/Shaders/Ysin_Ember_Wave.frag ]] || return 0
