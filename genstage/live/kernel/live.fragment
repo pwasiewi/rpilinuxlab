@@ -362,6 +362,24 @@ CONFIG_HWMON=y
 CONFIG_SENSORS_JC42=m
 CONFIG_SENSORS_NCT6775=m
 CONFIG_SENSORS_K10TEMP=m
+# RAPL energy counters — the CPU-side equivalent of 'nvidia-smi
+# --query-gpu=power.draw', which is what the shader A/B work uses on the GPU.
+# CONFIG_INTEL_RAPL is a MISNOMER: drivers/powercap/intel_rapl_msr.c matches
+# X86_MATCH_VENDOR_FAM(AMD, 0x17/0x19/0x1A) and reads MSR_AMD_PKG_ENERGY_STATUS
+# / MSR_AMD_CORE_ENERGY_STATUS, so it covers Zen 1 through Zen 5 (5950X = fam
+# 19h, Krackan = fam 1Ah) as well as Intel. One symbol, both vendors.
+#
+# The perf PMU half (arch/x86/events/rapl.c, CONFIG_PERF_EVENTS_INTEL_RAPL)
+# was already on and registers power/energy-pkg + power_core/energy-core — but
+# reading it needs dev-util/perf. POWERCAP adds /sys/class/powercap/*/energy_uj
+# instead: a plain counter any script can poll in a loop, no perf, no
+# /dev/cpu/*/msr (CONFIG_X86_MSR stays off — it is a write path to every MSR).
+#
+# Pure addition: nothing changes until something reads the counter. Caveat for
+# whoever uses it — RAPL on AMD is an SMU-computed energy estimate, not a wall
+# meter: good for A/B deltas, not for absolute draw at the socket.
+CONFIG_POWERCAP=y
+CONFIG_INTEL_RAPL=m
 
 # --- audio (the desktop profiles ship pipewire) -----------------------------
 CONFIG_SOUND=m
