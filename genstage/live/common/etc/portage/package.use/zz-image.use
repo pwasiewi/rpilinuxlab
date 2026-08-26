@@ -141,3 +141,66 @@ dev-libs/zziplib -sdl
 # stock installer makes when a deployment sets DisableCustomerExperienceFeedback
 # in ACTransforms.xml, so the client stays a supported configuration.
 net-vpn/cisco-secure-client webkit
+
+# sys-devel/gcc[pgo] — profiled bootstrap. toolchain.eclass:2281 swaps
+# GCC_MAKE_TARGET from 'bootstrap-lean' to 'profiledbootstrap-lean': gcc is
+# built, instrumented, trained by compiling itself, then rebuilt against that
+# profile. Typical payoff is a ~5-10% faster cc1/cc1plus, which on this fleet
+# is not academic — a full image run is ~1800 packages, so the compiler is the
+# hot path of every build we do.
+#
+# Cost, MEASURED on amdkdehard 2026-08-26 (pgo+lto vs the same versions built
+# without them): gcc-16.2.0 25m05s -> 50m55s (2.03x), gcc-15.3.1 21m04s ->
+# 44m58s (2.13x). So a clean 2x, the pessimistic end of the original estimate.
+# Four of
+# the five x86 images carry TWO gcc slots (15 for CUDA, 16 for the desktop —
+# see the toolchain-split note in amdkde.conf). It is a ONE-TIME cost per
+# binpkg pool, though: with --usepkg now on, the profiled gcc is built once
+# and reused. Four pools (binpkgs, -amdkdehard shared with nvidiahard,
+# -intelhard, -corehard) means the fleet pays for it once, then not again
+# until the next gcc bump.
+#
+# This file is in the 'common' layer, which only the x86 live profiles use
+# (the ARM boards go through PROF_BOARD_OVERLAY_DIR = "hardened rpi400kde ..."
+# and never see it). That is deliberate: a profiled bootstrap on a cross or
+# native ARM build would be a far worse trade.
+#
+# [lto] joins it (operator decision 2026-08-26, replacing a note here that
+# advised against it). --with-build-config=bootstrap-lto builds gcc ITSELF with
+# LTO. It is an independent axis from pgo — a different eclass variable
+# entirely, BUILD_CONFIG_TARGETS vs GCC_MAKE_TARGET — so neither flag pulls the
+# other in; they simply compose.
+#
+# Worth keeping two things apart that often get conflated: LTO-bootstrapping
+# GCC is an upstream-supported build configuration whose risk is mainly memory
+# at link time, whereas '-flto' in the global CFLAGS for the whole world is the
+# genuinely hazardous one (ODR violations, symbol versioning, ctor ordering).
+# This is the first, not the second.
+#
+# Watch peak RAM on the first build: linking cc1plus under LTO is the high
+# point, and this host has taken a global OOM before (caffe2 with -j32).
+sys-devel/gcc pgo lto
+
+# sys-devel/binutils[pgo] — TRIED 2026-08-26, REMOVED. Do not re-add without
+# reading this first.
+#
+# Both slots failed identically, in the profile-use phase:
+#   ld/ldver.c:35:1: error: source locations for function 'ldversion' have
+#                    changed, the profile data may be out of date
+#   make[4]: *** [Makefile:1604: ldver.o] Error 1
+# Same on ldbuildid.c and, in 2.46.1, ldelfgen.c. That is
+# -Werror=coverage-mismatch: gcc found .gcda whose recorded source locations do
+# not match the file being compiled. The files it hits are the ones binutils
+# generates or rewrites during the build, so their line numbering moves between
+# the profile-generate and profile-use phases.
+#
+# Why it was not worth fixing: the only cheap workaround is
+# -Wno-error=coverage-mismatch, which lets the build proceed while USING the
+# mismatched profile — paying for a double build and getting PGO driven by bad
+# data. The honest fix means debugging the ebuild's interaction with the
+# two-phase build, hours of work for a package that builds in 1m27s. Even a
+# 10% win there saves ~9 seconds across an 1800-package run.
+#
+# Also relevant if someone reconsiders: binutils trains on the dejagnu TEST
+# SUITE (that is why pgo BDEPENDs dejagnu + bc), which is synthetic, unlike
+# gcc's train stage that compiles gcc itself.

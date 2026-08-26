@@ -153,3 +153,13 @@ kde-misc/plasma-wallpaper-shader **
 # the new half is keyworded. Without this, @installed proposes mcp-2.0.0 every
 # run and stops on "mcp-types-2.0.0 masked by ~amd64 keyword".
 dev-python/mcp-types
+
+# dev-util/perf: stable is 6.19.12, and the images run a 7.x kernel. The tool
+# reads a newer kernel's counters fine — the RAPL PMU (power/energy-pkg) that
+# perf is here for is version-agnostic — but a version-matched perf is worth
+# having for anything beyond that, and the host already runs the ~amd64 one.
+# Deliberately unversioned: pinning =dev-util/perf-7.1 would rot at the next
+# kernel bump, and every profile inherits this file through the 'common'
+# overlay layer, so one line covers amdkde/amdkdehard/nvidiahard/intelhard/
+# corehard.
+dev-util/perf

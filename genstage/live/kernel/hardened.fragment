@@ -67,6 +67,35 @@ CONFIG_RETPOLINE=y
 CONFIG_CPU_MITIGATIONS=y
 CONFIG_X86_KERNEL_IBT=y
 CONFIG_X86_USER_SHADOW_STACK=y
+# kCFI — TRIED 2026-08-26, REVERTED THE SAME DAY. Do not re-enable without
+# reading this, and do not trust the check that fooled us.
+#
+# CONFIG_CFI=y booted fine on intelhard (bare QEMU: "SMP alternatives: CFI:
+# Using rehashed retpoline kCFI", clean init, no panics) and the out-of-tree
+# modules looked correct everywhere — nvidia.ko carried 18 __kcfi_typeid
+# symbols, nvidia-drm.ko 56, vboxdrv.ko 263. On that evidence the kernel was
+# transferred to the nvhard host and it HUNG ON BOOT, twice. Recovered via the
+# 7.1.5 fallback entry.
+#
+# THE LESSON, which is the reason this comment is long: presence of
+# __kcfi_typeid proves only that the module was COMPILED with -fsanitize=kcfi.
+# It says nothing about whether the driver's indirect calls actually satisfy
+# the type checks at runtime. The proprietary NVIDIA stack casts function
+# pointers across incompatible prototypes; that compiles, instruments, loads —
+# and then trips kCFI on the first such call. A static symbol count cannot see
+# this. Only a real boot on real hardware can, which is exactly the test the
+# Intel profiles could not perform because they have no NVIDIA GPU.
+#
+# So "it works on intelhard" was never transferable evidence, and keeping the
+# option enabled only where there is no NVIDIA would leave the fleet split
+# between images that differ in a kernel-level security property — a worse
+# state than not having it at all (operator decision).
+#
+# If this is ever revisited: the workable shape is CONFIG_CFI=y together with
+# the nouveau/open-kernel-module path, or waiting for NVIDIA to declare kCFI
+# support. CONFIG_CFI_PERMISSIVE is NOT the answer — it downgrades violations
+# to warnings, which means shipping a mitigation that does not mitigate.
+# CONFIG_CFI=y
 CONFIG_SPECULATION_MITIGATIONS=y
 CONFIG_IOMMU_SUPPORT=y
 CONFIG_INTEL_IOMMU=y
