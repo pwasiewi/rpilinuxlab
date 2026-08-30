@@ -56,6 +56,12 @@
 #   pkgs             prepare /usr/src/linux + merged .config (so linux-info
 #                    pre-merge checks audit the image, not the host), then
 #                    emerge PROF_LIVE_PKGS / _TIERS / _SETS in the chroot   [root]
+#   lock ATOM...     hold ATOM at its installed version (package.mask '>ver'
+#                    in the chroot) so repeat 'pkgs' runs keep ccache valid —
+#                    gcc is the case that matters; no args: list locks.
+#                    Lives in the rootfs: 'unpack' wipes it, so the first
+#                    pass from stage3 is never affected                     [root]
+#   unlock ATOM...|all  drop the hold — the next 'pkgs' updates it again    [root]
 #   configure        hostname, root password, live user + autologin, sshd,
 #                    default runlevel, motd  [root]
 #   kernel           genkernel with CDROOT=1 inside the chroot; the .config is
@@ -3078,6 +3084,87 @@ cmd_live_emerge() {
 	EOF
 }
 
+# Hold a package at the version the rootfs already has. 'pkgs' pass 1
+# (--update @world @installed) follows the tree every time 'conf' re-seeds
+# ::gentoo from the host, and sys-devel/gcc is the expensive mover: a new
+# compiler binary changes ccache's compiler hash, so the entire cache
+# recomputes on the next run. A '>installed-version' entry in the chroot's
+# package.mask keeps the compiler put and the ccache hits alive.
+#
+# The mask lives INSIDE the rootfs, so it only ever affects repeat runs:
+# 'unpack' (the first pass from stage3) starts from a tarball that has no
+# lock, and 'conf' cannot remove it either (its overlay rsync is additive).
+# The toolchain-select step in cmd_live_pkgs already tolerates a masked
+# newer gcc — same mechanism amdkde uses to cap nvcc's host compiler.
+live_lock_file() { echo "${LIVE_ROOT}/etc/portage/package.mask/xp-lock-${1//\//_}"; }
+
+cmd_live_lock() {
+    need_root
+    [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
+    if [[ $# -eq 0 ]]; then
+        local f any=no
+        for f in "${LIVE_ROOT}"/etc/portage/package.mask/xp-lock-*; do
+            [[ -f ${f} ]] || continue
+            any=yes
+            info "${f##*/xp-lock-}: $(grep '^>' "${f}" | tr '\n' ' ')"
+        done
+        [[ ${any} == yes ]] || info "No xp locks in ${LIVE_ROOT}/etc/portage/package.mask"
+        return 0
+    fi
+    local atom
+    for atom in "$@"; do
+        [[ ${atom} == ?*/?* ]] || die "Need a category/name atom, got: ${atom}"
+        # one lock per atom, strictly: a second 'lock' would silently replace
+        # the first file, and a later single 'unlock' would then read as
+        # undoing both — refuse instead, so lock/unlock stay a set/clear pair
+        local lf; lf=$(live_lock_file "${atom}")
+        [[ ! -f ${lf} ]] ||
+            die "${atom} is already locked ($(grep '^>' "${lf}" | tr '\n' ' ')) — run 'unlock ${atom}' first"
+        local cat="${atom%%/*}" pn="${atom##*/}"
+        # highest installed version straight from the rootfs vardb — no
+        # chroot and no portageq, so it works right after 'unpack'. The
+        # -[0-9]* glob is the standard trick that keeps gcc from matching
+        # gcc-config.
+        local d best=""
+        for d in "${LIVE_ROOT}/var/db/pkg/${cat}/${pn}"-[0-9]*; do
+            [[ -d ${d} ]] && best+="${d##*/}"$'\n'
+        done
+        best=$(printf '%s' "${best}" | sort -V | tail -n1)
+        [[ -n ${best} ]] || die "${atom}: not installed in the image rootfs — nothing to lock"
+        local ver="${best#"${pn}"-}"
+        mkdir -p "${lf%/*}"
+        {
+            echo "# xp lock: hold ${atom} at ${ver} so repeat 'pkgs' runs keep ccache valid."
+            echo "# Remove with: sudo xp ${XPROFILE:-<profile>} unlock ${atom}"
+            echo ">${cat}/${pn}-${ver}"
+        } > "${lf}"
+        info "Locked ${atom} at ${ver} (${lf#"${LIVE_ROOT}"})"
+    done
+}
+
+cmd_live_unlock() {
+    need_root
+    [[ $# -ge 1 ]] || die "Usage: sudo $0 ${TGT:-amd64} unlock <category/name>...|all"
+    local atom
+    if [[ $1 == all ]]; then
+        local f any=no
+        for f in "${LIVE_ROOT}"/etc/portage/package.mask/xp-lock-*; do
+            [[ -f ${f} ]] || continue
+            any=yes
+            command rm -f "${f}"
+            info "Unlocked ${f##*/xp-lock-}"
+        done
+        [[ ${any} == yes ]] || info "No xp locks to remove"
+        return 0
+    fi
+    for atom in "$@"; do
+        local lf; lf=$(live_lock_file "${atom}")
+        [[ -f ${lf} ]] || die "${atom}: no lock (${lf#"${LIVE_ROOT}"} missing) — 'lock' with no args lists them"
+        command rm -f "${lf}"
+        info "Unlocked ${atom} — the next 'pkgs' updates it again"
+    done
+}
+
 # Interactive shell in the live rootfs — for inspecting what 'conf' actually
 # wrote (make.conf, package.accept_keywords, repos.conf) and for trying an
 # 'emerge -p' by hand before committing to a multi-hour 'pkgs'.
@@ -4257,6 +4344,8 @@ amd64)
         unpack)     need_native_profile; cmd_live_unpack "$@" ;;
         conf)       need_native_profile; cmd_live_conf "$@" ;;
         pkgs)       need_native_profile; cmd_live_pkgs "$@" ;;
+        lock)       need_native_profile; cmd_live_lock "$@" ;;
+        unlock)     need_native_profile; cmd_live_unlock "$@" ;;
         restrict-run) need_native_profile; cmd_live_restrict_run "$@" ;;
         configure)  need_native_profile; cmd_live_configure "$@" ;;
         kernel)     need_native_profile; cmd_live_kernel "$@" ;;

@@ -52,6 +52,13 @@
 #   build | unpack  unpack a stage3 into the live tree                  [root]
 #   conf            portage config, repos and the overlay stack into it [root]
 #   pkgs            emerge the profile's package list in the chroot     [root]
+#   lock ATOM...    hold ATOM (e.g. sys-devel/gcc) at the version the image
+#                   already has — package.mask '>ver' inside the chroot, so
+#                   repeat 'pkgs' runs keep ccache valid instead of paying
+#                   for a compiler bump; no args lists locks. Stored in the
+#                   rootfs, so a fresh 'build' (first pass from stage3)
+#                   starts unlocked                                     [root]
+#   unlock ATOM...|all  release — the next 'pkgs' updates it again      [root]
 #   restrict-run    merge PROF_LIVE_RESTRICT_PKGS in their own emerge
 #                   runs — fetch-restricted archives and bootstrap
 #                   chains kept out of the main 'pkgs' graph            [root]
@@ -155,7 +162,7 @@ case "$1" in
 esac
 
 # a profile file named like a verb would shadow it — refuse such confs
-RESERVED=" status setup enter emerge 1by1 rootgcc sysroot-prep pkgs seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel livekernel rmkernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
+RESERVED=" status setup enter emerge 1by1 rootgcc sysroot-prep pkgs lock unlock seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel livekernel rmkernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
 
 PROF=""
 if [[ -f ${PROFDIR}/$1.conf ]]; then
@@ -337,6 +344,13 @@ conf)
 unpack|configure|squash|isolinux|iso|live|restrict-run)
     need_native; no_args "$@"
     timed "${XSTAGE}" "${T}" "${VERB}"
+    ;;
+lock|unlock)
+    # native-only: the board 'pkgs' resolves against the crossdev sysroot's
+    # portage config, not the rootfs, so a rootfs mask would be a silent no-op
+    # there. Instant admin ops — no 'timed' line.
+    need_native
+    exec "${XSTAGE}" "${T}" "${VERB}" "$@"
     ;;
 livekernel)
     # spelled out, because plain 'kernel' belongs to the xlab QEMU lab
