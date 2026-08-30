@@ -82,8 +82,11 @@
 #   emerge ARGS     board: cross-emerge into the sysroot (xarm emerge);
 #                   native: emerge inside the live image chroot         [root]
 #   1by1 ARGS       xarm 1by1 (board)                                   [root]
-#   clean-world -c|-i [ENTRY...]  audit / interactively deselect redundant
-#                   world entries (the bin/clean-world tool). Native
+#   clean-world -c|-i [ENTRY...] | -g FILE | -a FILE
+#                   audit / interactively deselect redundant world entries
+#                   (the bin/clean-world tool); -g writes a grouped, review-
+#                   able candidate file, -a walks the reviewed file with
+#                   per-entry y/N ('yes y |' bulk-accepts). Native
 #                   profile: the live image's world; pseudo-profile 'host':
 #                   the RUNNING system's — the only verb 'host' takes.
 #                   Boards have no world file and are refused    [root for -i]

@@ -62,9 +62,10 @@
 #                    Lives in the rootfs: 'unpack' wipes it, so the first
 #                    pass from stage3 is never affected                     [root]
 #   unlock ATOM...|all  drop the hold — the next 'pkgs' updates it again    [root]
-#   clean-world -c|-i [ENTRY...]  audit / deselect redundant entries in the
-#                    image's world file (the live/tools clean-world script
-#                    with -r rootfs)                            [root for -i]
+#   clean-world -c|-i [ENTRY...] | -g FILE | -a FILE
+#                    audit / deselect redundant entries in the image's world
+#                    file (the live/tools clean-world script with -r rootfs);
+#                    -g plan file for review, -a apply it     [root for -i/-a]
 #   configure        hostname, root password, live user + autologin, sshd,
 #                    default runlevel, motd  [root]
 #   kernel           genkernel with CDROOT=1 inside the chroot; the .config is

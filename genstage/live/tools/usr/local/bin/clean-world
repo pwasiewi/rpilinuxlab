@@ -21,8 +21,15 @@
 # world file directly (exact-line removal; first change makes a
 # world.bak-clean-world backup) — same effect as 'emerge --deselect', but it
 # works identically on a live-image rootfs via -r. Nothing is ever unmerged:
-# an interactive run ends with 'emerge -p --depclean' so the consequences
-# are visible before any real depclean.
+# a modifying run ends with 'emerge -p --depclean' so the consequences are
+# visible before any real depclean.
+#
+# The review workflow for a long DEP list: '-g FILE' writes the candidates
+# one per line, grouped by how safe the deselection usually is (libraries
+# first, system/toolchain last) and sorted inside each group by consumer
+# count (more consumers = better anchored). Edit the file — DELETE or
+# comment out everything you want to KEEP — then '-a FILE' walks it with
+# per-entry y/N prompts; 'yes y |' bulk-accepts a reviewed file.
 
 set -euo pipefail
 
@@ -31,12 +38,18 @@ Usage: clean-world [-r ROOT] -c [ENTRY...]   classify world entries (report)
        clean-world [-r ROOT] -i [ENTRY...]   interactive: drop STALE entries,
                                              per-entry deselect prompts for
                                              DEP, depclean preview      [root]
+       clean-world [-r ROOT] -g FILE         write the DEP candidates to FILE,
+                                             grouped for review
+       clean-world [-r ROOT] -a FILE         deselect the entries left in
+                                             FILE, y/N per entry        [root]
 Options:
   -r ROOT    operate on ROOT's world/vdb instead of / (live-image rootfs)
-  ENTRY...   limit the run to these world entries (default: the whole file)
+  ENTRY...   limit -c/-i to these world entries (default: the whole file)
 Examples:
   clean-world -c                       audit the host's world
-  sudo clean-world -i                  guided cleanup of the host's world
+  clean-world -g /tmp/world.plan       plan file; edit, KEEP = delete the line
+  sudo clean-world -a /tmp/world.plan  apply what remained, one y/N each
+  yes y | sudo clean-world -a /tmp/world.plan     bulk-accept a reviewed plan
   sudo xp host clean-world -c          the same audit via the xp dispatcher
   sudo xp nvidiahard clean-world -c    audit the live image's world
 EOF
@@ -46,13 +59,15 @@ die()  { echo "❌  $*" >&2; exit 1; }
 info() { echo ">>>  $*"; }
 warn() { echo "⚠️   $*" >&2; }
 
-MODE="" ROOT=""
+MODE="" ROOT="" PLAN=""
 ONLY=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) help; exit 0 ;;
         -c) MODE=check ;;
         -i) MODE=interactive ;;
+        -g) MODE=plan;  shift; [[ $# -ge 1 ]] || die "-g needs a file"; PLAN="$1" ;;
+        -a) MODE=apply; shift; [[ $# -ge 1 ]] || die "-a needs a file"; PLAN="$1" ;;
         -r) shift; [[ $# -ge 1 ]] || die "-r needs a directory"
             ROOT="${1%/}" ;;
         -*) die "Unknown option: $1 (see: clean-world -h)" ;;
@@ -66,10 +81,69 @@ WORLD="${ROOT}/var/lib/portage/world"
 VDB="${ROOT}/var/db/pkg"
 [[ -f ${WORLD} ]] || die "No world file: ${WORLD}"
 [[ -d ${VDB} ]]   || die "No package database: ${VDB}"
-[[ ${MODE} == check || ${EUID} -eq 0 ]] || die "Root required for -i."
+case ${MODE} in interactive|apply)
+    [[ ${EUID} -eq 0 ]] || die "Root required for -${MODE:0:1}." ;;
+esac
 
 TMPD=$(mktemp -d)
 trap 'command rm -rf "${TMPD}"' EXIT
+
+changed=0
+backup_once() {
+    [[ ${changed} -eq 0 ]] || return 0
+    command cp -p "${WORLD}" "${WORLD}.bak-clean-world"
+    info "Backup: ${WORLD}.bak-clean-world"
+}
+drop_entry() {
+    backup_once
+    # grep -vxF into a temp, then cat back: keeps the inode, owner and mode
+    grep -vxF "$1" "${WORLD}" > "${TMPD}/world.new" || true
+    cat "${TMPD}/world.new" > "${WORLD}"
+    changed=$((changed + 1))
+}
+depclean_preview() {
+    echo
+    if [[ ${changed} -eq 0 ]]; then
+        info "No changes made."
+        return 0
+    fi
+    info "${changed} entries removed — depclean preview (nothing is unmerged):"
+    if [[ -z ${ROOT} ]]; then
+        emerge -p --depclean || warn "depclean preview failed — resolve before any real depclean"
+    else
+        emerge --root="${ROOT}" --config-root="${ROOT}" -p --depclean ||
+            warn "depclean preview failed (image config resolves against host paths) — verify inside the chroot"
+    fi
+    info "Review the list above; run the real depclean yourself when satisfied."
+}
+
+# --- apply mode: no classification, just the reviewed plan -----------------
+if [[ ${MODE} == apply ]]; then
+    [[ -f ${PLAN} ]] || die "No plan file: ${PLAN}"
+    n_skip=0
+    # the plan comes in on fd 3: stdin must stay free for the y/N prompts —
+    # a plain 'done < plan' would make the inner read eat plan lines as
+    # answers (and 'yes y |' could never reach it)
+    while IFS= read -r line <&3; do
+        entry=$(echo "${line}" | sed 's/[[:space:]]*#.*//; s/[[:space:]]*$//')
+        [[ -n ${entry} ]] || continue
+        if ! grep -qxF "${entry}" "${WORLD}"; then
+            warn "skip (not a world entry — already deselected?): ${entry}"
+            n_skip=$((n_skip + 1))
+            continue
+        fi
+        ans=""; read -r -p "  deselect ${entry}? [y/N] " ans || ans=""
+        if [[ ${ans} == y ]]; then
+            drop_entry "${entry}"
+            echo "        deselected ${entry}"
+        fi
+    done 3< "${PLAN}"
+    [[ ${n_skip} -eq 0 ]] || info "Skipped ${n_skip} entries not present in world."
+    depclean_preview
+    exit 0
+fi
+
+# --- classification (check / interactive / plan) ---------------------------
 DEPFILES="${TMPD}/depfiles"
 find "${VDB}" -mindepth 3 -maxdepth 3 \
     \( -name RDEPEND -o -name PDEPEND -o -name IDEPEND \) > "${DEPFILES}"
@@ -108,6 +182,30 @@ consumer_pkg() {
     echo "${cat}/$(echo "${pf}" | sed 's/-[0-9].*$//')"
 }
 
+# plan grouping: how risky is deselecting an entry of this kind, on average.
+# 1 = C/C++ libraries, 2 = language/virtual packages, 3 = plugins/themes/
+# fonts, 4 = tools & applications (keep what you want for itself!),
+# 5 = system/boot/toolchain (extra care; some are @system-protected anyway)
+group_of() {
+    local cat="${1%%/*}" pn="${1##*/}"
+    case "${cat}" in
+        sys-devel|sys-apps|sys-kernel|sys-boot|sys-fs|sys-auth|sys-process|sys-power|sys-block|llvm-core|llvm-runtimes)
+            echo 5 ;;
+        *-libs|dev-cpp) echo 1 ;;
+        dev-python|dev-perl|dev-ruby|dev-java|dev-lua|dev-tcltk|virtual) echo 2 ;;
+        media-plugins|x11-themes|media-fonts|app-emacs|app-vim|kde-frameworks) echo 3 ;;
+        *) [[ ${pn} == lib* ]] && echo 1 || echo 4 ;;
+    esac
+}
+GROUP_TITLES=(
+    ""  # 1-based
+    "C/C++ libraries — the safe end: nothing here is an end-user application"
+    "language & virtual packages — python/perl/... modules, usually safe"
+    "plugins, themes, fonts — safe, they follow their application"
+    "tools & applications — KEEP the ones you want for themselves (world is where that is recorded)"
+    "system, boot & toolchain — extra care; @system protects some, not all"
+)
+
 if [[ ${#ONLY[@]} -gt 0 ]]; then
     for e in "${ONLY[@]}"; do
         grep -qxF "${e}" "${WORLD}" || die "'${e}' is not a world entry in ${WORLD}"
@@ -117,7 +215,7 @@ else
     mapfile -t ENTRIES < "${WORLD}"
 fi
 
-declare -a STALE=() DEPSEL=()
+declare -a STALE=() DEPSEL=() DEPINFO=()
 n_leaf=0 n_prov=0
 for entry in "${ENTRIES[@]}"; do
     [[ -n ${entry} ]] || continue
@@ -151,12 +249,13 @@ for entry in "${ENTRIES[@]}"; do
         esac
     done < <(xargs -a "${DEPFILES}" grep -lF -- "${catpn}" 2>/dev/null | sort -u)
 
-    hard_by=$(echo "${hard_by}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+    hard_by=$(echo "${hard_by}" | tr ' ' '\n' | grep . | sort -u | tr '\n' ' ' || true)
     if [[ -n ${hard_by// } ]]; then
         printf 'DEP       %-40s <- %s\n' "${entry}" "${hard_by}"
         DEPSEL+=("${entry}")
+        DEPINFO+=("${entry}|${hard_by% }")
     elif [[ -n ${soft_by// } ]]; then
-        soft_by=$(echo "${soft_by}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+        soft_by=$(echo "${soft_by}" | tr ' ' '\n' | grep . | sort -u | tr '\n' ' ' || true)
         printf 'PROVIDER  %-40s any-of via: %s\n' "${entry}" "${soft_by}"
         n_prov=$((n_prov + 1))
     else
@@ -166,28 +265,44 @@ for entry in "${ENTRIES[@]}"; do
 done
 
 info "leaf: ${n_leaf} (keep)  provider-choice: ${n_prov} (keep)  hard-dep: ${#DEPSEL[@]} (deselectable)  stale: ${#STALE[@]}"
+
+# --- plan mode: grouped candidate file for review --------------------------
+if [[ ${MODE} == plan ]]; then
+    {
+        echo "# clean-world plan — $(hostname), root ${ROOT:-/}, $(date +%F)"
+        echo "# One candidate per line, riskiest groups last. Review: DELETE or"
+        echo "# comment out every line you want to KEEP in world, then:"
+        echo "#   sudo clean-world${ROOT:+ -r ${ROOT}} -a ${PLAN}"
+        echo "#   yes y | sudo clean-world${ROOT:+ -r ${ROOT}} -a ${PLAN}   # bulk, after review"
+        for g in 1 2 3 4 5; do
+            glines=""
+            for di in "${DEPINFO[@]}"; do
+                entry="${di%%|*}"; consumers="${di#*|}"
+                catpn=$(echo "${entry}" | sed 's/^[<>=~!]*//; s/:.*//')
+                [[ $(group_of "${catpn}") == "${g}" ]] || continue
+                n=$(echo "${consumers}" | wc -w)
+                short=$(echo "${consumers}" | tr ' ' '\n' | head -5 | tr '\n' ' ')
+                [[ ${n} -le 5 ]] || short="${short}…"
+                glines+="$(printf '%03d|%-44s # %s: %s' "${n}" "${entry}" "${n}" "${short% }")"$'\n'
+            done
+            [[ -n ${glines} ]] || continue
+            echo
+            echo "## ${GROUP_TITLES[g]}"
+            # inside a group: most consumers first — better anchored, safer
+            printf '%s' "${glines}" | sort -t'|' -k1,1nr | cut -d'|' -f2-
+        done
+    } > "${PLAN}"
+    info "Plan written: ${PLAN} (${#DEPSEL[@]} candidates in $(grep -c '^## ' "${PLAN}") groups)"
+    exit 0
+fi
 [[ ${MODE} == interactive ]] || exit 0
 
 # --- interactive part ------------------------------------------------------
-changed=0
-backup_once() {
-    [[ ${changed} -eq 0 ]] || return 0
-    command cp -p "${WORLD}" "${WORLD}.bak-clean-world"
-    info "Backup: ${WORLD}.bak-clean-world"
-}
-drop_entry() {
-    backup_once
-    # grep -vxF into a temp, then cat back: keeps the inode, owner and mode
-    grep -vxF "$1" "${WORLD}" > "${TMPD}/world.new" || true
-    cat "${TMPD}/world.new" > "${WORLD}"
-    changed=$((changed + 1))
-}
-
 if [[ ${#STALE[@]} -gt 0 ]]; then
     echo
     info "${#STALE[@]} stale entr$( [[ ${#STALE[@]} -eq 1 ]] && echo y || echo ies) (this is what 'emaint --fix world' does):"
     printf '    %s\n' "${STALE[@]}"
-    read -r -p "Drop them all? [y/N] " ans
+    ans=""; read -r -p "Drop them all? [y/N] " ans || ans=""
     if [[ ${ans} == y ]]; then
         for e in "${STALE[@]}"; do drop_entry "${e}"; done
         info "Dropped ${#STALE[@]} stale entries."
@@ -198,7 +313,7 @@ if [[ ${#DEPSEL[@]} -gt 0 ]]; then
     echo
     info "Hard-dep entries, one decision each (y = deselect, anything else keeps):"
     for e in "${DEPSEL[@]}"; do
-        read -r -p "  deselect ${e}? [y/N] " ans
+        ans=""; read -r -p "  deselect ${e}? [y/N] " ans || ans=""
         if [[ ${ans} == y ]]; then
             drop_entry "${e}"
             echo "        deselected"
@@ -206,16 +321,4 @@ if [[ ${#DEPSEL[@]} -gt 0 ]]; then
     done
 fi
 
-echo
-if [[ ${changed} -gt 0 ]]; then
-    info "${changed} entries removed — depclean preview (nothing is unmerged):"
-    if [[ -z ${ROOT} ]]; then
-        emerge -p --depclean || warn "depclean preview failed — resolve before any real depclean"
-    else
-        emerge --root="${ROOT}" --config-root="${ROOT}" -p --depclean ||
-            warn "depclean preview failed (image config resolves against host paths) — verify inside the chroot"
-    fi
-    info "Review the list above; run the real depclean yourself when satisfied."
-else
-    info "No changes made."
-fi
+depclean_preview
