@@ -1,0 +1,221 @@
+#!/bin/bash
+# clean-world — Gentoo world-file hygiene: find world entries that are
+# redundant (hard runtime dependencies of other installed packages) and
+# deselect them one by one, without falling into the provider-choice trap.
+#
+# Every world entry is classified from the vdb — RDEPEND/PDEPEND/IDEPEND of
+# all installed packages. Build-time DEPEND/BDEPEND are ignored on purpose:
+# depclean reasons about runtime deps only, so a build-time-only consumer
+# would not protect the entry anyway.
+#
+#   STALE     not installed any more — what 'emaint --fix world' removes
+#   LEAF      nothing depends on it: world is exactly where it belongs — keep
+#   PROVIDER  referenced only inside '|| ( ... )' any-of groups (usually via
+#             a virtual, e.g. zen-sources <- virtual/linux-sources): the
+#             world entry pins YOUR provider choice — keep
+#   DEP       hard runtime dependency of another installed package: redundant
+#             in world; safe to deselect — it stays installed while a
+#             consumer stays and is swept by depclean when the last one goes
+#
+# Only DEP entries are ever offered for deselection. Deselection edits the
+# world file directly (exact-line removal; first change makes a
+# world.bak-clean-world backup) — same effect as 'emerge --deselect', but it
+# works identically on a live-image rootfs via -r. Nothing is ever unmerged:
+# an interactive run ends with 'emerge -p --depclean' so the consequences
+# are visible before any real depclean.
+
+set -euo pipefail
+
+help() { cat <<EOF
+Usage: clean-world [-r ROOT] -c [ENTRY...]   classify world entries (report)
+       clean-world [-r ROOT] -i [ENTRY...]   interactive: drop STALE entries,
+                                             per-entry deselect prompts for
+                                             DEP, depclean preview      [root]
+Options:
+  -r ROOT    operate on ROOT's world/vdb instead of / (live-image rootfs)
+  ENTRY...   limit the run to these world entries (default: the whole file)
+Examples:
+  clean-world -c                       audit the host's world
+  sudo clean-world -i                  guided cleanup of the host's world
+  sudo xp host clean-world -c          the same audit via the xp dispatcher
+  sudo xp nvidiahard clean-world -c    audit the live image's world
+EOF
+}
+
+die()  { echo "❌  $*" >&2; exit 1; }
+info() { echo ">>>  $*"; }
+warn() { echo "⚠️   $*" >&2; }
+
+MODE="" ROOT=""
+ONLY=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) help; exit 0 ;;
+        -c) MODE=check ;;
+        -i) MODE=interactive ;;
+        -r) shift; [[ $# -ge 1 ]] || die "-r needs a directory"
+            ROOT="${1%/}" ;;
+        -*) die "Unknown option: $1 (see: clean-world -h)" ;;
+        *)  ONLY+=("$1") ;;
+    esac
+    shift
+done
+[[ -n ${MODE} ]] || { help; exit 0; }
+
+WORLD="${ROOT}/var/lib/portage/world"
+VDB="${ROOT}/var/db/pkg"
+[[ -f ${WORLD} ]] || die "No world file: ${WORLD}"
+[[ -d ${VDB} ]]   || die "No package database: ${VDB}"
+[[ ${MODE} == check || ${EUID} -eq 0 ]] || die "Root required for -i."
+
+TMPD=$(mktemp -d)
+trap 'command rm -rf "${TMPD}"' EXIT
+DEPFILES="${TMPD}/depfiles"
+find "${VDB}" -mindepth 3 -maxdepth 3 \
+    \( -name RDEPEND -o -name PDEPEND -o -name IDEPEND \) > "${DEPFILES}"
+
+# hard_ref FILE — how a vdb dep file refers to the package in ${CW_RE}:
+# exit 0 = hard dependency (outside every '|| ( ... )' group; use? groups
+# count as hard), 2 = any-of only, 1 = no reference (grep pre-filter hit a
+# substring, e.g. cat/foo matching cat/foo-tools). Blockers (!atom) are
+# conflicts, not deps, and never count.
+hard_ref() {
+    awk '
+    { n = split($0, t, /[ \t]+/)
+      for (i = 1; i <= n; i++) {
+          tok = t[i]
+          if (tok == "||") { pend = 1; continue }
+          if (tok == "(")  { anyof[depth++] = pend; pend = 0; continue }
+          if (tok == ")")  { depth--; continue }
+          pend = 0
+          if (tok ~ /^!/) continue
+          sub(/\[[^\]]*\]$/, "", tok)
+          if (tok ~ ENVIRON["CW_RE"]) {
+              hard = 1
+              for (d = 0; d < depth; d++) if (anyof[d]) hard = 0
+              if (hard) { got_hard = 1; exit }
+              got_any = 1
+          }
+      } }
+    END { if (got_hard) exit 0; exit got_any ? 2 : 1 }
+    ' "$1"
+}
+
+# consumer file path -> "category/name" of the depending package
+consumer_pkg() {
+    local d="${1%/*}"
+    local pf="${d##*/}" cat="${d%/*}"; cat="${cat##*/}"
+    echo "${cat}/$(echo "${pf}" | sed 's/-[0-9].*$//')"
+}
+
+if [[ ${#ONLY[@]} -gt 0 ]]; then
+    for e in "${ONLY[@]}"; do
+        grep -qxF "${e}" "${WORLD}" || die "'${e}' is not a world entry in ${WORLD}"
+    done
+    ENTRIES=("${ONLY[@]}")
+else
+    mapfile -t ENTRIES < "${WORLD}"
+fi
+
+declare -a STALE=() DEPSEL=()
+n_leaf=0 n_prov=0
+for entry in "${ENTRIES[@]}"; do
+    [[ -n ${entry} ]] || continue
+    if [[ ${entry} == @* ]]; then
+        warn "skipping set entry: ${entry}"
+        continue
+    fi
+    # cat/pn: strip a version-operator prefix, a :slot suffix, and (only when
+    # an operator forced a version) the version itself
+    catpn=$(echo "${entry}" | sed 's/^[<>=~!]*//; s/:.*//')
+    [[ ${entry} == [\<\>=~]* ]] && catpn=$(echo "${catpn}" | sed 's/-[0-9][^/]*$//')
+
+    if ! compgen -G "${VDB}/${catpn}-[0-9]*" > /dev/null; then
+        printf 'STALE     %s   (not installed)\n' "${entry}"
+        STALE+=("${entry}")
+        continue
+    fi
+
+    # regex for one dep token; [+] etc. bracket-escaped so gtk+-style names work
+    esc=$(echo "${catpn}" | sed 's/[+.]/[&]/g')
+    export CW_RE="^[!<>=~]*${esc}(-[0-9][^:]*)?(:.*)?\$"
+
+    hard_by="" soft_by=""
+    while IFS= read -r f; do
+        # other slots of the same package are not consumers of it
+        [[ $(consumer_pkg "${f}") == "${catpn}" ]] && continue
+        rc=0; hard_ref "${f}" || rc=$?
+        case ${rc} in
+            0) hard_by+="$(consumer_pkg "${f}") " ;;
+            2) soft_by+="$(consumer_pkg "${f}") " ;;
+        esac
+    done < <(xargs -a "${DEPFILES}" grep -lF -- "${catpn}" 2>/dev/null | sort -u)
+
+    hard_by=$(echo "${hard_by}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+    if [[ -n ${hard_by// } ]]; then
+        printf 'DEP       %-40s <- %s\n' "${entry}" "${hard_by}"
+        DEPSEL+=("${entry}")
+    elif [[ -n ${soft_by// } ]]; then
+        soft_by=$(echo "${soft_by}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+        printf 'PROVIDER  %-40s any-of via: %s\n' "${entry}" "${soft_by}"
+        n_prov=$((n_prov + 1))
+    else
+        printf 'LEAF      %s\n' "${entry}"
+        n_leaf=$((n_leaf + 1))
+    fi
+done
+
+info "leaf: ${n_leaf} (keep)  provider-choice: ${n_prov} (keep)  hard-dep: ${#DEPSEL[@]} (deselectable)  stale: ${#STALE[@]}"
+[[ ${MODE} == interactive ]] || exit 0
+
+# --- interactive part ------------------------------------------------------
+changed=0
+backup_once() {
+    [[ ${changed} -eq 0 ]] || return 0
+    command cp -p "${WORLD}" "${WORLD}.bak-clean-world"
+    info "Backup: ${WORLD}.bak-clean-world"
+}
+drop_entry() {
+    backup_once
+    # grep -vxF into a temp, then cat back: keeps the inode, owner and mode
+    grep -vxF "$1" "${WORLD}" > "${TMPD}/world.new" || true
+    cat "${TMPD}/world.new" > "${WORLD}"
+    changed=$((changed + 1))
+}
+
+if [[ ${#STALE[@]} -gt 0 ]]; then
+    echo
+    info "${#STALE[@]} stale entr$( [[ ${#STALE[@]} -eq 1 ]] && echo y || echo ies) (this is what 'emaint --fix world' does):"
+    printf '    %s\n' "${STALE[@]}"
+    read -r -p "Drop them all? [y/N] " ans
+    if [[ ${ans} == y ]]; then
+        for e in "${STALE[@]}"; do drop_entry "${e}"; done
+        info "Dropped ${#STALE[@]} stale entries."
+    fi
+fi
+
+if [[ ${#DEPSEL[@]} -gt 0 ]]; then
+    echo
+    info "Hard-dep entries, one decision each (y = deselect, anything else keeps):"
+    for e in "${DEPSEL[@]}"; do
+        read -r -p "  deselect ${e}? [y/N] " ans
+        if [[ ${ans} == y ]]; then
+            drop_entry "${e}"
+            echo "        deselected"
+        fi
+    done
+fi
+
+echo
+if [[ ${changed} -gt 0 ]]; then
+    info "${changed} entries removed — depclean preview (nothing is unmerged):"
+    if [[ -z ${ROOT} ]]; then
+        emerge -p --depclean || warn "depclean preview failed — resolve before any real depclean"
+    else
+        emerge --root="${ROOT}" --config-root="${ROOT}" -p --depclean ||
+            warn "depclean preview failed (image config resolves against host paths) — verify inside the chroot"
+    fi
+    info "Review the list above; run the real depclean yourself when satisfied."
+else
+    info "No changes made."
+fi

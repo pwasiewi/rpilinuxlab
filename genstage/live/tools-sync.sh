@@ -13,8 +13,9 @@ SCRIPTS=(
     # install chain: partition, format, unpack squashfs, boot + Secure Boot
     build-usb build-nvme build-initrd-uuid-next montuj luks chroot-mount
     efi-keys efi-boot
-    # portage day-2: emerge wrapper + config editors with their aliases
-    e ve vec vep ves veu vex vic vie vip vis viu vix
+    # portage day-2: emerge wrapper + config editors with their aliases,
+    # world-file hygiene (clean-world, also the 'xp <prof> clean-world' verb)
+    e ve vec vep ves veu vex vic vie vip vis viu vix clean-world
     # make.conf tuning on new hardware
     nativeflags cflagsdiff
     # AIDE lifecycle (baseline refresh, check, report) — was in tools/ but

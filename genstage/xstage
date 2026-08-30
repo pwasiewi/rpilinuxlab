@@ -62,6 +62,9 @@
 #                    Lives in the rootfs: 'unpack' wipes it, so the first
 #                    pass from stage3 is never affected                     [root]
 #   unlock ATOM...|all  drop the hold — the next 'pkgs' updates it again    [root]
+#   clean-world -c|-i [ENTRY...]  audit / deselect redundant entries in the
+#                    image's world file (the live/tools clean-world script
+#                    with -r rootfs)                            [root for -i]
 #   configure        hostname, root password, live user + autologin, sshd,
 #                    default runlevel, motd  [root]
 #   kernel           genkernel with CDROOT=1 inside the chroot; the .config is
@@ -3165,6 +3168,19 @@ cmd_live_unlock() {
     done
 }
 
+# World-file hygiene for the image rootfs: the generic clean-world tool
+# pointed at LIVE_ROOT. The tool itself ships in the images via live/tools,
+# so an installed system can run the same audit on itself later. PATH first
+# (the host's canonical ~/Claude/bin copy), the committed tools copy as the
+# fallback so a fresh checkout works without host setup.
+cmd_live_clean_world() {
+    [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
+    local cw; cw=$(command -v clean-world || true)
+    [[ -n ${cw} ]] || cw="${HERE}/live/tools/usr/local/bin/clean-world"
+    [[ -x ${cw} ]] || die "clean-world not found on PATH or in live/tools — run live/tools-sync.sh"
+    exec "${cw}" -r "${LIVE_ROOT}" "$@"
+}
+
 # Interactive shell in the live rootfs — for inspecting what 'conf' actually
 # wrote (make.conf, package.accept_keywords, repos.conf) and for trying an
 # 'emerge -p' by hand before committing to a multi-hour 'pkgs'.
@@ -4346,6 +4362,7 @@ amd64)
         pkgs)       need_native_profile; cmd_live_pkgs "$@" ;;
         lock)       need_native_profile; cmd_live_lock "$@" ;;
         unlock)     need_native_profile; cmd_live_unlock "$@" ;;
+        clean-world) need_native_profile; cmd_live_clean_world "$@" ;;
         restrict-run) need_native_profile; cmd_live_restrict_run "$@" ;;
         configure)  need_native_profile; cmd_live_configure "$@" ;;
         kernel)     need_native_profile; cmd_live_kernel "$@" ;;

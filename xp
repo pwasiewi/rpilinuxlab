@@ -82,6 +82,11 @@
 #   emerge ARGS     board: cross-emerge into the sysroot (xarm emerge);
 #                   native: emerge inside the live image chroot         [root]
 #   1by1 ARGS       xarm 1by1 (board)                                   [root]
+#   clean-world -c|-i [ENTRY...]  audit / interactively deselect redundant
+#                   world entries (the bin/clean-world tool). Native
+#                   profile: the live image's world; pseudo-profile 'host':
+#                   the RUNNING system's — the only verb 'host' takes.
+#                   Boards have no world file and are refused    [root for -i]
 #   run             xlab run for the profile's xlab target
 #   kernel          xlab kernel build (the QEMU lab, not the live image)
 #   binhost         serve sysroot binpkgs over HTTP (port from global.conf)
@@ -162,7 +167,7 @@ case "$1" in
 esac
 
 # a profile file named like a verb would shadow it — refuse such confs
-RESERVED=" status setup enter emerge 1by1 rootgcc sysroot-prep pkgs lock unlock seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel livekernel rmkernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
+RESERVED=" status setup enter emerge 1by1 rootgcc sysroot-prep pkgs lock unlock clean-world seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel livekernel rmkernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
 
 PROF=""
 if [[ -f ${PROFDIR}/$1.conf ]]; then
@@ -187,6 +192,15 @@ export XPROFILE_FILE="${PROFDIR}/${PROF}.conf"
 T="${PROF_XSTAGE_TARGET}"
 L="${PROF_XLAB_TARGET}"
 is_board() { [[ ${PROF_KIND} == board ]]; }
+is_host()  { [[ ${PROF_KIND} == host ]]; }
+# the 'host' profile is the running system, not a build tree — only the
+# host-maintenance verbs may pass; everything else must die before it can
+# touch a real target
+if is_host; then
+    case "${VERB}" in clean-world) ;; *)
+        die "Profile 'host' is the running system — it takes host-maintenance verbs only (clean-world), not '${VERB}'" ;;
+    esac
+fi
 need_board() { is_board || die "'${VERB}' needs a board profile — ${PROF} is native (${PROF_KIND})"; }
 need_native() { is_board && die "'${VERB}' is a live-image verb — ${PROF} is a board profile"; return 0; }
 no_args() { [[ $# -eq 0 ]] || die "xp ${PROF} ${VERB}: unexpected arguments: $*"; }
@@ -351,6 +365,20 @@ lock|unlock)
     # there. Instant admin ops — no 'timed' line.
     need_native
     exec "${XSTAGE}" "${T}" "${VERB}" "$@"
+    ;;
+clean-world)
+    # one verb, two real targets: profile 'host' audits the running system's
+    # world file, a native profile the live image's (xstage adds -r rootfs).
+    # Boards refused: their packages are driven by PROF_PKGS + the sysroot,
+    # not a world file. Interactive (prompts) — exec, not timed.
+    if is_host; then
+        cw=$(command -v clean-world || true)
+        [[ -n ${cw} ]] || cw="${XP_LAB_DIR}/genstage/live/tools/usr/local/bin/clean-world"
+        [[ -x ${cw} ]] || die "clean-world not found on PATH or in the lab's live/tools — run genstage/live/tools-sync.sh"
+        exec "${cw}" "$@"
+    fi
+    need_native
+    exec "${XSTAGE}" "${T}" clean-world "$@"
     ;;
 livekernel)
     # spelled out, because plain 'kernel' belongs to the xlab QEMU lab

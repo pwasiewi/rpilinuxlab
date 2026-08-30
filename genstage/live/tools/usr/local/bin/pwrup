@@ -17,6 +17,16 @@ Classification against ::gentoo (highest non-live version on each side):
 compares the newest non-prerelease tag against the pwr version. Upstreams
 that are not on GitHub (google-chrome, slack, ...) are skipped — those
 packages live in ::gentoo anyway and update there.
+
+Some upstreams publish every channel as a full GitHub release (brave marks
+nightlies non-prerelease), so `check` also honours an optional per-package
+asset filter in <overlay>/pwrup.conf:
+
+    # cat/pkg  <regex an asset name must match for the release to count>
+    www-client/brave-bin  ^brave-browser_[0-9.]+_amd64\\.deb$
+
+A filtered package only accepts releases carrying a matching asset; the
+tags/atom fallbacks are disabled for it (they cannot see assets).
 """
 
 import argparse
@@ -255,7 +265,27 @@ def gh_atom(rid, feed):
             for t in re.findall(r"Repository/\d+/([^<]+)</id>", text)]
 
 
-def latest_upstream(rid, pkg):
+def load_filters():
+    """cat/pkg -> asset-name regex from <overlay>/pwrup.conf (optional)."""
+    conf = PWR / "pwrup.conf"
+    filt = {}
+    if conf.is_file():
+        for ln in conf.read_text().splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("#"):
+                continue
+            parts = ln.split(None, 1)
+            if len(parts) != 2:
+                die(f"pwrup.conf: expected 'cat/pkg regex', got: {ln}")
+            cp, rx = parts
+            try:
+                filt[cp] = re.compile(rx)
+            except re.error as e:
+                die(f"pwrup.conf: bad regex for {cp}: {e}")
+    return filt
+
+
+def latest_upstream(rid, pkg, asset_re=None):
     """Newest final-release version for a github repo, or (None, why)."""
     cand, note = [], None
     try:
@@ -263,15 +293,20 @@ def latest_upstream(rid, pkg):
         for rel in rels:
             if rel.get("draft") or rel.get("prerelease"):
                 continue
+            if asset_re and not any(asset_re.search(a.get("name", ""))
+                                    for a in rel.get("assets", [])):
+                continue  # wrong channel (nightly/beta published as release)
             v = clean_tag(rel.get("tag_name", ""), pkg)
             if v:
                 cand.append(v)
-        if not cand:  # repo tags without release objects
+        if not cand and not asset_re:  # repo tags without release objects
             tags = gh_get(f"https://api.github.com/repos/{rid}/tags?per_page=30")
             cand = [v for t in tags
                     if (v := clean_tag(t.get("name", ""), pkg))]
     except Exception as e:  # noqa: BLE001 — reported per-package below
         note = f"api: {e}"
+    if not cand and asset_re:
+        return None, note or "no release has an asset matching pwrup.conf filter"
     if not cand:
         for feed in ("releases.atom", "tags.atom"):
             try:
@@ -301,6 +336,7 @@ def cmd_check(args):
             die(f"no overlay package matches: {' '.join(args.packages)}")
     else:
         rows = [r for r in rows if r["rtype"] == "github" and r["top"]]
+    filters = load_filters()
     stale = 0
     for r in rows:
         cp = f"{r['cat']}/{r['pkg']}"
@@ -310,7 +346,7 @@ def cmd_check(args):
         if not r["top"]:
             print(f"SKIP      {cp:44} live-only (-9999)")
             continue
-        up, why = latest_upstream(r["rid"], r["pkg"])
+        up, why = latest_upstream(r["rid"], r["pkg"], filters.get(cp))
         if up is None:
             print(f"?         {cp:44} {why}")
         elif vercmp(up, r["top"]) > 0:
