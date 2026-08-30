@@ -118,3 +118,17 @@ dev-util/wayland-scanner
 # while arm64-stable is 3.0.10 -> "building Guile 3.0.10 but /usr/bin/guile
 # has version 3.0.11". 3.0.11 is ~arm64; keyword it to match the host.
 dev-scheme/guile
+
+# --- alert mesh (2026-08-30) ------------------------------------------------
+# ntfy push server + publish CLI, prebuilt static arm64 binary from ::pwr —
+# the same trio the amd64 images keyword in common image.keywords.
+# net-vpn/tailscale needs no entry: stable arm64 in ::gentoo.
+net-misc/ntfy-bin ~arm64
+acct-user/ntfy ~arm64
+acct-group/ntfy ~arm64
+
+# --- node box (2026-08-30) --------------------------------------------------
+# BCHN official prebuilt aarch64 tarball + EloPool/ckpool fork, both ::pwr;
+# acct-user/bitcoin & acct-group/bitcoin are stable arm64 (eclass keywords).
+net-p2p/bitcoin-cash-node-bin ~arm64
+net-misc/elopool ~arm64

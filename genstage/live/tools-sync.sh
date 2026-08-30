@@ -16,6 +16,9 @@ SCRIPTS=(
     # portage day-2: emerge wrapper + config editors with their aliases,
     # world-file hygiene (clean-world, also the 'xp <prof> clean-world' verb)
     e ve vec vep ves veu vex vic vie vip vis viu vix clean-world
+    # NOT nfy: it bakes in the personal LAN ntfy URL and only nvidiahard
+    # ships ntfy-bin — it rides secure-host/live-overlay/usr/local/bin instead
+
     # make.conf tuning on new hardware
     nativeflags cflagsdiff
     # AIDE lifecycle (baseline refresh, check, report) — was in tools/ but

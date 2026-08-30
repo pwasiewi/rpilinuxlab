@@ -81,6 +81,10 @@ dev-python/glom
 dev-python/face
 dev-python/cachebox
 acct-user/lemonade
+#   ntfy user+group <- net-misc/ntfy-bin (nvidiahard overlay list, 2026-08-30)
+net-misc/ntfy-bin
+acct-user/ntfy
+acct-group/ntfy
 
 # host.keywords lists 'dev-util/shaderc', but shaderc lives in media-libs — the
 # package moved category and the host's entry has silently matched nothing
