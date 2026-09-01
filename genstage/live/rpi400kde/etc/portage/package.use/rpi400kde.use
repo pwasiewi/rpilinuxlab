@@ -126,3 +126,10 @@ net-misc/freerdp -sdl
 # it (loses only OMP-threaded internals; BLAS threading is flexiblas').
 # Found in the native chroot pass, 2026-08-17.
 dev-lang/R -openmp
+
+# git 2.55's new Rust staticlib (gitcore) cross-COMPILES fine (cross-rust-std
+# works) but upstream's cargo-meson.sh then copies the artifact from the
+# HOST path src/debug/ while --target moved it to src/<tuple>/debug/ —
+# "cp: cannot stat .../src/debug/libgitcore.a" (2026-08-31). The Rust bits
+# are an optional pilot in 2.55; drop the flag rather than patch the script.
+dev-vcs/git -rust

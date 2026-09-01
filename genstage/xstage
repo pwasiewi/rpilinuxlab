@@ -3352,6 +3352,55 @@ cmd_tiny_run() {
 # fixup4.dat on an MBR FAT32 partition 1 -> config.txt -> kernel8.img +
 # auto-selected DTB (bcm2711-rpi-400.dtb) + cmdline.txt; partition 2 = rootfs.
 
+cmd_tiny_rmkernel() {
+    need_root
+    # Board twin of cmd_live_rmkernel with inverted semantics: the amd64
+    # live tree carries slotted source kernels and you name the victim; the
+    # boards' sys-kernel/raspberrypi-image is SLOT=0, so an upgrade already
+    # unmerges the old version's OWNED files -- but depmod's regenerated
+    # indexes make every old /lib/modules/<ver>* survive as an unowned
+    # orphan (found 2026-08-31 after 6.18.32 -> 6.18.46: 5 trees, ~130 MB,
+    # baked straight into sd.img). So: no argument -- every module tree not
+    # matching the installed raspberrypi-image version is a candidate, and
+    # each one is checked against ALL vdb CONTENTS first, so an owned tree
+    # can never be a victim. /boot never accumulates (fixed file names,
+    # overwritten in place by the rpi step).
+    [[ -d ${TINY_ROOT}/lib/modules ]] || die "No ${TINY_ROOT}/lib/modules"
+    shopt -s nullglob
+    local vdb=( "${TINY_ROOT}/var/db/pkg/sys-kernel/raspberrypi-image-"* )
+    shopt -u nullglob
+    [[ ${#vdb[@]} -eq 1 ]] ||
+        die "Expected exactly one raspberrypi-image in the rootfs vdb, found ${#vdb[@]} -- is this a full-vdb board rootfs?"
+    local pv kver
+    pv=$(basename "${vdb[0]}"); pv=${pv#raspberrypi-image-}
+    kver=${pv%%_p*}    # 6.18.46_p20260824 -> module dirs are 6.18.46*
+    local victims=() d name
+    shopt -s nullglob
+    for d in "${TINY_ROOT}/lib/modules/"*; do
+        name=$(basename "${d}")
+        [[ ${name} == "${kver}"* ]] && continue
+        if grep -Flq -- "/lib/modules/${name}/" \
+               "${TINY_ROOT}/var/db/pkg/"*/*/CONTENTS 2>/dev/null; then
+            warn "/lib/modules/${name} is owned by an installed package -- skipping"
+            continue
+        fi
+        victims+=( "${d}" )
+    done
+    shopt -u nullglob
+    if [[ ${#victims[@]} -eq 0 ]]; then
+        info "No stale module trees: /lib/modules is all ${kver}* (raspberrypi-image-${pv})"
+        return 0
+    fi
+    info "Installed kernel: raspberrypi-image-${pv} (keeping ${kver}*)"
+    local f
+    for f in "${victims[@]}"; do
+        echo "     rm -rf   ${f#"${TINY_ROOT}"}  ($(du -sh "${f}" 2>/dev/null | cut -f1))"
+    done
+    confirm "Remove ${#victims[@]} stale module tree(s) from ${TINY_ROOT}?"
+    rm -rf -- "${victims[@]}"
+    info "Removed. Rebuild 'image' so sd.img stops carrying them."
+}
+
 cmd_tiny_rpi() {
     need_root; need_cross
     [[ -x ${TINY_ROOT}${TINY_INIT} ]] || die "No rootfs — run: sudo $0 ${ROOT_HINT}"
@@ -3383,6 +3432,21 @@ cmd_tiny_rpi() {
             "${HERE}/rpi/eink213v4.c" || die "eink213 build failed"
     fi
     info "Pi boot payload ready: $(find "${TINY_ROOT}/boot" -type f | wc -l) files in /boot"
+    # SLOT=0 raspberrypi-image upgrades leak unowned /lib/modules/<oldver>*
+    # (depmod indexes keep the trees alive past unmerge) -- detect and point
+    # at the cleanup verb instead of deleting unasked
+    shopt -s nullglob
+    local _vdb=( "${TINY_ROOT}/var/db/pkg/sys-kernel/raspberrypi-image-"* )
+    local _d _pv _kver _stale=0
+    if [[ ${#_vdb[@]} -eq 1 ]]; then
+        _pv=$(basename "${_vdb[0]}"); _pv=${_pv#raspberrypi-image-}; _kver=${_pv%%_p*}
+        for _d in "${TINY_ROOT}/lib/modules/"*; do
+            [[ $(basename "${_d}") == "${_kver}"* ]] || _stale=$(( _stale + 1 ))
+        done
+    fi
+    shopt -u nullglob
+    [[ ${_stale} -eq 0 ]] ||
+        warn "${_stale} stale /lib/modules tree(s) from a previous kernel -- clean with: $0 ${TGT} rmkernel"
 }
 
 no_stale_tiny_loop() {
@@ -3767,16 +3831,21 @@ cmd_tiny_sd() {
     # never a disk that holds a mounted / (covers LUKS/LVM via the child tree)
     lsblk -no MOUNTPOINTS "${dev}" | grep -qx / &&
         die "${dev} holds the root filesystem — refusing"
-    local removable idbus model size
+    local removable idbus tran model size
     removable=$(cat "/sys/block/${name}/removable" 2>/dev/null || echo 0)
     idbus=$(udevadm info --query=property --name="${dev}" | { grep '^ID_BUS=' || true; } | cut -d= -f2)
-    [[ ${removable} == 1 || ${idbus} == usb || ${idbus} == mmc || ${name} == mmcblk* ]] ||
-        die "${dev}: removable=0 and ID_BUS='${idbus:-?}' — refusing to touch an internal disk"
+    # ID_BUS alone misses modern UAS/SAT portable SSDs: udev's ata_id succeeds
+    # through the bridge's ATA pass-through and overrides ID_BUS to 'ata', and
+    # the drive reports removable=0 (ADATA SC740/SM2320, 2026-09-02). lsblk's
+    # TRAN walks the sysfs parent chain and still says 'usb' — authoritative.
+    tran=$(lsblk -dno TRAN "${dev}" 2>/dev/null || true)
+    [[ ${removable} == 1 || ${idbus} == usb || ${tran} == usb || ${idbus} == mmc || ${name} == mmcblk* ]] ||
+        die "${dev}: removable=0, ID_BUS='${idbus:-?}', TRAN='${tran:-?}' — refusing to touch an internal disk"
     [[ $(blockdev --getsize64 "${dev}") -ge $(stat -c%s "${TINY_IMG}") ]] ||
         die "${dev} is smaller than ${TINY_IMG}"
     model=$(cat "/sys/block/${name}/device/model" 2>/dev/null || echo '?')
     size=$(lsblk -dno SIZE "${dev}")
-    warn "Target: ${dev}  model:${model% }  size:${size}  removable:${removable}  bus:${idbus:-?}"
+    warn "Target: ${dev}  model:${model% }  size:${size}  removable:${removable}  bus:${idbus:-?}  tran:${tran:-?}"
     confirm "Overwrite ${dev} with ${TINY_IMG} (ALL data on it is lost)?"
     local p
     for p in "${dev}"?*; do
@@ -4387,6 +4456,7 @@ tiny)
         pack)     cmd_tiny_pack "$@" ;;
         run)      cmd_tiny_run "$@" ;;
         rpi)        need_board_profile; cmd_tiny_rpi "$@" ;;
+        rmkernel)   need_board_profile; cmd_tiny_rmkernel "$@" ;;
         image)      need_board_profile; cmd_tiny_image "$@" ;;
         image_zero) need_board_profile; cmd_tiny_image_zero "$@" ;;
         run-rpi)  cmd_tiny_run_rpi "$@" ;;
@@ -4402,6 +4472,7 @@ arm64)
         unpack)   need_board_profile; cmd_arm64_unpack "$@" ;;
         conf)     need_board_profile; cmd_arm64_conf "$@" ;;
         rpi)      need_board_profile; cmd_tiny_rpi "$@" ;;
+        rmkernel) need_board_profile; cmd_tiny_rmkernel "$@" ;;
         image)    need_board_profile; cmd_arm64_image "$@" ;;
         run-rpi)  cmd_tiny_run_rpi "$@" ;;
         sd)       cmd_tiny_sd "$@" ;;

@@ -13,8 +13,10 @@ app-forensics/aide
 
 # ::pwr live fork (upstream left ::gentoo); shell script, arch-independent.
 # The sysroot reaches ::pwr via repos.conf/pwr.conf — written by hand next to
-# xarm's gentoo.conf pin, host path /home/tmp/.repos/pwr (not shipped to the
-# card: the card gets the built binpkg, not the repo)
+# xarm's gentoo.conf pin, host path /var/db/repos/pwr since the 2026-08
+# nvhard reinstall (not shipped to the card: the card gets the built
+# binpkg, not the repo). xarm setup only creates gentoo.conf when missing,
+# so the hand-written file survives.
 app-forensics/lynis **
 
 # crossdev wart: host (BROOT) build deps resolve with THIS file's keywords.
