@@ -1776,3 +1776,5 @@ games-util/protonup-rs
 gui-wm/gamescope
 gui-libs/wlroots:0.20
 media-gfx/vkBasalt
+# GOG/Epic client (Heroic) — runs GOG games through GE-Proton (2026-09-04)
+games-util/heroic-bin
