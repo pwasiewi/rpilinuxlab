@@ -2098,8 +2098,9 @@ if op == "list":
             m = json.load(open(os.path.join(state, f)))
             rows.append((m["slug"], m.get("name", ""), m.get("version", ""), str(m.get("modId", "")), len(m["files"]), time.strftime("%Y-%m-%d", time.localtime(m["installed"]))))
     if not rows: print("(no mods installed through steamctl)"); sys.exit(0)
-    print(f"{'slug':<28} {'modId':>6} {'ver':<8} {'files':>5} {'date':<10} name")
-    for s, n, v, i, c, d in rows: print(f"{s:<28} {i:>6} {v[:8]:<8} {c:>5} {d:<10} {n}")
+    w = max(4, max(len(r[0]) for r in rows)); vw = max(3, min(12, max(len(r[2]) for r in rows)))
+    print(f"{'slug':<{w}}  {'modId':>6}  {'ver':<{vw}}  {'files':>5}  {'date':<10}  name")
+    for s, n, v, i, c, d in rows: print(f"{s:<{w}}  {i:>6}  {v[:vw]:<{vw}}  {c:>5}  {d:<10}  {n}")
     sys.exit(0)
 
 if op == "w3conflicts":  # duplicate .ws script paths across mods/
