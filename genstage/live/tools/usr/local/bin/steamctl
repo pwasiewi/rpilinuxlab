@@ -95,6 +95,38 @@ Helper tools:
                             `tricks gothic vcrun2019`, `tricks gothic -c winecfg`.
   umu <exe> [args...]       Run a non-Steam Windows exe under the latest
                             GE-Proton via umu-run (PROTONPATH/GAMEID honoured).
+  heroic list | env <game> | run <game> [-x EXE] [--no-wayland] [--no-dlss]
+                            [-e K=V]... [-n] [-- args] | log [game]
+                            | wine <game> [TAG]
+                            GOG games installed through Heroic, launched from
+                            the terminal with exactly Heroic's settings (Wine
+                            build, prefix, env toggles) but with a Proton log
+                            and stderr captured — for a game that dies before
+                            the GUI shows anything. <game> = GOG id or a part
+                            of the title. --no-wayland / --no-dlss drop the
+                            usual suspects; -x picks another exe (relative to
+                            the install dir); -n prints the command only.
+                            wine = show/set the game's Proton build in Heroic's
+                            config (a `proton list` name; Heroic must be closed).
+                            setenv|unsetenv <game> KEY[=VALUE]... = edit the
+                            game's env list in Heroic's config (Heroic closed),
+                            e.g. setenv witcher PROTON_ENABLE_WAYLAND=1.
+  mod key [KEY] | handler | nxm <url>
+  mod <cp2077|witcher3|gothic> status | search <words> [-n N] | info <modId> [all]
+                            | add <modId>[:fileId] | add <archive> [-n slug] [--plan]
+                            | rm <slug> | list | frameworks [name] | merge | bench [label]
+                            Mods from Nexus (search/info need no account; add needs
+                            an API key — `mod key` — and, on a free account, the
+                            nxm:// link from the site's Download button, which
+                            `mod handler` routes here). Files are placed by game
+                            rules (cp2077: archive/pc/mod, r6/scripts|tweaks,
+                            CET mods, red4ext; witcher3: mods/mod*, dlc/, bin/
+                            + dx11/dx12filelist registration) and recorded so
+                            rm is exact. frameworks = RED4ext/CET/redscript/
+                            ArchiveXL/TweakXL/Codeware from GitHub (cp2077),
+                            w3scriptmerge (witcher3). bench = the game's
+                            benchmark (cp2077) or a MangoHud log (witcher3)
+                            plus the VRAM peak sampled from nvidia-smi.
   bench on <game> [label] [-d SEC] | off | label <game> <text> | report <game>
                             Measure in-game benchmarks with MangoHud logging
                             (Shift+F2 starts a log, stops after SEC=120):
@@ -1542,6 +1574,796 @@ cmd_display() {
     esac
 }
 
+# heroic -------------------------------------------------------------------
+# Heroic (GOG/Epic client) keeps one JSON per game under GamesConfig/ and
+# launches GOG titles as gogdl → umu-run, i.e. the same GE-Proton the Steam
+# side uses. Its own game log is written only when the game exits cleanly, so
+# an early crash leaves nothing to read; `heroic run` rebuilds that launch
+# from the JSON, adds PROTON_LOG=1 and keeps stderr, and lets the two usual
+# suspects (Wine's Wayland driver, the DLSS/NVAPI overrides) be dropped
+# without touching Heroic's settings.
+HEROIC_CFG="${XDG_CONFIG_HOME:-${HOME}/.config}/heroic"
+HEROIC_LOGS="${XDG_DATA_HOME:-${HOME}/.local/share}/steamctl/heroic"
+
+# heroic_py <op> [args] — installed-game lookup and launch env from Heroic's
+# JSON. Ops: list; resolve <game> → id\ttitle\tinstall_path; env <game>
+# [nowayland] [nodlss] → KEY=VALUE lines + EXE=<path> (Heroic's alternative
+# exe if set, else the GOG primary play task) + INSTALL=<dir>.
+heroic_py() {
+    python3 - "${HEROIC_CFG}" "$@" <<'PYH'
+import json, os, sys
+cfg, op = sys.argv[1], sys.argv[2]
+args = sys.argv[3:]
+def load(p, default):
+    try:
+        with open(p) as f: return json.load(f)
+    except (OSError, ValueError): return default
+titles = {}
+for rel in (('store_cache', 'gog_library.json'), ('gog_store', 'library.json')):
+    for g in load(os.path.join(cfg, *rel), {}).get('games', []):
+        if g.get('title') and not titles.get(g.get('app_name')):
+            titles[g['app_name']] = g['title']
+inst = [g for g in load(os.path.join(cfg, 'gog_store', 'installed.json'), {}).get('installed', [])
+        if not g.get('is_dlc')]
+def gcfg(i): return load(os.path.join(cfg, 'GamesConfig', f'{i}.json'), {}).get(i, {})
+if op == 'list':
+    for g in inst:
+        i = g['appName']; c = gcfg(i)
+        print('\t'.join([i, titles.get(i, '?'), g.get('version', '?'), g.get('install_path', '?'),
+                         c.get('wineVersion', {}).get('name', 'default'), c.get('winePrefix', '?')]))
+    sys.exit(0)
+want = args[0]
+hits = [g for g in inst if g['appName'] == want] or \
+       [g for g in inst if want.lower() in titles.get(g['appName'], '').lower()]
+if len(hits) != 1:
+    sys.stderr.write('no unique match for %r among: %s\n' % (want, ', '.join(
+        f"{g['appName']} {titles.get(g['appName'],'?')}" for g in inst)))
+    sys.exit(1)
+g = hits[0]; i = g['appName']; path = g['install_path']
+if op == 'resolve':
+    print('\t'.join([i, titles.get(i, '?'), path])); sys.exit(0)
+c = gcfg(i)
+nowayland, nodlss = 'nowayland' in args, 'nodlss' in args
+env = {}
+for e in c.get('enviromentOptions', []):
+    env[e['key']] = e['value']
+if c.get('autoInstallDxvkNvapi', True):
+    env.setdefault('PROTON_ENABLE_NVAPI', '1'); env.setdefault('DXVK_ENABLE_NVAPI', '1')
+    env.setdefault('DXVK_NVAPI_DRS_SETTINGS',
+        'ngx_dlss_sr_override=on,ngx_dlss_rr_override=on,ngx_dlss_fg_override=on')
+if nowayland:
+    env.pop('PROTON_ENABLE_WAYLAND', None)
+if nodlss:
+    for k in [k for k in env if k.startswith('DXVK_NVAPI_DRS') or k == 'PROTON_DLSS_UPGRADE']:
+        env.pop(k)
+w = c.get('wineVersion', {})
+if w.get('type') == 'proton' and w.get('bin'):
+    env['PROTONPATH'] = os.path.dirname(w['bin'])
+elif w.get('bin'):
+    env['PROTONPATH'] = os.path.dirname(os.path.dirname(w['bin']))
+if c.get('winePrefix'): env['WINEPREFIX'] = c['winePrefix']
+env.setdefault('GAMEID', 'umu-0'); env.setdefault('STORE', 'gog')
+exe = c.get('targetExe') or ''
+if not exe:
+    info = load(os.path.join(path, f'goggame-{i}.info'), {})
+    tasks = info.get('playTasks', [])
+    prim = [t for t in tasks if t.get('isPrimary')] or [t for t in tasks if t.get('type') == 'FileTask']
+    if prim: exe = os.path.join(path, prim[0].get('path', '').replace('\\', '/'))
+for k, v in sorted(env.items()):
+    print(f'{k}={v}')
+print(f'EXE={exe}')
+print(f'INSTALL={path}')
+PYH
+}
+
+cmd_heroic() {
+    local sub="${1:-list}"; shift || true
+    [[ -d ${HEROIC_CFG} ]] || die "No Heroic config at ${HEROIC_CFG} (emerge games-util/heroic-bin, log in once)."
+    case ${sub} in
+        list)
+            heroic_py list | awk -F'\t' 'BEGIN{printf "%-11s %-45s %-22s %s\n","GOG id","title","wine","install"}
+                {printf "%-11s %-45s %-22s %s\n",$1,substr($2,1,45),$5,$4}' ;;
+        env)
+            [[ $# -ge 1 ]] || die "heroic env <game>"
+            heroic_py env "$@" ;;
+        run)
+            have umu-run || die "umu-run not installed: emerge games-util/umu-launcher"
+            [[ $# -ge 1 ]] || die "heroic run <game> [-x EXE] [--no-wayland] [--no-dlss] [-e K=V] [-n] [-- args]"
+            local game="$1"; shift
+            local exe="" dry=no flags=() extra=() gargs=()
+            while [[ $# -gt 0 ]]; do
+                case $1 in
+                    -x) exe="${2:?-x EXE}"; shift 2 ;;
+                    --no-wayland) flags+=(nowayland); shift ;;
+                    --no-dlss) flags+=(nodlss); shift ;;
+                    -e) extra+=("${2:?-e K=V}"); shift 2 ;;
+                    -n) dry=yes; shift ;;
+                    --) shift; gargs=("$@"); break ;;
+                    *) gargs+=("$1"); shift ;;
+                esac
+            done
+            local line kv=() install="" defexe="" id
+            id=$(heroic_py resolve "${game}" | cut -f1) || exit 1
+            while IFS= read -r line; do
+                case ${line} in
+                    EXE=*) defexe="${line#EXE=}" ;;
+                    INSTALL=*) install="${line#INSTALL=}" ;;
+                    *) kv+=("${line}") ;;
+                esac
+            done < <(heroic_py env "${game}" "${flags[@]}")
+            [[ -n ${install} ]] || die "heroic: could not resolve '${game}'"
+            [[ -n ${exe} ]] || exe="${defexe}"
+            [[ -n ${exe} ]] || die "No executable known for ${id}; pass -x EXE"
+            [[ ${exe} == /* ]] || exe="${install}/${exe}"
+            [[ -f ${exe} ]] || die "Executable not found: ${exe}"
+            mkdir -p "${HEROIC_LOGS}"
+            local stamp; stamp=$(date +%Y%m%d-%H%M%S)
+            local err="${HEROIC_LOGS}/${id}-${stamp}.stderr"
+            kv+=(PROTON_LOG=1 "PROTON_LOG_DIR=${HEROIC_LOGS}")
+            [[ ${#extra[@]} -gt 0 ]] && kv+=("${extra[@]}")
+            if [[ ${dry} == yes ]]; then
+                printf 'cd %q\n' "$(dirname "${exe}")"
+                printf 'env'; printf ' %q' "${kv[@]}"; printf ' umu-run %q' "${exe}"
+                [[ ${#gargs[@]} -gt 0 ]] && printf ' %q' "${gargs[@]}"; echo
+                return 0
+            fi
+            info "Launching $(basename "${exe}") under $(printf '%s\n' "${kv[@]}" | sed -n 's/^PROTONPATH=.*\///p' | tail -1)"
+            info "stderr → ${err}; Proton log → ${HEROIC_LOGS}/steam-*.log"
+            [[ ${#flags[@]} -gt 0 ]] && info "dropped: ${flags[*]}"
+            local t0=${SECONDS} rc=0
+            ( cd "$(dirname "${exe}")" && env "${kv[@]}" umu-run "${exe}" "${gargs[@]}" 2> "${err}" ) || rc=$?
+            info "exit ${rc} after $(( SECONDS - t0 )) s"
+            cmd_heroic log "${id}"
+            return "${rc}" ;;
+        log)
+            local pat="*"
+            [[ $# -ge 1 ]] && { pat="$(heroic_py resolve "$1" | cut -f1)" || exit 1; }
+            local err; err=$(ls -t "${HEROIC_LOGS}"/${pat}-*.stderr 2>/dev/null | head -1)
+            [[ -n ${err} ]] || die "No run logs under ${HEROIC_LOGS}"
+            local plog; plog=$(ls -t "${HEROIC_LOGS}"/steam-*.log 2>/dev/null | head -1)
+            echo "== ${err} ($(wc -l < "${err}") lines) — errors, crashes, DLSS/NVAPI:"
+            grep -a -i -E 'err:|unhandled|exception|crash|dlss|nvapi|nvngx|wayland|vkd3d.*(error|fail)|failed' "${err}" \
+                | grep -v -E 'fixme:' | tail -n 40 | cut -c1-200
+            if [[ -n ${plog} ]]; then
+                echo "== ${plog} ($(wc -l < "${plog}") lines), last 15 non-fixme lines:"
+                grep -a -v -E '^[0-9a-f]+:fixme|^fixme' "${plog}" | tail -n 15 | cut -c1-200
+            fi ;;
+        wine)
+            [[ $# -ge 1 ]] || die "heroic wine <game> [TAG]"
+            local id; id=$(heroic_py resolve "$1" | cut -f1) || exit 1
+            local cfg="${HEROIC_CFG}/GamesConfig/${id}.json"
+            if [[ $# -eq 1 ]]; then
+                python3 -c 'import json,sys; c=json.load(open(sys.argv[1])).get(sys.argv[2],{}); w=c.get("wineVersion",{}); print(w.get("name","(Heroic default)"), w.get("bin",""))' "${cfg}" "${id}" 2>/dev/null \
+                    || echo "(Heroic default — no per-game config yet)"
+                return 0
+            fi
+            local dir; dir=$(tool_dir "$2") || die "No such tool under ${COMPAT_DIR}: $2 (see proton list)"
+            [[ -f ${cfg} ]] || die "No per-game config yet (${cfg}): open the game's settings in Heroic once."
+            ! pgrep -x heroic >/dev/null || die "Heroic is running and would overwrite the change — close it first."
+            python3 - "${cfg}" "${id}" "${dir}" <<'PYW'
+import json, os, sys
+cfg, i, d = sys.argv[1:4]
+data = json.load(open(cfg))
+data.setdefault(i, {})['wineVersion'] = {'bin': os.path.join(d, 'proton'), 'name': os.path.basename(d), 'type': 'proton'}
+tmp = cfg + '.tmp'
+with open(tmp, 'w') as f: json.dump(data, f, indent=2); f.write('\n')
+os.replace(tmp, cfg)
+PYW
+            info "${id}: Wine → $(basename "${dir}")" ;;
+        setenv|unsetenv)
+            [[ $# -ge 2 ]] || die "heroic ${sub} <game> KEY[=VALUE]..."
+            local id; id=$(heroic_py resolve "$1" | cut -f1) || exit 1; shift
+            local cfg="${HEROIC_CFG}/GamesConfig/${id}.json"
+            [[ -f ${cfg} ]] || die "No per-game config yet (${cfg}): open the game's settings in Heroic once."
+            ! pgrep -x heroic >/dev/null || die "Heroic is running and would overwrite the change — close it first."
+            python3 - "${cfg}" "${id}" "${sub}" "$@" <<'PYE'
+import json, os, sys
+cfg, i, op = sys.argv[1:4]; items = sys.argv[4:]
+data = json.load(open(cfg)); g = data.setdefault(i, {}); env = g.setdefault("enviromentOptions", [])
+for it in items:
+    k, _, v = it.partition("=")
+    env[:] = [e for e in env if e.get("key") != k]
+    if op == "setenv": env.append({"key": k, "value": v})
+tmp = cfg + ".tmp"
+with open(tmp, "w") as f: json.dump(data, f, indent=2); f.write("\n")
+os.replace(tmp, cfg)
+print(f"{i}: " + ", ".join(f"{e['key']}={e['value']}" for e in env))
+PYE
+            ;;
+        *) die "heroic list | env <game> | run <game> [...] | log [game] | wine <game> [TAG] | setenv|unsetenv <game> KEY[=VALUE]..." ;;
+    esac
+}
+
+# mod ----------------------------------------------------------------------
+# Mods for Cyberpunk 2077 (Steam) and The Witcher 3 next-gen (GOG via Heroic).
+# Discovery is Nexus Mods GraphQL v2 — keyword search and file lists need no
+# account. The download step is Nexus REST v1: a personal API key
+# (nexusmods.com/users/myaccount?tab=api → `steamctl mod key KEY`), and for a
+# non-Premium account additionally the key/expires pair carried by the
+# nxm:// link the site emits on "Download" — `steamctl mod handler install`
+# registers this script for nxm:// so that click lands here. Frameworks
+# (RED4ext, CET, redscript, ArchiveXL, TweakXL, Codeware) come from GitHub
+# release pages scraped without the API (expanded_assets fragment).
+# Everything installed is recorded under MOD_STATE/<game>/<slug>.json (file
+# list), so `rm` deletes exactly what `add` wrote.
+MOD_STATE="${XDG_DATA_HOME:-${HOME}/.local/share}/steamctl/mods"
+MOD_DL="${XDG_CACHE_HOME:-${HOME}/.cache}/steamctl/mods"
+MOD_TOOLS="${XDG_DATA_HOME:-${HOME}/.local/share}/steamctl/tools"
+NEXUS_KEY_FILE="${XDG_CONFIG_HOME:-${HOME}/.config}/steamctl/nexus.key"
+NEXUS_GQL="https://api.nexusmods.com/v2/graphql"
+NEXUS_V1="https://api.nexusmods.com/v1"
+
+# mod_game <name> → MOD_GAME cp2077|witcher3, MOD_DOMAIN, MOD_GID, MOD_ROOT.
+mod_game() {
+    case ${1,,} in
+        cp2077|cyberpunk|cyberpunk2077|1091500)
+            MOD_GAME=cp2077 MOD_DOMAIN=cyberpunk2077 MOD_GID=3333
+            local m; m=$(app_manifest 1091500) || die "Cyberpunk 2077 is not installed in any Steam library"
+            MOD_ROOT="$(dirname "${m}")/common/$(acf_key "${m}" installdir)" ;;
+        witcher3|witcher|w3|tw3|1495134320)
+            MOD_GAME=witcher3 MOD_DOMAIN=witcher3 MOD_GID=952
+            MOD_ROOT=$(heroic_py resolve 1495134320 2>/dev/null | cut -f3) || true
+            [[ -n ${MOD_ROOT} ]] || die "The Witcher 3 GOTY (GOG 1495134320) is not installed through Heroic" ;;
+        gothic|g1r|gothic1remake|1297900)
+            MOD_GAME=gothic MOD_DOMAIN=gothic1remake MOD_GID=7371
+            local m; m=$(app_manifest 1297900) || die "Gothic 1 Remake is not installed in any Steam library"
+            MOD_ROOT="$(dirname "${m}")/common/$(acf_key "${m}" installdir)"
+            # Unreal keeps the user-side ini files in the prefix, not the game dir
+            export MOD_PFXCFG="$(dirname "${m}")/compatdata/1297900/pfx/drive_c/users/steamuser/AppData/Local/G1R/Saved/Config/Windows" ;;
+        *) die "mod: game must be cp2077, witcher3 or gothic (got '$1')" ;;
+    esac
+    [[ -d ${MOD_ROOT} ]] || die "Game directory missing: ${MOD_ROOT}"
+    mkdir -p "${MOD_STATE}/${MOD_GAME}" "${MOD_DL}"
+}
+nexus_key() { [[ -n ${NEXUS_API_KEY:-} ]] && { echo "${NEXUS_API_KEY}"; return; }; [[ -s ${NEXUS_KEY_FILE} ]] && cat "${NEXUS_KEY_FILE}"; }
+
+# mod_py <op> [args] — Nexus queries, archive placement, manifests, summaries.
+mod_py() {
+    python3 - "$@" <<'PYM'
+import json, os, re, shutil, subprocess, sys, tempfile, time, urllib.request, urllib.error
+op, args = sys.argv[1], sys.argv[2:]
+GQL = "https://api.nexusmods.com/v2/graphql"
+V1 = "https://api.nexusmods.com/v1"
+UA = "steamctl/1.0 (Gentoo; personal use)"
+
+def gql(query, variables=None):
+    body = json.dumps({"query": query, "variables": variables or {}}).encode()
+    req = urllib.request.Request(GQL, data=body, headers={"Content-Type": "application/json", "User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        d = json.load(r)
+    if d.get("errors"):
+        sys.exit("Nexus GraphQL: " + "; ".join(e.get("message", "?") for e in d["errors"]))
+    return d["data"]
+
+def human(n):
+    n = float(n)
+    for u in ("B", "K", "M", "G"):
+        if n < 1024: return f"{n:.0f}{u}" if u == "B" else f"{n:.1f}{u}"
+        n /= 1024
+    return f"{n:.1f}T"
+
+if op == "search":
+    domain, words, count = args[0], args[1], int(args[2]) if len(args) > 2 else 15
+    q = """query($n:String!,$d:String!,$c:Int!){ mods(filter:{name:{value:$n,op:WILDCARD},gameDomainName:{value:$d}},
+           sort:[{endorsements:{direction:DESC}}], count:$c){ totalCount nodes{ modId name version endorsements downloads updatedAt adultContent summary } } }"""
+    d = gql(q, {"n": words, "d": domain, "c": count})["mods"]
+    print(f"{d['totalCount']} match(es); top {len(d['nodes'])} by endorsements:")
+    print(f"{'modId':>6}  {'ver':<9} {'endorse':>7} {'downloads':>9}  {'updated':<10} name")
+    for m in d["nodes"]:
+        upd = (m.get("updatedAt") or "")[:10]
+        flag = " [adult]" if m.get("adultContent") else ""
+        print(f"{m['modId']:>6}  {(m.get('version') or '')[:9]:<9} {m['endorsements']:>7} {m['downloads']:>9}  {upd:<10} {m['name']}{flag}")
+    sys.exit(0)
+
+if op == "info":
+    domain, gid, mid = args[0], int(args[1]), int(args[2]); show_all = "all" in args[3:]
+    q = """query($m:ID!,$g:ID!){ mod(modId:$m,gameId:$g){ modId name version author summary endorsements downloads updatedAt }
+           modFiles(modId:$m,gameId:$g){ fileId name version category sizeInBytes date primary description } }"""
+    d = gql(q, {"m": str(mid), "g": str(gid)})
+    m = d["mod"]
+    if not m: sys.exit(f"No mod {mid} for {domain}")
+    print(f"{m['name']}  v{m.get('version')}  by {m.get('author')}  endorsements {m['endorsements']}  downloads {m['downloads']}  updated {(m.get('updatedAt') or '')[:10]}")
+    print(f"https://www.nexusmods.com/{domain}/mods/{mid}")
+    if m.get("summary"): print("  " + m["summary"].strip()[:300])
+    files = d["modFiles"] or []
+    order = {"MAIN": 0, "UPDATE": 1, "OPTIONAL": 2, "MISCELLANEOUS": 3, "OLD_VERSION": 8, "ARCHIVED": 9}
+    files.sort(key=lambda f: (order.get(f["category"], 5), -int(f["date"] or 0)))
+    print(f"\n{'fileId':>7}  {'category':<13} {'ver':<8} {'size':>7}  {'date':<10} file")
+    for f in files:
+        if not show_all and f["category"] in ("ARCHIVED", "OLD_VERSION"): continue
+        print(f"{f['fileId']:>7}  {f['category']:<13} {(f.get('version') or '')[:8]:<8} {human(f['sizeInBytes']):>7}  {time.strftime('%Y-%m-%d', time.gmtime(int(f['date'])))}  {f['name']}")
+    if not show_all: print("(archived / old versions hidden — add 'all')")
+    sys.exit(0)
+
+if op == "primary":  # newest MAIN file id + name
+    gid, mid = int(args[0]), int(args[1])
+    d = gql("query($m:ID!,$g:ID!){ modFiles(modId:$m,gameId:$g){ fileId name category date sizeInBytes } }", {"m": str(mid), "g": str(gid)})
+    fs = [f for f in d["modFiles"] if f["category"] == "MAIN"]
+    if not fs: sys.exit("no MAIN file — pick one with `mod <game> info` and use modId:fileId")
+    f = max(fs, key=lambda x: int(x["date"] or 0)); print(f"{f['fileId']}\t{f['name']}\t{f['sizeInBytes']}")
+    sys.exit(0)
+
+if op == "dlurl":  # dlurl <domain> <modId> <fileId> <apikey> [key expires]
+    domain, mid, fid, apikey = args[:4]; extra = args[4:]
+    url = f"{V1}/games/{domain}/mods/{mid}/files/{fid}/download_link.json"
+    if len(extra) == 2: url += f"?key={extra[0]}&expires={extra[1]}"
+    req = urllib.request.Request(url, headers={"apikey": apikey, "User-Agent": UA, "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            links = json.load(r)
+            rem = r.headers.get("X-RL-Daily-Remaining"); 
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:200]
+        if e.code == 403 and "premium" in body.lower():
+            print("NOT_PREMIUM"); sys.exit(0)
+        sys.exit(f"Nexus v1 HTTP {e.code}: {body}")
+    if not links: sys.exit("empty download_link response")
+    print(links[0]["URI"]); print(f"remaining-daily={rem}", file=sys.stderr)
+    sys.exit(0)
+
+if op == "nxm":  # parse nxm://domain/mods/ID/files/FID?key=..&expires=..
+    from urllib.parse import urlparse, parse_qs
+    u = urlparse(args[0]); parts = u.path.strip("/").split("/")
+    qs = parse_qs(u.query)
+    print("\t".join([u.netloc, parts[1], parts[3], qs.get("key", [""])[0], qs.get("expires", [""])[0]]))
+    sys.exit(0)
+
+# ---- archive placement ---------------------------------------------------
+KNOWN_CP = {"archive", "r6", "red4ext", "bin", "engine", "mods", "tools"}
+SKIP = re.compile(r"(readme|changelog|license|\.url|\.md|\.txt|\.pdf|\.jpg|\.png|\.webp|\.gif|fomod/)", re.I)
+
+def collapse(src):
+    """Descend through single-directory wrappers that are not a game-root name."""
+    while True:
+        items = [i for i in os.listdir(src) if not SKIP.search(i)]
+        if len(items) == 1 and os.path.isdir(os.path.join(src, items[0])) and items[0].lower() not in KNOWN_CP \
+           and not items[0].lower().startswith(("mod", "dlc")) and items[0].lower() not in ("g1r", "engine", "ue4ss") \
+           and not os.path.exists(os.path.join(src, items[0], "enabled.txt")) \
+           and not os.path.exists(os.path.join(src, items[0], "Scripts", "main.lua")) \
+           and not os.path.exists(os.path.join(src, items[0], "init.lua")):
+            src = os.path.join(src, items[0]); continue
+        return src
+
+def walk_files(d):
+    for base, _, fs in os.walk(d):
+        for f in fs: yield os.path.join(base, f)
+
+def plan(game, src, slug):
+    """Return list of (abs_src_file, rel_dst) and notes."""
+    src = collapse(src); out = []; notes = []
+    entries = sorted(os.listdir(src))
+    if game == "cp2077":
+        for e in entries:
+            p = os.path.join(src, e); el = e.lower()
+            if os.path.isdir(p) and el in KNOWN_CP:
+                for f in walk_files(p): out.append((f, os.path.relpath(f, src)))
+            elif os.path.isdir(p) and os.path.exists(os.path.join(p, "init.lua")):
+                for f in walk_files(p): out.append((f, os.path.join("bin/x64/plugins/cyber_engine_tweaks/mods", e, os.path.relpath(f, p))))
+            elif os.path.isdir(p):
+                for f in walk_files(p):
+                    fl = f.lower()
+                    if fl.endswith((".archive", ".xl")): out.append((f, os.path.join("archive/pc/mod", os.path.basename(f))))
+                    elif fl.endswith(".reds"): out.append((f, os.path.join("r6/scripts", slug, os.path.relpath(f, p))))
+                    elif fl.endswith((".yaml", ".yml", ".tweak")): out.append((f, os.path.join("r6/tweaks", slug, os.path.relpath(f, p))))
+                    elif fl.endswith(".lua"): out.append((f, os.path.join("bin/x64/plugins/cyber_engine_tweaks/mods", slug, os.path.relpath(f, p))))
+                    elif not SKIP.search(f): notes.append(f"unplaced: {os.path.relpath(f, src)}")
+            else:
+                el = e.lower()
+                if el.endswith((".archive", ".xl")): out.append((p, os.path.join("archive/pc/mod", e)))
+                elif el.endswith(".reds"): out.append((p, os.path.join("r6/scripts", slug, e)))
+                elif el.endswith((".yaml", ".yml", ".tweak")): out.append((p, os.path.join("r6/tweaks", slug, e)))
+                elif el.endswith(".lua"): out.append((p, os.path.join("bin/x64/plugins/cyber_engine_tweaks/mods", slug, e)))
+                elif not SKIP.search(e): notes.append(f"unplaced: {e}")
+    elif game == "gothic":
+        # Unreal 5 title: UE4SS Lua/C++ mods under G1R/Binaries/Win64/ue4ss/Mods,
+        # fyryNy's dsound.dll loader plugins beside it, pak mods in Content/Paks/~mods,
+        # video/splash replacements in Content/Movies|Splash, and the Engine.ini /
+        # GameUserSettings.ini tweak files in the PREFIX config dir (absolute dst).
+        W64 = "G1R/Binaries/Win64"; pfx = os.environ.get("MOD_PFXCFG", "")
+        def add_tree(p, dst):
+            for f in walk_files(p): out.append((f, os.path.join(dst, os.path.relpath(f, p))))
+        def loose(f, rel_for_notes):
+            fl = os.path.basename(f).lower()
+            if fl.endswith(".bk2"): out.append((f, os.path.join("G1R/Content/Movies", os.path.basename(f))))
+            elif fl == "splash.bmp": out.append((f, "G1R/Content/Splash/Splash.bmp"))
+            elif fl.endswith((".pak", ".ucas", ".utoc")): out.append((f, os.path.join("G1R/Content/Paks/~mods", os.path.basename(f))))
+            elif fl in ("engine.ini", "gameusersettings.ini", "scalability.ini", "input.ini"):
+                if pfx: out.append((f, os.path.join(pfx, os.path.basename(f)) if fl != "engine.ini" else os.path.join(pfx, "Engine.ini")))
+                else: notes.append(f"no prefix config dir for {rel_for_notes}")
+            elif fl == "dwmapi.dll" or fl == "dsound.dll": out.append((f, os.path.join(W64, os.path.basename(f))))
+            elif fl.startswith("fyryny_") and fl.endswith((".dll", ".ini")): out.append((f, os.path.join(W64, "fyryNy_loader", os.path.basename(f))))
+            elif not SKIP.search(f): notes.append(f"unplaced: {rel_for_notes}")
+        for e in entries:
+            p = os.path.join(src, e); el = e.lower()
+            if os.path.isdir(p):
+                if el in ("g1r", "engine"): add_tree(p, e if el == "engine" else "G1R")
+                elif el in ("ue4ss", "fyryny_loader"): add_tree(p, os.path.join(W64, e))
+                elif el == "mods" and all(os.path.isdir(os.path.join(p, c)) for c in os.listdir(p)):
+                    for c in os.listdir(p): add_tree(os.path.join(p, c), os.path.join(W64, "ue4ss/Mods", c))
+                elif os.path.exists(os.path.join(p, "enabled.txt")) or os.path.exists(os.path.join(p, "Scripts", "main.lua")) or os.path.isdir(os.path.join(p, "dlls")):
+                    add_tree(p, os.path.join(W64, "ue4ss/Mods", e))
+                elif el in ("movies", "splash", "paks", "~mods"):
+                    for f in walk_files(p): loose(f, os.path.relpath(f, src))
+                else:
+                    for f in walk_files(p): loose(f, os.path.relpath(f, src))
+            else: loose(p, e)
+    else:  # witcher3
+        def add_tree(p, dst):
+            for f in walk_files(p): out.append((f, os.path.join(dst, os.path.relpath(f, p))))
+        for e in entries:
+            p = os.path.join(src, e); el = e.lower()
+            if not os.path.isdir(p):
+                if not SKIP.search(e): notes.append(f"unplaced: {e}")
+                continue
+            if el == "mods":
+                for c in os.listdir(p):
+                    if os.path.isdir(os.path.join(p, c)): add_tree(os.path.join(p, c), os.path.join("mods", c))
+            elif el == "dlc":
+                for c in os.listdir(p):
+                    if os.path.isdir(os.path.join(p, c)): add_tree(os.path.join(p, c), os.path.join("dlc", c))
+            elif el.startswith("mod"): add_tree(p, os.path.join("mods", e))
+            elif el.startswith("dlc"): add_tree(p, os.path.join("dlc", e))
+            elif el == "bin": add_tree(p, "bin")
+            elif el == "content":  # bare mod without its own folder
+                add_tree(p, os.path.join("mods", "mod" + slug, "content"))
+            elif os.path.isdir(os.path.join(p, "content")):
+                name = e if el.startswith("mod") else "mod" + e
+                add_tree(p, os.path.join("mods", name))
+            else: notes.append(f"unplaced dir: {e}")
+    return out, notes
+
+FILELISTS = "bin/config/r4game/user_config_matrix/pc"
+
+def register_xml(root, rel, manifest):
+    """Witcher 3: a menu XML must be listed in dx11filelist.txt/dx12filelist.txt."""
+    if not rel.startswith(FILELISTS + "/") or not rel.lower().endswith(".xml"): return
+    name = os.path.basename(rel)
+    for fl in ("dx11filelist.txt", "dx12filelist.txt"):
+        p = os.path.join(root, FILELISTS, fl)
+        if not os.path.exists(p): continue
+        raw = open(p, "rb").read(); nl = b"\r\n" if b"\r\n" in raw else b"\n"
+        lines = [l.strip() for l in raw.decode("utf-8", "replace").splitlines() if l.strip()]
+        if name in [l.rstrip(";") for l in lines]: continue
+        semi = ";" if lines and lines[-1].endswith(";") else ""
+        if not raw.endswith(nl) and raw: raw += nl
+        open(p, "wb").write(raw + (name + semi).encode() + nl)
+        manifest.setdefault("registered", []).append([fl, name])
+
+def unregister_xml(root, fl, name):
+    p = os.path.join(root, FILELISTS, fl)
+    if not os.path.exists(p): return
+    raw = open(p, "rb").read(); nl = b"\r\n" if b"\r\n" in raw else b"\n"
+    lines = [l for l in raw.decode("utf-8", "replace").splitlines() if l.strip() and l.strip().rstrip(";") != name]
+    open(p, "wb").write(nl.join(l.encode() for l in lines) + nl)
+
+if op in ("plan", "install"):
+    game, root, src, slug, state = args[:5]; meta = json.loads(args[5]) if len(args) > 5 else {}
+    files, notes = plan(game, src, slug)
+    if not files: sys.exit("nothing placeable found in the archive" + ("\n" + "\n".join(notes) if notes else ""))
+    def top(rel):
+        if rel.startswith("/"): return "<prefix>/" + os.path.basename(rel)
+        parts = rel.split("/")
+        if parts[0] in ("mods", "dlc", "archive", "r6", "red4ext", "bin") and len(parts) > 1: return parts[0] + "/" + parts[1]
+        if rel.startswith("G1R/Binaries/Win64/ue4ss/Mods/") and len(parts) > 5: return "ue4ss/Mods/" + parts[5]
+        if rel.startswith("G1R/"): return "/".join(parts[:3])
+        return parts[0]
+    tops = sorted({top(f[1]) for f in files})
+    total = sum(os.path.getsize(f[0]) for f in files)
+    print(f"{len(files)} files, {human(total)} → " + ", ".join(t.rstrip("/") for t in tops[:12]) + (" …" if len(tops) > 12 else ""))
+    for n in notes: print("  ⚠ " + n)
+    if op == "plan": sys.exit(0)
+    mpath = os.path.join(state, slug + ".json")
+    if os.path.exists(mpath): sys.exit(f"'{slug}' already installed — `mod {game} rm {slug}` first")
+    def target(rel): return rel if rel.startswith("/") else os.path.join(root, rel)
+    overw = [rel for _, rel in files if os.path.exists(target(rel))]
+    manifest = {"slug": slug, "game": game, "installed": int(time.time()), "files": [], "overwrote": overw, "backups": [], **meta}
+    for s, rel in files:
+        dst = target(rel); os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if os.path.exists(dst) and not os.path.exists(dst + ".steamctl-orig"):
+            shutil.copy2(dst, dst + ".steamctl-orig"); manifest["backups"].append(rel)   # restored by rm
+        shutil.copy2(s, dst); manifest["files"].append(rel)
+        if game == "witcher3": register_xml(root, rel, manifest)
+    with open(mpath, "w") as f: json.dump(manifest, f, indent=1)
+    if overw: print(f"  ⚠ replaced {len(overw)} existing file(s) — first: {overw[0]} (originals kept as .steamctl-orig, restored by rm)")
+    print(f"installed {slug}: {len(files)} files")
+    sys.exit(0)
+
+if op == "remove":
+    game, root, slug, state = args[:4]
+    mpath = os.path.join(state, slug + ".json")
+    if not os.path.exists(mpath): sys.exit(f"no installed mod '{slug}'")
+    m = json.load(open(mpath)); gone = 0; dirs = set(); restored = 0
+    for rel in m["files"]:
+        p = rel if rel.startswith("/") else os.path.join(root, rel)
+        if os.path.exists(p): os.remove(p); gone += 1
+        if rel in m.get("backups", []) and os.path.exists(p + ".steamctl-orig"):
+            os.replace(p + ".steamctl-orig", p); restored += 1
+        dirs.add(os.path.dirname(p))
+    for d in sorted(dirs, key=len, reverse=True):
+        while d.startswith(root) and d != root:
+            try: os.rmdir(d)
+            except OSError: break
+            d = os.path.dirname(d)
+    for fl, name in m.get("registered", []): unregister_xml(root, fl, name)
+    os.remove(mpath); print(f"removed {slug}: {gone} files" + (f", {restored} original(s) restored" if restored else ""))
+    left = [r for r in m.get("overwrote", []) if r not in m.get("backups", [])]
+    if left: print(f"  ⚠ {len(left)} overwritten file(s) had no backup (another mod owned them) — reinstall that mod or verify the game")
+    sys.exit(0)
+
+if op == "list":
+    state = args[0]
+    rows = []
+    for f in sorted(os.listdir(state)) if os.path.isdir(state) else []:
+        if f.endswith(".json"):
+            m = json.load(open(os.path.join(state, f)))
+            rows.append((m["slug"], m.get("name", ""), m.get("version", ""), str(m.get("modId", "")), len(m["files"]), time.strftime("%Y-%m-%d", time.localtime(m["installed"]))))
+    if not rows: print("(no mods installed through steamctl)"); sys.exit(0)
+    print(f"{'slug':<28} {'modId':>6} {'ver':<8} {'files':>5} {'date':<10} name")
+    for s, n, v, i, c, d in rows: print(f"{s:<28} {i:>6} {v[:8]:<8} {c:>5} {d:<10} {n}")
+    sys.exit(0)
+
+if op == "w3conflicts":  # duplicate .ws script paths across mods/
+    root = args[0]; seen = {}
+    mods = os.path.join(root, "mods")
+    for m in sorted(os.listdir(mods)) if os.path.isdir(mods) else []:
+        for f in walk_files(os.path.join(mods, m)):
+            if f.endswith(".ws"):
+                rel = os.path.relpath(f, os.path.join(mods, m)).split("/", 1)[-1]
+                seen.setdefault(rel, []).append(m)
+    conf = {k: v for k, v in seen.items() if len(v) > 1}
+    print(f"{len(seen)} script files across mods, {len(conf)} edited by more than one mod")
+    for k, v in sorted(conf.items())[:40]: print(f"  {k}: {', '.join(v)}")
+    sys.exit(0)
+
+if op == "mhsummary":  # newest MangoHud per-frame csv in a dir → avg / 1% / 0.1% / vram
+    d = args[0]
+    csvs = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".csv") and not f.endswith("_summary.csv")]
+    if not csvs: sys.exit("no MangoHud csv in " + d)
+    p = max(csvs, key=os.path.getmtime); lines = open(p).read().splitlines()
+    hdr = next(i for i, l in enumerate(lines) if l.startswith("fps,") or l.startswith("fps;")); cols = lines[hdr].split(",")
+    data = [l.split(",") for l in lines[hdr + 1:] if l.strip()]
+    fi, vi = cols.index("frametime"), cols.index("gpu_vram_used") if "gpu_vram_used" in cols else None
+    ft = sorted(float(r[fi]) for r in data); n = len(ft)
+    avg = 1000.0 / (sum(ft) / n); low1 = 1000.0 / ft[int(n * 0.99)]; low01 = 1000.0 / ft[min(n - 1, int(n * 0.999))]
+    vram = max(float(r[vi]) for r in data) if vi is not None else 0
+    print(f"{os.path.basename(p)}: {n} frames  avg {avg:.1f} fps  1% low {low1:.1f}  0.1% low {low01:.1f}  VRAM max {vram:.2f} GB")
+    sys.exit(0)
+sys.exit("mod_py: unknown op " + op)
+PYM
+}
+
+# gh_release_asset <owner/repo> <asset-regex> → "tag<TAB>url" via release pages (no API).
+gh_release_asset() {
+    local repo="$1" pat="$2" tag html
+    if [[ ${repo} == *@* ]]; then tag="${repo#*@}"; repo="${repo%@*}"
+    else tag=$(curl -fsI "https://github.com/${repo}/releases/latest" | tr -d '\r' | sed -n 's#^[Ll]ocation: .*/releases/tag/##p' | head -1); fi
+    [[ -n ${tag} ]] || return 1
+    html=$(curl -fsSL "https://github.com/${repo}/releases/expanded_assets/${tag}") || return 1
+    local path; path=$(grep -oiE "/${repo}/releases/download/[^\"]+" <<< "${html}" | grep -E "${pat}" | head -1)
+    [[ -n ${path} ]] || return 1
+    printf '%s\t%s\n' "${tag}" "https://github.com${path}"
+}
+
+# Framework table per game: key|owner/repo|asset-regex|proof-file|slug
+mod_frameworks() {
+    case ${MOD_GAME} in
+        cp2077) cat <<'EOF'
+red4ext|WopsS/RED4ext|red4ext-[0-9.]+\.zip$|red4ext/RED4ext.dll|fw-red4ext
+cet|maximegmd/CyberEngineTweaks|cet_[0-9.]+\.zip$|bin/x64/plugins/cyber_engine_tweaks.asi|fw-cet
+redscript|jac3km4/redscript|redscript-v[0-9.]+-windows\.zip$|engine/tools/scc_lib.dll|fw-redscript
+archivexl|psiberx/cp2077-archive-xl|ArchiveXL-[0-9.]+\.zip$|red4ext/plugins/ArchiveXL/ArchiveXL.dll|fw-archivexl
+tweakxl|psiberx/cp2077-tweak-xl|TweakXL-[0-9.]+\.zip$|red4ext/plugins/TweakXL/TweakXL.dll|fw-tweakxl
+codeware|psiberx/cp2077-codeware|Codeware-[0-9.]+\.zip$|red4ext/plugins/Codeware/Codeware.dll|fw-codeware
+EOF
+        ;;
+        witcher3) echo "w3scriptmerge|apocalyptech/w3scriptmerge|raw|${MOD_TOOLS}/w3scriptmerge|tool" ;;
+        gothic) echo 'ue4ss|UE4SS-RE/RE-UE4SS@experimental-latest|/UE4SS_v[0-9][^/]*\.zip$|G1R/Binaries/Win64/ue4ss/UE4SS.dll|fw-ue4ss' ;;
+    esac
+}
+
+mod_extract() {  # mod_extract <archive> <dir>
+    local a="$1" d="$2"; mkdir -p "${d}"
+    case ${a,,} in
+        *.zip) unzip -qo "${a}" -d "${d}" ;;
+        *.7z)  7z x -y -o"${d}" "${a}" >/dev/null ;;
+        *.rar) unrar x -o+ -idq "${a}" "${d}/" ;;
+        *) bsdtar -xf "${a}" -C "${d}" ;;
+    esac
+}
+
+# mod_install_archive <archive> <slug> [meta-json]
+mod_install_archive() {
+    local a="$1" slug="$2" meta="${3:-{\}}"
+    local tmp; tmp=$(mktemp -d "${TMPDIR:-/tmp}/steamctl-mod.XXXXXX")
+    mod_extract "${a}" "${tmp}" || { command rm -rf "${tmp}"; die "extract failed: ${a}"; }
+    mod_py install "${MOD_GAME}" "${MOD_ROOT}" "${tmp}" "${slug}" "${MOD_STATE}/${MOD_GAME}" "${meta}"
+    local rc=$?; command rm -rf "${tmp}"; return ${rc}
+}
+
+# mod_download <modId> <fileId> [nxm-key nxm-expires] → path (cached by fileId)
+mod_download() {
+    local mid="$1" fid="$2"; shift 2
+    local key; key=$(nexus_key) || true
+    [[ -n ${key} ]] || die "No Nexus API key. Get one at https://www.nexusmods.com/users/myaccount?tab=api then: steamctl mod key <KEY>. Or download in the browser and: steamctl mod ${MOD_GAME} add <file>"
+    local cached; cached=$(ls "${MOD_DL}/${MOD_DOMAIN}-${mid}-${fid}".* 2>/dev/null | head -1)
+    [[ -n ${cached} ]] && { echo "${cached}"; return 0; }
+    local url; url=$(mod_py dlurl "${MOD_DOMAIN}" "${mid}" "${fid}" "${key}" "$@")
+    local rc=$?
+    if [[ ${url} == NOT_PREMIUM ]]; then
+        die "Nexus: free accounts can't fetch download links by API. Click 'Download' (slow/manual) on https://www.nexusmods.com/${MOD_DOMAIN}/mods/${mid}?tab=files with the nxm:// handler installed (steamctl mod handler), or pass the nxm link: steamctl mod nxm 'nxm://…'"
+    fi
+    [[ ${rc} -eq 0 && -n ${url} ]] || die "no download URL"
+    local name="${url%%\?*}"; name="${name##*/}"; name=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.argv[1]))' "${name}")
+    local ext="${name##*.}"; local out="${MOD_DL}/${MOD_DOMAIN}-${mid}-${fid}.${ext}"
+    info "downloading ${name}"
+    curl -fsSL --retry 3 -o "${out}.part" "${url}" || die "download failed"
+    mv -f "${out}.part" "${out}"; echo "${out}"
+}
+
+vram_watch() {  # vram_watch start <file> | stop
+    case $1 in
+        start) ( local mx=0 v; while :; do v=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1); [[ ${v:-0} -gt ${mx} ]] && mx=${v}; echo "${mx}" > "$2"; sleep 1; done ) & VRAM_PID=$! ;;
+        stop)  [[ -n ${VRAM_PID:-} ]] && kill "${VRAM_PID}" 2>/dev/null; wait "${VRAM_PID}" 2>/dev/null; return 0 ;;
+    esac
+}
+
+cmd_mod() {
+    local sub="${1:-}"; shift || true
+    case ${sub} in
+        key)
+            if [[ $# -ge 1 ]]; then
+                mkdir -p "$(dirname "${NEXUS_KEY_FILE}")"; (umask 077; printf '%s\n' "$1" > "${NEXUS_KEY_FILE}"); info "key stored in ${NEXUS_KEY_FILE} (0600)"
+            else
+                [[ -s ${NEXUS_KEY_FILE} ]] && echo "key: $(cut -c1-6 "${NEXUS_KEY_FILE}")… (${NEXUS_KEY_FILE})" || echo "no key (https://www.nexusmods.com/users/myaccount?tab=api → steamctl mod key KEY)"
+            fi; return 0 ;;
+        handler)
+            local d="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"; mkdir -p "${d}"
+            cat > "${d}/steamctl-nxm.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=steamctl Nexus handler
+Exec=$(command -v steamctl || echo "${BASH_SOURCE[0]}") mod nxm %u
+MimeType=x-scheme-handler/nxm;
+NoDisplay=true
+Terminal=false
+EOF
+            update-desktop-database "${d}" 2>/dev/null; xdg-mime default steamctl-nxm.desktop x-scheme-handler/nxm
+            info "nxm:// → $(xdg-mime query default x-scheme-handler/nxm)"; return 0 ;;
+        nxm)
+            [[ $# -ge 1 ]] || die "mod nxm 'nxm://…'"
+            # Invoked by the browser through the .desktop handler: no terminal to
+            # read, so everything is logged and the outcome goes to notify-send.
+            local nxlog="${MOD_STATE}/nxm.log"; mkdir -p "${MOD_STATE}"
+            local dom mid fid nk ne; IFS=$'\t' read -r dom mid fid nk ne < <(mod_py nxm "$1")
+            local g; case ${dom} in cyberpunk2077) g=cp2077 ;; witcher3) g=witcher3 ;; *) g="" ;; esac
+            local out rc=0
+            if [[ -z ${g} ]]; then out="nxm link for '${dom}' — not a game steamctl mods"; rc=1
+            else
+                out=$( { mod_game "${g}" && a=$(mod_download "${mid}" "${fid}" "${nk}" "${ne}") && cmd_mod "${g}" add "${mid}:${fid}" --file "${a}"; } 2>&1 ) || rc=$?
+            fi
+            printf '%s  %s\n%s\n' "$(date +%F' '%T)" "$1" "${out}" >> "${nxlog}"
+            have notify-send && notify-send -a steamctl "$([[ ${rc} -eq 0 ]] && echo "Mod installed (${g})" || echo "Mod install FAILED (${g:-?})")" "$(tail -n 3 <<< "${out}" | cut -c1-160)"
+            echo "${out}"; return ${rc} ;;
+    esac
+    mod_game "${sub}"; local verb="${1:-status}"; shift || true
+    case ${verb} in
+        status)
+            echo "Game:     ${MOD_GAME} (${MOD_ROOT})"
+            echo "Disk:     $(df -h "${MOD_ROOT}" | awk 'NR==2{print $4" free of "$2}')"
+            echo "Nexus:    $([[ -n $(nexus_key) ]] && echo "key present" || echo "no key (search works, download needs one)")"
+            local line k repo pat proof slug
+            echo "Frameworks:"
+            while IFS='|' read -r k repo pat proof slug; do
+                local p="${proof}"; [[ ${p} == /* ]] || p="${MOD_ROOT}/${proof}"
+                printf '  %-13s %s\n' "${k}" "$([[ -e ${p} ]] && echo "✓ ${proof}" || echo "✗ missing  (steamctl mod ${MOD_GAME} frameworks)")"
+            done < <(mod_frameworks)
+            if [[ ${MOD_GAME} == cp2077 ]]; then
+                local lo; lo=$(vdf_py lo-get "$(localconfig)" 1091500 2>/dev/null || true)
+                if [[ ${lo} == *WINEDLLOVERRIDES=*version* && ${lo} == *winmm* ]]; then echo "  launch opts  ✓ WINEDLLOVERRIDES has version+winmm"
+                else echo "  launch opts  ✗ add:  steamctl -s -r opts add cyberpunk 'WINEDLLOVERRIDES=winmm,version=n,b'   (RED4ext/CET proxy DLLs load only with it; silent no-op otherwise)"; fi
+                [[ -f ${MOD_ROOT}/red4ext/logs/red4ext.log ]] && echo "  red4ext log  $(tail -n 1 "${MOD_ROOT}/red4ext/logs/red4ext.log" | cut -c1-100)"
+            elif [[ ${MOD_GAME} == gothic ]]; then
+                local lo; lo=$(vdf_py lo-get "$(localconfig)" 1297900 2>/dev/null || true)
+                if [[ ${lo} == *WINEDLLOVERRIDES=*dwmapi* ]]; then echo "  launch opts  ✓ WINEDLLOVERRIDES has dwmapi"
+                else echo "  launch opts  ✗ add:  steamctl -s -r opts add gothic 'WINEDLLOVERRIDES=dwmapi,dsound=n,b'   (UE4SS proxy; dsound = fyryNy's Loader)"; fi
+                [[ -f ${MOD_ROOT}/G1R/Binaries/Win64/ue4ss/UE4SS.log ]] && echo "  ue4ss log    $(grep -a -m1 -i 'UE4SS ' "${MOD_ROOT}/G1R/Binaries/Win64/ue4ss/UE4SS.log" | cut -c1-90) … $(grep -a -c -i 'error' "${MOD_ROOT}/G1R/Binaries/Win64/ue4ss/UE4SS.log") error lines"
+                echo "  ue4ss/Mods   $(ls -1d "${MOD_ROOT}"/G1R/Binaries/Win64/ue4ss/Mods/*/ 2>/dev/null | wc -l) folders; prefix ini: $(ls "${MOD_PFXCFG}" 2>/dev/null | tr '\n' ' ')"
+            else
+                echo "  mods/        $(ls -1d "${MOD_ROOT}"/mods/*/ 2>/dev/null | wc -l) folders; dx12filelist: $(grep -c . "${MOD_ROOT}/bin/config/r4game/user_config_matrix/pc/dx12filelist.txt" 2>/dev/null || echo ?) entries"
+                mod_py w3conflicts "${MOD_ROOT}" | sed 's/^/  /'
+            fi
+            echo "Installed (steamctl):"; mod_py list "${MOD_STATE}/${MOD_GAME}" | sed 's/^/  /' ;;
+        search)
+            [[ $# -ge 1 ]] || die "mod ${MOD_GAME} search <words...> [-n N]"
+            local n=15 words=()
+            while [[ $# -gt 0 ]]; do case $1 in -n) n="$2"; shift 2 ;; *) words+=("$1"); shift ;; esac; done
+            mod_py search "${MOD_DOMAIN}" "${words[*]}" "${n}" ;;
+        info)
+            [[ $# -ge 1 ]] || die "mod ${MOD_GAME} info <modId> [all]"
+            mod_py info "${MOD_DOMAIN}" "${MOD_GID}" "$1" "${2:-}" ;;
+        add)
+            [[ $# -ge 1 ]] || die "mod ${MOD_GAME} add <modId>[:fileId] | <archive> [-n slug] [--plan]"
+            local what="$1"; shift; local slug="" file="" planonly=no
+            while [[ $# -gt 0 ]]; do case $1 in -n) slug="$2"; shift 2 ;; --file) file="$2"; shift 2 ;; --plan) planonly=yes; shift ;; *) die "unknown: $1" ;; esac; done
+            local meta='{}' mid="" fid=""
+            if [[ -f ${what} ]]; then
+                file="${what}"; local base; base=$(basename "${what}")
+                # Nexus names downloads <Name>-<modId>-<version>-<stamp>.<ext>: keep the id
+                # two Nexus naming styles: "Name-<id>-<ver-dashed>-<stamp>.zip" (classic) and
+                # "Name <id> <ver> <ISO-date>Z <token>.zip" (2026 site)
+                if [[ ${base} =~ ^(.+)-([0-9]+)-([0-9A-Za-z._-]+)-([0-9]{9,})\.[A-Za-z0-9]+$ ]] \
+                   || [[ ${base} =~ ^(.+)\ ([0-9]+)\ ([0-9A-Za-z._-]+)\ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9-]+Z\ [A-Za-z0-9]+\.[A-Za-z0-9]+$ ]]; then
+                    mid="${BASH_REMATCH[2]}"; [[ -n ${slug} ]] || slug=$(tr -cs 'A-Za-z0-9' '-' <<< "${BASH_REMATCH[1]}" | sed 's/^-//; s/-$//' | cut -c1-40)
+                    meta=$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "version": sys.argv[2].replace("-", "."), "modId": int(sys.argv[3]), "source": "nexus-file"}))' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}" "${mid}")
+                else
+                    [[ -n ${slug} ]] || slug="${base%.*}"
+                    meta=$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "source": "file"}))' "${base}")
+                fi
+            elif [[ ${what} =~ ^([0-9]+)(:([0-9]+))?$ ]]; then
+                mid="${BASH_REMATCH[1]}"; fid="${BASH_REMATCH[3]}"
+                local fname fsize
+                if [[ -z ${fid} ]]; then IFS=$'\t' read -r fid fname fsize < <(mod_py primary "${MOD_GID}" "${mid}") || exit 1; info "MAIN file ${fid}: ${fname} ($(numfmt --to=iec "${fsize}"))"; fi
+                local mname mver; IFS=$'\t' read -r mname mver < <(mod_py info "${MOD_DOMAIN}" "${MOD_GID}" "${mid}" | head -1 | sed -E 's/^(.*)  v([^ ]*)  by.*/\1\t\2/')
+                [[ -n ${slug} ]] || slug=$(tr -cs 'A-Za-z0-9' '-' <<< "${mname}" | sed 's/^-//; s/-$//' | cut -c1-40)
+                meta=$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "version": sys.argv[2], "modId": int(sys.argv[3]), "fileId": int(sys.argv[4]), "source": "nexus"}))' "${mname}" "${mver}" "${mid}" "${fid}")
+                [[ -n ${file} ]] || file=$(mod_download "${mid}" "${fid}")
+            else
+                die "'${what}' is neither a file nor modId[:fileId]"
+            fi
+            if [[ ${planonly} == yes ]]; then
+                local tmp; tmp=$(mktemp -d); mod_extract "${file}" "${tmp}"; mod_py plan "${MOD_GAME}" "${MOD_ROOT}" "${tmp}" "${slug}" "${MOD_STATE}/${MOD_GAME}"; command rm -rf "${tmp}"; return 0
+            fi
+            ! ps -eo comm | grep -qiE 'Cyberpunk2077|witcher3\.exe|G1R-Win64' || die "a game is running — close it first"
+            mod_install_archive "${file}" "${slug}" "${meta}"
+            [[ ${MOD_GAME} == witcher3 ]] && mod_py w3conflicts "${MOD_ROOT}" | grep -q ' edited by more than one mod' && mod_py w3conflicts "${MOD_ROOT}" | grep -v '^0 script' | head -3 | sed 's/^/  /' ;;
+        rm|remove)
+            [[ $# -ge 1 ]] || die "mod ${MOD_GAME} rm <slug>"
+            mod_py remove "${MOD_GAME}" "${MOD_ROOT}" "$1" "${MOD_STATE}/${MOD_GAME}" ;;
+        list|ls) mod_py list "${MOD_STATE}/${MOD_GAME}" ;;
+        frameworks)
+            local only="${1:-}" k repo pat proof slug tag url a
+            while IFS='|' read -r k repo pat proof slug; do
+                [[ -z ${only} || ${only} == "${k}" ]] || continue
+                local p="${proof}"; [[ ${p} == /* ]] || p="${MOD_ROOT}/${proof}"
+                if [[ ${pat} == raw ]]; then
+                    mkdir -p "${MOD_TOOLS}"; curl -fsSL -o "${p}" "https://raw.githubusercontent.com/${repo}/main/w3scriptmerge.py" && chmod +x "${p}" && info "${k}: fetched → ${p}"; continue
+                fi
+                if [[ -e ${p} && -f ${MOD_STATE}/${MOD_GAME}/${slug}.json ]]; then info "${k}: present ($(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version","?"))' "${MOD_STATE}/${MOD_GAME}/${slug}.json"))"; continue; fi
+                IFS=$'\t' read -r tag url < <(gh_release_asset "${repo}" "${pat}") || { warn "${k}: no release asset matching ${pat} on github.com/${repo%@*}"; continue; }
+                a="${MOD_DL}/${slug}-${tag}.zip"; [[ ${tag} == *latest* ]] && command rm -f "${a}"   # rolling tag: always refetch
+                [[ -f ${a} ]] || { info "${k} ${tag}: ${url##*/}"; curl -fsSL --retry 3 -o "${a}.part" "${url}" && mv -f "${a}.part" "${a}" || { warn "${k}: download failed"; continue; }; }
+                [[ -f ${MOD_STATE}/${MOD_GAME}/${slug}.json ]] && mod_py remove "${MOD_GAME}" "${MOD_ROOT}" "${slug}" "${MOD_STATE}/${MOD_GAME}" >/dev/null
+                mod_install_archive "${a}" "${slug}" "$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "version": sys.argv[2], "source": "github:"+sys.argv[3]}))' "${k}" "${tag}" "${repo}")"
+            done < <(mod_frameworks)
+            [[ ${MOD_GAME} == cp2077 ]] && info "remember the launch option: steamctl -s -r opts add cyberpunk 'WINEDLLOVERRIDES=winmm,version,d3dcompiler_47=n,b'"
+            [[ ${MOD_GAME} == gothic ]] && info "remember the launch option: steamctl -s -r opts add gothic 'WINEDLLOVERRIDES=dwmapi,dsound=n,b'"; return 0 ;;
+        merge)
+            [[ ${MOD_GAME} == witcher3 ]] || die "merge is for witcher3 only"
+            [[ -x ${MOD_TOOLS}/w3scriptmerge ]] || die "w3scriptmerge missing: steamctl mod witcher3 frameworks"
+            info "w3scriptmerge in ${MOD_ROOT}/mods (writes mods/mod0000_MergedFiles)"
+            ( cd "${MOD_ROOT}/mods" && "${MOD_TOOLS}/w3scriptmerge" "$@" ) ;;
+        bench)
+            local label="${*:-mods}" vf; vf=$(mktemp); vram_watch start "${vf}"
+            if [[ ${MOD_GAME} == cp2077 ]]; then
+                cmd_cp2077 bench "${label}" || true
+            elif [[ ${MOD_GAME} == gothic ]]; then
+                cmd_bench on 1297900 "${label}" >/dev/null; cmd_run 1297900
+                info "MangoHud logging armed (Shift+F2, 120 s); play the same route, quit when done"
+                sleep 30; while ps -eo comm | grep -q 'G1R-Win64'; do sleep 5; done
+                cmd_bench off >/dev/null; cmd_bench report 1297900 | tail -n 3
+            else
+                local out="${BENCH_DIR}/witcher3"; mkdir -p "${out}"
+                info "MangoHud logging armed: Shift+F2 starts a 120 s log in the game; play the same route each time; quit when done"
+                cmd_heroic run witcher -e MANGOHUD=1 -e "MANGOHUD_CONFIG=read_cfg,output_folder=${out},log_duration=120,toggle_logging=Shift_F2,fps_limit=0" >/dev/null 2>&1 || true
+                mod_py mhsummary "${out}" || true
+            fi
+            vram_watch stop
+            echo "VRAM peak during run: $(( $(cat "${vf}" 2>/dev/null || echo 0) / 1024 )).$(( ($(cat "${vf}" 2>/dev/null || echo 0) % 1024) * 10 / 1024 )) GB  [${label}]"
+            printf '%s\t%s\t%s\t%s\n' "$(date +%F-%H%M)" "${MOD_GAME}" "${label}" "$(cat "${vf}")" >> "${BENCH_DIR}/mods-vram.tsv"; command rm -f "${vf}" ;;
+        *) die "mod ${MOD_GAME} status|search|info|add|rm|list|frameworks|merge|bench" ;;
+    esac
+}
+
 # ---------------------------------------------------------------- main ----
 verb="$1"; shift
 case ${verb} in
@@ -1562,6 +2384,8 @@ case ${verb} in
     gamemode)  cmd_gamemode ;;
     tricks)    cmd_tricks "$@" ;;
     umu)       cmd_umu "$@" ;;
+    heroic)    cmd_heroic "$@" ;;
+    mod)       cmd_mod "$@" ;;
     display)   cmd_display "$@" ;;
     bench)     cmd_bench "$@" ;;
     sottr)     cmd_sottr "$@" ;;
