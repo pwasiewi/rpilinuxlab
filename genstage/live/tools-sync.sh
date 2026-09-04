@@ -27,6 +27,11 @@ SCRIPTS=(
     # pwr overlay maintenance (index/check/bump) — images ship ::pwr, so the
     # tool that keeps it current ships too (added 2026-08-17)
     pwrup
+    # Steam/Proton from the CLI (launch options, Proton pins, GE-Proton,
+    # game benchmarks, presets) — the nvidiahard profile lists its helper
+    # packages; nothing personal baked in, presets.conf is the user's
+    # (added 2026-09-04)
+    steamctl
 )
 
 mkdir -p "${HERE}"

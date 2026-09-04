@@ -1766,3 +1766,13 @@ net-dns/doggo
 =dev-python/liger-kernel-0.8.1 ~amd64
 # required by dev-python/nltk (argument)
 =dev-python/nltk-3.10.0 ~amd64
+
+# Steam helper stack (steamctl, 2026-09-04) — same block as the host's
+# package.accept_keywords/pwr: ::pwr carries what guru/gentoo lack or lag.
+# mangohud, gamemode, protontricks, winetricks, steam-launcher are already
+# listed above.
+games-util/umu-launcher
+games-util/protonup-rs
+gui-wm/gamescope
+gui-libs/wlroots:0.20
+media-gfx/vkBasalt

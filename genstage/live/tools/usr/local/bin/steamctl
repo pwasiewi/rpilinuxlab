@@ -1,0 +1,1571 @@
+#!/bin/bash
+# steamctl — command-line control of the Steam client, its per-game settings
+# and the helper tools the Linux gaming stack actually uses in 2026.
+#
+# What it knows that the GUI hides (traced in the sources, 2026-09-03):
+#  - Steam keeps per-game Launch Options in
+#      <root>/userdata/<account>/config/localconfig.vdf
+#      UserLocalConfigStore > Software > Valve > Steam > Apps > <appid> > LaunchOptions
+#    and the per-game Proton choice in
+#      <root>/config/config.vdf
+#      InstallConfigStore > Software > Valve > Steam > CompatToolMapping > <appid>
+#        { name, config "", priority "250" }   (appid 0 = global default, priority 75)
+#    Both files are rewritten by the running client on exit, so an edit only
+#    survives when Steam is down. The edit verbs check that; `-s` shuts the
+#    client down first (`steam -shutdown`), `-r` starts it again afterwards.
+#    Key names are matched case-insensitively (the client writes "Apps",
+#    older clients wrote "apps").
+#  - With the client running, `steam <args>` is forwarded through
+#    ~/.steam/steam.pipe (steam-runtime-steam-remote) — `-applaunch`,
+#    `steam://validate/`, `steam://install/`, `-shutdown` all work, but the
+#    environment of the forwarding call does NOT reach the game. Wrappers
+#    therefore go into Launch Options, not into the environment.
+#  - ISteamApps/GetAppList is gone (HTTP 404 since 2026); name search uses
+#    store.steampowered.com/api/storesearch (10 hits, no key). appdetails is
+#    limited to ~200 requests / 5 min / IP.
+#  - GE-Proton ≥11-6 ships only GE-ProtonX-Y-x86_64.tar.gz (+ .sha512sum);
+#    earlier releases GE-ProtonX-Y.tar.gz. Both spellings are tried.
+#    Steam scans compatibilitytools.d at start: restart it after an install.
+#  - gamemoded takes the PID ATTACHED (-s1234); `gamemoded -r` without a PID
+#    blocks until SIGINT. `mangohud --dlsym` is a no-op. protontricks needs
+#    STEAM_DIR to skip its install-chooser dialog and an explicit APPID to
+#    skip the GUI.
+set -euo pipefail
+export LC_ALL=C.UTF-8
+
+help() {
+    cat <<'EOF'
+Usage: steamctl [-s] [-r] [-y] [-v] <verb> [args]
+
+Game lookup (<game> = APPID, or a unique case-insensitive part of an
+installed game's name):
+  search <word...>          Steam store search (online) + installed matches.
+  list                      Installed games: appid, name, size, Proton, options.
+  info <game>               Local state + store details for one game.
+  compat <game>             Show/open the game's Proton prefix directory.
+
+Client control (works while Steam runs; forwarded to the live client):
+  status                    Is Steam running, which account, libraries, tools.
+  run <game> [args...]      steam -applaunch APPID [args] (args = this run only).
+  install|validate|uninstall <game>
+                            install still pops the client's library-picker
+                            dialog: Steam has no CLI switch for the target
+                            library, it preselects the one starred in
+                            Settings > Storage.
+  props <game>              Open the game's Properties dialog.
+  start | stop              Start the client / `steam -shutdown` and wait.
+
+Launch options (edit needs Steam stopped — see -s/-r):
+  opts get <game>           Print the current Launch Options.
+  opts set <game> <string>  Replace them ('' clears). Quote the whole string.
+  opts add <game> <item...> Add wrappers/args, idempotent. Items: a preset
+                            (gamemode, mangohud, gamescope[=ARGS], vkbasalt,
+                            cores, protonlog, dlss, fsync-off, nosplash…, see
+                            `opts presets`), VAR=value (env, goes first),
+                            -flag (game argument, goes after %command%),
+                            or any other word (wrapper before %command%).
+  opts rm <game> <item...>  Remove items (preset name or literal token).
+  opts clear <game>
+  opts list                 Every game that has Launch Options set.
+  names [-a]                Cache store names for appids that are not installed
+                            (so opts list / proton stale show titles); -a = every
+                            app the account ever configured (slow, ~1.5 s each).
+  opts presets              The preset table.
+
+Proton / compatibility tools:
+  proton list               Installed tools (GE, Valve) + how many games use each.
+  proton available [N]      Latest N GE-Proton releases on GitHub (default 10).
+  proton install <TAG|latest> [-f]
+                            Download, sha512-verify, unpack into
+                            compatibilitytools.d. TAG e.g. GE-Proton11-6.
+  proton remove <TAG>
+  proton get <game>         Which tool the game is pinned to.
+  proton set <game> <name>  Pin (edit needs Steam stopped). name = NAME from
+                            `proton list` (a GE tag is enough), or a Valve id
+                            such as proton_experimental, proton_hotfix, proton_9.
+  proton unset <game>       Back to the global default.
+  proton default [name]     Show/set the global default (appid 0).
+  proton stale              Games pinned to a tool that is not installed.
+
+Helper tools:
+  tools                     Which helpers are installed, with the emerge atom
+                            for the missing ones.
+  gamemode                  Daemon state + processes running under it.
+  tricks <game> [args...]   protontricks in the game's prefix, e.g.
+                            `tricks gothic vcrun2019`, `tricks gothic -c winecfg`.
+  umu <exe> [args...]       Run a non-Steam Windows exe under the latest
+                            GE-Proton via umu-run (PROTONPATH/GAMEID honoured).
+  bench on <game> [label] [-d SEC] | off | label <game> <text> | report <game>
+                            Measure in-game benchmarks with MangoHud logging
+                            (Shift+F2 starts a log, stops after SEC=120):
+                            report = avg / 1% / 0.1% lows, GPU%, watts per run.
+  sottr get | set KEY=VAL... [nodialog] | bench [label] | report [N]
+                            Shadow of the Tomb Raider's real CLI benchmark:
+                            edit its per-GPU settings (ScreenW/ScreenH = render
+                            resolution, AA 0-3, ResolutionModifier 1000=100%),
+                            run --feral-benchmark, per-scene avg/1%/0.1% lows.
+  cp2077 get [regex] | set NAME=VALUE... | preset NAME | bench [label] | report [N]
+                            Cyberpunk 2077's CLI benchmark (--launcher-skip
+                            -benchmark -skipStartScreen, as Phoronix runs it):
+                            edit UserSettings.json by name, run, avg/1%/0.1%.
+                            preset NAME = shorthand for `preset apply cp2077 NAME`.
+  preset list | show | save KIND NAME [game] | apply KIND NAME [game] | rm | edit
+                            Named settings bundles in ~/.config/steamctl/
+                            presets.conf (kinds: cp2077, sottr, opts, ini —
+                            ini = any Unreal GameUserSettings.ini: Section/Key=Value). `save`
+                            snapshots the live settings, `apply` writes them
+                            back; seeded with the bundles measured 2026-09-04.
+  display [hz N | vrr automatic|always|never]
+                            Plasma output state via kscreen-doctor: refresh
+                            rate at the current resolution, VRR policy.
+
+Options:
+  -s   stop Steam before an edit (steam -shutdown, waits up to 90 s)
+  -r   restart Steam after the edit (implies nothing else; use with -s)
+  -y   answer yes to confirmations
+  -v   verbose
+
+Environment: STEAM_ROOT (default: readlink -f ~/.steam/root), STEAM_ACCOUNT
+(userdata id when several accounts exist), GITHUB_TOKEN (raises the API
+rate limit for `proton available/install`), STEAMCTL_CACHE
+(default ~/.cache/steamctl).
+EOF
+}
+
+die()  { echo "❌ $*" >&2; exit 1; }
+warn() { echo "⚠  $*" >&2; }
+info() { echo "→ $*" >&2; }
+DEBUG() { [[ ${VERBOSE} == yes ]] && echo "   … $*" >&2; return 0; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+confirm() {
+    [[ ${ASSUME_YES} == yes ]] && return 0
+    local reply
+    read -r -p "$1 Type 'yes' to proceed: " reply
+    [[ ${reply} == yes ]] || die "Aborted."
+}
+
+VERBOSE=no
+ASSUME_YES=no
+STOP_STEAM=no
+RESTART_STEAM=no
+
+while getopts ":srhyv" opt; do
+    case ${opt} in
+        s) STOP_STEAM=yes ;;
+        r) RESTART_STEAM=yes ;;
+        y) ASSUME_YES=yes ;;
+        v) VERBOSE=yes ;;
+        h) help; exit 0 ;;
+        \?) die "Unknown option -${OPTARG} (see -h)" ;;
+    esac
+done
+shift $((OPTIND - 1))
+[[ $# -gt 0 ]] || { help; exit 0; }
+[[ $1 == -h || $1 == --help || $1 == help ]] && { help; exit 0; }
+[[ $EUID -ne 0 ]] || die "Run as the Steam user, not root (Steam refuses root anyway)."
+
+# ---------------------------------------------------------------- layout ----
+STEAM_ROOT="${STEAM_ROOT:-$(readlink -f "${HOME}/.steam/root" 2>/dev/null || true)}"
+[[ -n ${STEAM_ROOT} && -d ${STEAM_ROOT}/steamapps ]] \
+    || die "Steam root not found (~/.steam/root → ${STEAM_ROOT:-?}); set STEAM_ROOT."
+CONFIG_VDF="${STEAM_ROOT}/config/config.vdf"
+CACHE="${STEAMCTL_CACHE:-${XDG_CACHE_HOME:-${HOME}/.cache}/steamctl}"
+COMPAT_DIR="${STEAM_ROOT}/compatibilitytools.d"
+GE_REPO="GloriousEggroll/proton-ge-custom"
+CURL=(curl -fsSL --compressed --retry 2 --max-time 60)
+
+# Account: the single userdata dir that has a localconfig.vdf, or STEAM_ACCOUNT.
+account_dir() {
+    if [[ -n ${STEAM_ACCOUNT:-} ]]; then
+        [[ -f ${STEAM_ROOT}/userdata/${STEAM_ACCOUNT}/config/localconfig.vdf ]] \
+            || die "STEAM_ACCOUNT=${STEAM_ACCOUNT}: no localconfig.vdf under userdata/."
+        echo "${STEAM_ROOT}/userdata/${STEAM_ACCOUNT}"
+        return
+    fi
+    local d found=()
+    for d in "${STEAM_ROOT}"/userdata/*/; do
+        [[ -f ${d}config/localconfig.vdf ]] && found+=("${d%/}")
+    done
+    case ${#found[@]} in
+        0) die "No userdata/<account>/config/localconfig.vdf — log into Steam once." ;;
+        1) echo "${found[0]}" ;;
+        *) die "Several accounts under userdata/: $(printf '%s ' "${found[@]##*/}")— set STEAM_ACCOUNT." ;;
+    esac
+}
+localconfig() { echo "$(account_dir)/config/localconfig.vdf"; }
+
+# Library paths from libraryfolders.vdf ("path" keys), root first.
+libraries() {
+    local f="${STEAM_ROOT}/steamapps/libraryfolders.vdf"
+    [[ -f ${f} ]] || { echo "${STEAM_ROOT}"; return; }
+    grep -oP '^\s*"path"\s+"\K[^"]+' "${f}" | sed 's#\\\\#/#g'
+}
+
+# All appmanifest files across libraries.
+manifests() {
+    local lib
+    while read -r lib; do
+        [[ -d ${lib}/steamapps ]] || continue
+        find "${lib}/steamapps" -maxdepth 1 -name 'appmanifest_*.acf' 2>/dev/null
+    done < <(libraries)
+}
+acf_key() {  # acf_key <file> <key>  — depth-1 key of an appmanifest
+    grep -m1 -oP "^\s*\"$2\"\s+\"\K[^\"]*" "$1" 2>/dev/null || true
+}
+
+# --------------------------------------------------------------- python ----
+# All VDF work goes through python-vdf (dev-python/vdf, installed on this
+# host). One helper script, many operations, so the quoting lives in one place.
+vdf_py() {
+    python3 - "$@" <<'PY'
+import json, os, sys, tempfile
+try:
+    import vdf
+except ImportError:
+    sys.exit("python module 'vdf' missing: emerge dev-python/vdf")
+
+def load(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return vdf.load(f)
+
+def save(path, data):
+    # Same directory + rename = atomic, keeps Steam from ever seeing a torso.
+    st = os.stat(path)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".steamctl.")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        vdf.dump(data, f, pretty=True)
+    os.chmod(tmp, st.st_mode & 0o7777)
+    bak = path + ".steamctl.bak"
+    with open(path, "rb") as src, open(bak, "wb") as dst:
+        dst.write(src.read())
+    os.replace(tmp, path)
+
+def walk(node, keys, create=False):
+    """Case-insensitive descent; Steam's own parser is case-insensitive."""
+    for k in keys:
+        hit = next((x for x in node if x.lower() == k.lower()), None)
+        if hit is None:
+            if not create:
+                return None
+            node[k] = {}
+            hit = k
+        node = node[hit]
+    return node
+
+LC_APPS = ["UserLocalConfigStore", "Software", "Valve", "Steam", "Apps"]
+CT_MAP = ["InstallConfigStore", "Software", "Valve", "Steam", "CompatToolMapping"]
+
+op, path = sys.argv[1], sys.argv[2]
+args = sys.argv[3:]
+data = load(path)
+
+if op == "lo-get":                       # appid
+    apps = walk(data, LC_APPS) or {}
+    app = walk(apps, [args[0]]) or {}
+    print(walk(app, ["LaunchOptions"]) or "")
+elif op == "lo-apps":                    # every appid with a local config block
+    apps = walk(data, LC_APPS) or {}
+    for appid, app in apps.items():
+        if isinstance(app, dict):
+            print(appid)
+elif op == "lo-list":
+    apps = walk(data, LC_APPS) or {}
+    for appid, app in apps.items():
+        if not isinstance(app, dict):
+            continue
+        lo = walk(app, ["LaunchOptions"])
+        if lo:
+            print(f"{appid}\t{lo}")
+elif op == "lo-set":                     # appid value
+    apps = walk(data, LC_APPS, create=True)
+    app = walk(apps, [args[0]], create=True)
+    key = next((x for x in app if x.lower() == "launchoptions"), "LaunchOptions")
+    if args[1] == "":
+        app.pop(key, None)
+    else:
+        app[key] = args[1]
+    save(path, data)
+elif op == "ct-get":                     # appid  -> name or ""
+    m = walk(data, CT_MAP) or {}
+    e = walk(m, [args[0]]) or {}
+    print(walk(e, ["name"]) or "")
+elif op == "ct-list":                    # appid\tname\tpriority
+    m = walk(data, CT_MAP) or {}
+    for appid, e in m.items():
+        if isinstance(e, dict):
+            print(f"{appid}\t{walk(e, ['name']) or ''}\t{walk(e, ['priority']) or ''}")
+elif op == "ct-set":                     # appid name [priority]
+    m = walk(data, CT_MAP, create=True)
+    prio = args[2] if len(args) > 2 else ("75" if args[0] == "0" else "250")
+    m[args[0]] = {"name": args[1], "config": "", "priority": prio}
+    save(path, data)
+elif op == "ct-del":                     # appid
+    m = walk(data, CT_MAP) or {}
+    key = next((x for x in m if x == args[0]), None)
+    if key is None:
+        sys.exit(2)
+    del m[key]
+    save(path, data)
+else:
+    sys.exit(f"vdf_py: unknown op {op}")
+PY
+}
+
+# ---------------------------------------------------------- steam state ----
+steam_pid() {
+    local pidf="${HOME}/.steam/steam.pid" pid
+    [[ -r ${pidf} ]] || return 1
+    pid=$(<"${pidf}")
+    [[ ${pid} =~ ^[0-9]+$ && -d /proc/${pid} ]] || return 1
+    # The pid file survives crashes; make sure it is Steam that owns the pid.
+    grep -qa 'steam' "/proc/${pid}/comm" 2>/dev/null || return 1
+    echo "${pid}"
+}
+steam_running() { steam_pid >/dev/null; }
+
+steam_cmd() {  # forwarded to the running client, or starts one
+    have steam || die "'steam' not in PATH (games-util/steam-launcher)."
+    DEBUG "steam $*"
+    if steam_running; then
+        steam "$@" >/dev/null 2>&1 || die "steam $* failed to forward to the running client."
+    else
+        info "Steam is not running — starting it with: steam $*"
+        setsid steam "$@" >/dev/null 2>&1 < /dev/null &
+    fi
+}
+
+stop_steam() {
+    steam_running || { info "Steam is not running."; return 0; }
+    info "Shutting Steam down (steam -shutdown) …"
+    steam -shutdown >/dev/null 2>&1 || true
+    local i
+    for ((i = 0; i < 90; i++)); do
+        steam_running || { info "Steam stopped."; return 0; }
+        sleep 1
+    done
+    die "Steam still running after 90 s — close it yourself and retry."
+}
+start_steam() {
+    steam_running && { info "Steam already running."; return 0; }
+    info "Starting Steam …"
+    setsid steam >/dev/null 2>&1 < /dev/null &
+}
+
+# Edit guard: every writer of localconfig.vdf/config.vdf calls this first.
+need_steam_down() {
+    if steam_running; then
+        [[ ${STOP_STEAM} == yes ]] \
+            || die "Steam is running and would overwrite the edit on exit. Re-run with -s (stop) [-r (restart)]."
+        stop_steam
+    fi
+}
+after_edit() { [[ ${RESTART_STEAM} == yes ]] && start_steam; return 0; }
+
+# ---------------------------------------------------------- resolution ----
+# resolve_app <game> -> APPID ; installed-name substring match, unique.
+resolve_app() {
+    local q="$1"
+    [[ ${q} =~ ^[0-9]+$ ]] && { echo "${q}"; return; }
+    local m name hits=()
+    while read -r m; do
+        name=$(acf_key "${m}" name)
+        [[ ${name,,} == *"${q,,}"* ]] && hits+=("$(acf_key "${m}" appid) ${name}")
+    done < <(manifests)
+    case ${#hits[@]} in
+        0) die "No installed game matches '${q}'. Try: steamctl search ${q}" ;;
+        1) echo "${hits[0]%% *}" ;;
+        *) printf '%s\n' "${hits[@]}" >&2; die "'${q}' is ambiguous — use the APPID." ;;
+    esac
+}
+NAMES_TSV="${CACHE}/names.tsv"   # appid<TAB>name, filled by `names`
+app_name() {  # app_name <appid> — installed name, cached store name, or the appid
+    local m
+    while read -r m; do
+        [[ $(acf_key "${m}" appid) == "$1" ]] && { acf_key "${m}" name; return; }
+    done < <(manifests)
+    local n=""
+    [[ -f ${NAMES_TSV} ]] && n=$(awk -F'\t' -v a="$1" '$1==a{print $2; exit}' "${NAMES_TSV}")
+    echo "${n:-$1}"
+}
+# Resolve every appid seen in the config files that has no installed name,
+# one appdetails call each (limit ~200/5 min → 1 s pause), append to the cache.
+cmd_names() {
+    local all=no; [[ ${1:-} == -a ]] && all=yes
+    mkdir -p "${CACHE}"; touch "${NAMES_TSV}"
+    local a n json todo=() m
+    declare -A HAVE=()
+    while read -r m; do HAVE[$(acf_key "${m}" appid)]=1; done < <(manifests)
+    while IFS=$'\t' read -r a _; do HAVE[$a]=1; done < "${NAMES_TSV}"
+    while IFS=$'\t' read -r a _; do [[ -n ${HAVE[$a]:-} ]] || todo+=("$a"); done \
+        < <({ vdf_py lo-list "$(localconfig)"; vdf_py ct-list "${CONFIG_VDF}"
+              [[ ${all} == yes ]] && vdf_py lo-apps "$(localconfig)"; } | cut -f1 | sort -u)
+    [[ ${#todo[@]} -gt 0 ]] || { info "Name cache complete (${NAMES_TSV})."; return 0; }
+    info "Resolving ${#todo[@]} appids via the store (~1.5 s each, rate limit) …"
+    for a in "${todo[@]}"; do
+        [[ ${a} == 0 ]] && continue
+        json=$("${CURL[@]}" "https://store.steampowered.com/api/appdetails?appids=${a}&filters=basic&l=english" 2>/dev/null) || { warn "${a}: fetch failed"; continue; }
+        n=$(jq -r ".\"${a}\".data.name // empty" <<< "${json}")
+        printf '%s\t%s\n' "${a}" "${n:-?}" >> "${NAMES_TSV}"
+        printf '  %-8s %s\n' "${a}" "${n:-(not on the store)}"
+        sleep 1.5
+    done
+}
+app_manifest() {
+    local m
+    while read -r m; do
+        [[ $(acf_key "${m}" appid) == "$1" ]] && { echo "${m}"; return; }
+    done < <(manifests)
+    return 1
+}
+human() { numfmt --to=iec --suffix=B "${1:-0}" 2>/dev/null || echo "$1"; }
+
+# ------------------------------------------------------------- presets ----
+# name|placement|token(s)      placement: env (front), pre (before %command%),
+#                                         post (after %command%)
+PRESETS='
+gamemode|pre|gamemoderun
+mangohud|pre|mangohud
+gamescope|pre|gamescope -f --
+vkbasalt|env|ENABLE_VKBASALT=1
+cores|post|-useallavailablecores
+nosplash|post|-nosplash
+skipintro|post|-skipintro
+protonlog|env|PROTON_LOG=1
+dlss|env|PROTON_ENABLE_NVAPI=1
+fsync-off|env|PROTON_NO_FSYNC=1
+esync-off|env|PROTON_NO_ESYNC=1
+wayland|env|PROTON_ENABLE_WAYLAND=1
+hdr|env|PROTON_ENABLE_HDR=1
+mesa-fps|env|MANGOHUD=1
+dxvk-hud|env|DXVK_HUD=fps,frametimes
+nvshader|env|__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1
+'
+preset_lookup() {  # preset_lookup <name> -> "placement|tokens" or 1
+    local line
+    while IFS= read -r line; do
+        [[ -z ${line} ]] && continue
+        [[ ${line%%|*} == "$1" ]] && { echo "${line#*|}"; return 0; }
+    done <<< "${PRESETS}"
+    return 1
+}
+cmd_opts_presets() {
+    printf '%-10s %-5s %s\n' PRESET WHERE TOKENS
+    local line
+    while IFS='|' read -r n p t; do
+        [[ -n ${n} ]] && printf '%-10s %-5s %s\n' "${n}" "${p}" "${t}"
+    done <<< "${PRESETS}"
+    echo
+    echo "gamescope=ARGS overrides its flags, e.g. gamescope='-W 3440 -H 1440 -f --'."
+}
+
+# Launch-option string model: [env...] [wrappers...] %command% [game args...]
+# split_lo <string> ; sets LO_ENV LO_PRE LO_POST (arrays)
+split_lo() {
+    local -a toks
+    read -r -a toks <<< "$1"
+    LO_ENV=(); LO_PRE=(); LO_POST=()
+    local seen=no t
+    for t in "${toks[@]}"; do
+        if [[ ${t} == '%command%' ]]; then seen=yes; continue; fi
+        if [[ ${seen} == yes ]]; then LO_POST+=("${t}")
+        elif [[ ${#LO_PRE[@]} -eq 0 && ${t} == *=* && ${t} != -* ]]; then LO_ENV+=("${t}")
+        else LO_PRE+=("${t}"); fi
+    done
+}
+join_lo() {
+    local -a out=("${LO_ENV[@]}" "${LO_PRE[@]}")
+    [[ ${#out[@]} -gt 0 || ${#LO_POST[@]} -gt 0 ]] || { echo ""; return; }
+    out+=('%command%' "${LO_POST[@]}")
+    echo "${out[*]}"
+}
+has_tok() { local x; for x in "${@:2}"; do [[ ${x} == "$1" ]] && return 0; done; return 1; }
+
+# apply_item add|rm <item>  — mutates LO_* arrays
+apply_item() {
+    local mode="$1" item="$2" place tokens spec arg=""
+    if [[ ${item} == gamescope=* ]]; then arg="${item#gamescope=}"; item=gamescope; fi
+    if spec=$(preset_lookup "${item}"); then
+        place="${spec%%|*}"; tokens="${spec#*|}"
+        [[ ${item} == gamescope && -n ${arg} ]] && tokens="gamescope ${arg}"
+    elif [[ ${item} == *=* && ${item} != -* ]]; then place=env; tokens="${item}"
+    elif [[ ${item} == -* ]]; then place=post; tokens="${item}"
+    else place=pre; tokens="${item}"; fi
+    local -a tk; read -r -a tk <<< "${tokens}"
+    local first="${tk[0]}"
+    if [[ ${mode} == add ]]; then
+        case ${place} in
+            env)  has_tok "${first}" "${LO_ENV[@]}"  || LO_ENV+=("${tk[@]}") ;;
+            pre)  has_tok "${first}" "${LO_PRE[@]}"  || LO_PRE+=("${tk[@]}") ;;
+            post) has_tok "${first}" "${LO_POST[@]}" || LO_POST+=("${tk[@]}") ;;
+        esac
+    else
+        # Removing a wrapper also removes its own flags up to the next
+        # non-flag word (gamescope -f -- …); env/post are single tokens.
+        local -a src=() dst=(); local x drop=no
+        case ${place} in env) src=("${LO_ENV[@]}");; pre) src=("${LO_PRE[@]}");; post) src=("${LO_POST[@]}");; esac
+        for x in "${src[@]}"; do
+            if [[ ${x} == "${first}" ]]; then drop=yes; continue; fi
+            if [[ ${drop} == yes && ${place} == pre && ( ${x} == -* || ${x} =~ ^[0-9]+$ ) ]]; then continue; fi
+            drop=no; dst+=("${x}")
+        done
+        case ${place} in env) LO_ENV=("${dst[@]}");; pre) LO_PRE=("${dst[@]}");; post) LO_POST=("${dst[@]}");; esac
+    fi
+}
+
+# ------------------------------------------------------------- verbs -------
+cmd_status() {
+    local pid
+    if pid=$(steam_pid); then echo "Steam:      running (pid ${pid})"; else echo "Steam:      not running"; fi
+    echo "Root:       ${STEAM_ROOT}"
+    local acct; acct=$(account_dir 2>/dev/null || echo "?")
+    local name; name=$(grep -m1 -oP '"AccountName"\s+"\K[^"]+' "${STEAM_ROOT}/config/loginusers.vdf" 2>/dev/null || true)
+    echo "Account:    ${acct##*/} ${name:+(${name})}"
+    echo "Libraries:"
+    local lib n
+    while read -r lib; do
+        n=$(find "${lib}/steamapps" -maxdepth 1 -name 'appmanifest_*.acf' 2>/dev/null | wc -l)
+        printf '  %-40s %s apps\n' "${lib}" "${n}"
+    done < <(libraries)
+    echo "Compat tools: $(ls -1 "${COMPAT_DIR}" 2>/dev/null | tr '\n' ' ')"
+    echo "Default tool: $(vdf_py ct-get "${CONFIG_VDF}" 0)"
+}
+
+cmd_list() {
+    local m appid name size lib lo ct
+    local lc; lc=$(localconfig)
+    declare -A LO=() CT=()
+    while IFS=$'\t' read -r a v; do LO[$a]="$v"; done < <(vdf_py lo-list "${lc}")
+    while IFS=$'\t' read -r a v _; do CT[$a]="$v"; done < <(vdf_py ct-list "${CONFIG_VDF}")
+    printf '%-8s %-42s %8s  %-22s %s\n' APPID NAME SIZE PROTON LAUNCH-OPTIONS
+    while read -r m; do
+        appid=$(acf_key "${m}" appid); name=$(acf_key "${m}" name); size=$(acf_key "${m}" SizeOnDisk)
+        case ${name} in "Steam Linux Runtime"*|"Proton "*|"Steamworks Common"*) continue ;; esac
+        printf '%-8s %-42.42s %8s  %-22.22s %s\n' "${appid}" "${name}" "$(human "${size}")" \
+            "${CT[$appid]:--}" "${LO[$appid]:-}"
+    done < <(manifests | sort -t_ -k2 -n)
+}
+
+cmd_search() {
+    [[ $# -gt 0 ]] || die "search <word...>"
+    local term="$*" m name appid
+    echo "Installed:"
+    local any=no
+    while read -r m; do
+        name=$(acf_key "${m}" name)
+        [[ ${name,,} == *"${term,,}"* ]] || continue
+        any=yes; printf '  %-8s %s\n' "$(acf_key "${m}" appid)" "${name}"
+    done < <(manifests)
+    [[ ${any} == yes ]] || echo "  (none)"
+    echo "Store (storesearch, top 10):"
+    local url="https://store.steampowered.com/api/storesearch/?l=english&cc=PL&term=$(printf '%s' "${term}" | jq -sRr @uri)"
+    local json
+    json=$("${CURL[@]}" "${url}") || die "store search failed (network?)."
+    jq -r '.items[]? | "  \(.id|tostring|.[0:8] + "        "|.[0:8]) \(.name)\(if .platforms.linux then "  [linux]" else "" end)\(if .price then "  " + (.price.final/100|tostring) + " " + .price.currency else "" end)"' <<< "${json}"
+    [[ $(jq -r '.total' <<< "${json}") == 0 ]] && echo "  (no hits)"
+    return 0
+}
+
+cmd_info() {
+    local appid; appid=$(resolve_app "${1:?info <game>}")
+    local m; m=$(app_manifest "${appid}" || true)
+    echo "AppID:          ${appid}"
+    if [[ -n ${m} ]]; then
+        echo "Name:           $(acf_key "${m}" name)"
+        echo "Manifest:       ${m}"
+        echo "Install dir:    $(dirname "${m}")/common/$(acf_key "${m}" installdir)"
+        echo "Size on disk:   $(human "$(acf_key "${m}" SizeOnDisk)")"
+        echo "StateFlags:     $(acf_key "${m}" StateFlags)  (4 = fully installed, 6 = update pending)"
+        local pfx="$(dirname "${m}")/compatdata/${appid}/pfx"
+        [[ -d ${pfx} ]] && echo "Proton prefix:  ${pfx}" || echo "Proton prefix:  (none — native, or never launched)"
+    else
+        echo "Installed:      no"
+    fi
+    echo "Proton pin:     $(vdf_py ct-get "${CONFIG_VDF}" "${appid}")"
+    echo "Launch options: $(vdf_py lo-get "$(localconfig)" "${appid}")"
+    local json
+    if json=$("${CURL[@]}" "https://store.steampowered.com/api/appdetails?appids=${appid}&cc=PL&l=english" 2>/dev/null) \
+        && [[ $(jq -r ".\"${appid}\".success" <<< "${json}") == true ]]; then
+        jq -r ".\"${appid}\".data | \"Store name:     \(.name)\nType:           \(.type)\nPlatforms:      \(.platforms|to_entries|map(select(.value))|map(.key)|join(\",\"))\nPrice:          \(.price_overview.final_formatted // (if .is_free then \"free\" else \"n/a\" end))\nDevelopers:     \(.developers // []|join(\", \"))\nRelease:        \(.release_date.date // \"?\")\"" <<< "${json}"
+    else
+        echo "Store:          (no data)"
+    fi
+}
+
+cmd_compat() {
+    local appid; appid=$(resolve_app "${1:?compat <game>}")
+    local m; m=$(app_manifest "${appid}") || die "${appid} is not installed."
+    local d="$(dirname "${m}")/compatdata/${appid}"
+    [[ -d ${d} ]] || die "No compatdata for ${appid} (native game, or never launched under Proton)."
+    echo "${d}"
+    ls -la "${d}"
+}
+
+cmd_run() {
+    local appid; appid=$(resolve_app "${1:?run <game> [args]}"); shift
+    info "Launching $(app_name "${appid}") (${appid})"
+    steam_cmd -applaunch "${appid}" "$@"
+}
+cmd_url() {  # cmd_url <verb> <game>
+    local appid; appid=$(resolve_app "${2:?$1 <game>}")
+    info "steam://$1/${appid}  ($(app_name "${appid}"))"
+    steam_cmd "steam://$1/${appid}"
+}
+
+# opts -------------------------------------------------------------------
+cmd_opts() {
+    local sub="${1:-}"; shift || true
+    local lc; lc=$(localconfig)
+    case ${sub} in
+        get)   local a; a=$(resolve_app "${1:?opts get <game>}"); vdf_py lo-get "${lc}" "${a}" ;;
+        list)  local line; while IFS=$'\t' read -r a v; do printf '%-8s %-30.30s %s\n' "${a}" "$(app_name "${a}")" "${v}"; done < <(vdf_py lo-list "${lc}") ;;
+        presets) cmd_opts_presets ;;
+        set|add|rm|clear)
+            local a; a=$(resolve_app "${1:?opts ${sub} <game> …}"); shift
+            local cur new; cur=$(vdf_py lo-get "${lc}" "${a}")
+            case ${sub} in
+                set)   [[ $# -eq 1 ]] || die "opts set <game> '<whole string>'"; new="$1" ;;
+                clear) new="" ;;
+                add|rm)
+                    [[ $# -gt 0 ]] || die "opts ${sub} <game> <item...>"
+                    split_lo "${cur}"
+                    local it; for it in "$@"; do apply_item "${sub}" "${it}"; done
+                    new=$(join_lo) ;;
+            esac
+            echo "$(app_name "${a}") (${a})"
+            echo "  old: ${cur:-(empty)}"
+            echo "  new: ${new:-(empty)}"
+            [[ ${new} == "${cur}" ]] && { info "No change."; return 0; }
+            local w; for w in ${new}; do
+                case ${w} in gamemoderun|mangohud|gamescope|umu-run|steamtinkerlaunch)
+                    have "${w}" || warn "'${w}' is not installed — the game will fail to start with this option." ;;
+                esac
+            done
+            need_steam_down
+            vdf_py lo-set "${lc}" "${a}" "${new}"
+            info "Written to ${lc} (backup: .steamctl.bak)"
+            after_edit ;;
+        *) die "opts get|set|add|rm|clear|list|presets" ;;
+    esac
+}
+
+# proton -----------------------------------------------------------------
+gh_api() {  # gh_api <path-after-repos/> ; GITHUB_TOKEN, else gh's own token
+    local -a hdr=(-H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' -A steamctl)
+    local tok="${GITHUB_TOKEN:-}"
+    [[ -z ${tok} ]] && have gh && tok=$(gh auth token 2>/dev/null || true)
+    [[ -n ${tok} ]] && hdr+=(-H "Authorization: Bearer ${tok}")
+    "${CURL[@]}" "${hdr[@]}" "https://api.github.com/repos/$1"
+}
+
+# No-API fallback (60 req/h unauthenticated): the /releases/latest page
+# redirects to /releases/tag/<TAG>, and asset URLs are deterministic.
+# Emits release-like JSON with just tag_name + the assets that answer HEAD.
+gh_release_noapi() {  # gh_release_noapi <TAG|latest>
+    local tag="$1" url
+    if [[ ${tag} == latest ]]; then
+        url=$(curl -sIL -o /dev/null -w '%{url_effective}' "https://github.com/${GE_REPO}/releases/latest") || return 1
+        tag="${url##*/tag/}"
+        [[ -n ${tag} && ${tag} != "${url}" ]] || return 1
+    fi
+    local base="https://github.com/${GE_REPO}/releases/download/${tag}" a assets=()
+    for a in "${tag}-x86_64.tar.gz" "${tag}-x86_64.sha512sum" "${tag}.tar.gz" "${tag}.sha512sum"; do
+        local size
+        size=$(curl -sIL -o /dev/null -w '%{http_code} %{size_download}\n' -r 0-0 "${base}/${a}" 2>/dev/null | awk '$1==206||$1==200{print 1}')
+        [[ -n ${size} ]] && assets+=("${a}")
+    done
+    [[ ${#assets[@]} -gt 0 ]] || return 1
+    printf '%s\n' "${assets[@]}" | jq -R --arg tag "${tag}" --arg base "${base}" \
+        -s 'split("\n") | map(select(length>0)) | {tag_name:$tag, assets: map({name:., browser_download_url:($base+"/"+.), size:0})}'
+}
+
+# tool_dir <TAG|name> -> existing dir under compatibilitytools.d, or 1.
+# GE-Proton ≥11-4 unpacks to (and names itself) GE-ProtonX-Y-x86_64; the
+# tag alone is what people type.
+tool_dir() {
+    local c
+    for c in "$1" "$1-x86_64"; do
+        [[ -d ${COMPAT_DIR}/${c} ]] && { echo "${COMPAT_DIR}/${c}"; return 0; }
+    done
+    return 1
+}
+
+installed_tools() {  # name<TAB>kind<TAB>version<TAB>path
+    local d
+    for d in "${COMPAT_DIR}"/*/; do
+        [[ -f ${d}compatibilitytool.vdf ]] || continue
+        local n; n=$(grep -m1 -oP '^\s*"\K[^"]+(?="\s*(//.*)?$)' <(sed -n '/"compat_tools"/,$p' "${d}compatibilitytool.vdf" | sed '1,2d') 2>/dev/null || true)
+        printf '%s\tcustom\t%s\t%s\n' "${n:-$(basename "${d}")}" "$(cut -d' ' -f2- "${d}version" 2>/dev/null || echo "?")" "${d%/}"
+    done
+    local m name
+    while read -r m; do
+        name=$(acf_key "${m}" name)
+        [[ ${name} == Proton* ]] || continue
+        local dir="$(dirname "${m}")/common/$(acf_key "${m}" installdir)"
+        printf '%s\tvalve\t%s\t%s\n' "${name}" "$(cut -d' ' -f2- "${dir}/version" 2>/dev/null || echo "?")" "${dir}"
+    done < <(manifests)
+}
+
+cmd_proton() {
+    local sub="${1:-list}"; shift || true
+    case ${sub} in
+        list)
+            declare -A USES=()
+            local a n _
+            while IFS=$'\t' read -r a n _; do USES[$n]=$(( ${USES[$n]:-0} + 1 )); done < <(vdf_py ct-list "${CONFIG_VDF}")
+            printf '%-24s %-7s %-32s %5s  %s\n' NAME KIND VERSION GAMES PATH
+            local kind ver path
+            while IFS=$'\t' read -r n kind ver path; do
+                printf '%-24s %-7s %-32.32s %5s  %s\n' "${n}" "${kind}" "${ver}" "${USES[$n]:-0}" "${path}"
+            done < <(installed_tools | sort)
+            echo
+            echo "Pinned by Valve id (Steam-internal names, no directory):"
+            for n in "${!USES[@]}"; do
+                case ${n} in proton_*|SteamLinuxRuntime*) printf '  %-24s %s games\n' "${n}" "${USES[$n]}" ;; esac
+            done | sort
+            echo "Global default (appid 0): $(vdf_py ct-get "${CONFIG_VDF}" 0)" ;;
+        available)
+            local n="${1:-10}"
+            gh_api "${GE_REPO}/releases?per_page=${n}" \
+                | jq -r '.[] | "\(.tag_name)\t\(.published_at[0:10])\t\([.assets[].name | select(endswith(".tar.gz"))] | join(" "))"' \
+                | { printf '%-16s %-10s %s\n' TAG DATE ASSETS; while IFS=$'\t' read -r t d a; do printf '%-16s %-10s %s\n' "${t}" "${d}" "${a}"; done; } ;;
+        install)
+            local tag="${1:?proton install <TAG|latest> [-f]}" force="${2:-}"
+            local rel
+            if [[ ${tag} == latest ]]; then rel=$(gh_api "${GE_REPO}/releases/latest" 2>/dev/null); else rel=$(gh_api "${GE_REPO}/releases/tags/${tag}" 2>/dev/null); fi \
+                || { warn "GitHub API unavailable (rate limit? set GITHUB_TOKEN) — probing release pages instead."
+                     rel=$(gh_release_noapi "${tag}") || die "Release '${tag}' not found."; }
+            tag=$(jq -r .tag_name <<< "${rel}")
+            [[ -n ${tag} && ${tag} != null ]] || die "Could not read tag_name from the release JSON."
+            local dest
+            if dest=$(tool_dir "${tag}"); then
+                [[ ${force} == -f ]] || die "${dest} already exists (use -f to replace)."
+            fi
+            # ≥GE-Proton11-6 ships only the -x86_64 asset; older ones the bare name.
+            local asset sum url sumurl
+            for asset in "${tag}-x86_64.tar.gz" "${tag}.tar.gz"; do
+                url=$(jq -r --arg a "${asset}" '.assets[] | select(.name==$a) | .browser_download_url' <<< "${rel}")
+                [[ -n ${url} ]] && break
+            done
+            [[ -n ${url} ]] || die "No tarball asset for ${tag} (assets: $(jq -r '[.assets[].name]|join(" ")' <<< "${rel}"))"
+            sum="${asset%.tar.gz}.sha512sum"
+            sumurl=$(jq -r --arg a "${sum}" '.assets[] | select(.name==$a) | .browser_download_url' <<< "${rel}")
+            [[ -n ${sumurl} ]] || die "No ${sum} asset — refusing to install unverified."
+            mkdir -p "${CACHE}" "${COMPAT_DIR}"
+            local asize; asize=$(jq -r --arg a "${asset}" '.assets[] | select(.name==$a) | .size' <<< "${rel}")
+            info "Downloading ${asset}${asize:+ (}$( [[ ${asize} -gt 0 ]] && numfmt --to=iec "${asize}" || echo "size unknown")${asize:+)} → ${CACHE}"
+            "${CURL[@]}" -o "${CACHE}/${sum}" "${sumurl}" || die "sha512sum download failed."
+            if [[ ! -f ${CACHE}/${asset} ]] || ! (cd "${CACHE}" && sha512sum --status -c "${sum}"); then
+                curl -fL --progress-bar --retry 3 -C - -o "${CACHE}/${asset}" "${url}" || die "download failed."
+            fi
+            (cd "${CACHE}" && sha512sum -c "${sum}") || die "sha512 MISMATCH for ${asset} — deleted nothing; inspect ${CACHE}."
+            # `tar -t | head -1` ends with tar killed by SIGPIPE → under
+            # pipefail the assignment fails and set -e ends the script with
+            # no message at all. Mask the pipe status, validate the value.
+            local top; top=$(tar -tzf "${CACHE}/${asset}" 2>/dev/null | head -1 | cut -d/ -f1 || true)
+            [[ -n ${top} ]] || die "Cannot list ${CACHE}/${asset} — corrupt archive?"
+            [[ ${top} == "${tag}" || ${top} == "${tag}-x86_64" ]] || warn "tarball top dir is '${top}', not '${tag}'"
+            if [[ -d ${COMPAT_DIR}/${top} ]]; then
+                confirm "Replace ${COMPAT_DIR}/${top}?"
+                rm -rf "${COMPAT_DIR:?}/${top}"
+            fi
+            info "Unpacking into ${COMPAT_DIR} …"
+            tar -xzf "${CACHE}/${asset}" -C "${COMPAT_DIR}" || die "tar failed."
+            [[ -f ${COMPAT_DIR}/${top}/compatibilitytool.vdf ]] || die "Unpacked tree lacks compatibilitytool.vdf."
+            echo "✓ ${top} installed ($(cut -d' ' -f2- "${COMPAT_DIR}/${top}/version")) — pin games with: steamctl -s proton set <game> ${top}"
+            steam_running && warn "Steam scans compatibilitytools.d at start — restart it to see ${top}."
+            return 0 ;;
+        remove)
+            local t="${1:?proton remove <TAG>}" d
+            d=$(tool_dir "${t}") || die "No ${t} (or ${t}-x86_64) under ${COMPAT_DIR}."
+            t=$(basename "${d}")
+            local users; users=$(vdf_py ct-list "${CONFIG_VDF}" | awk -F'\t' -v n="${t}" '$2==n{print $1}' | tr '\n' ' ')
+            [[ -n ${users} ]] && warn "Still pinned by appids: ${users}"
+            confirm "rm -rf ${d}?"
+            rm -rf "${d:?}"
+            echo "✓ removed ${t}" ;;
+        get)
+            local a; a=$(resolve_app "${1:?proton get <game>}")
+            local n; n=$(vdf_py ct-get "${CONFIG_VDF}" "${a}")
+            echo "${n:-(global default: $(vdf_py ct-get "${CONFIG_VDF}" 0))}" ;;
+        set|default)
+            local a n
+            if [[ ${sub} == default ]]; then
+                a=0; n="${1:-}"
+                [[ -n ${n} ]] || { vdf_py ct-get "${CONFIG_VDF}" 0; return 0; }
+            else
+                a=$(resolve_app "${1:?proton set <game> <name>}"); n="${2:?proton set <game> <name>}"
+            fi
+            # the tag is enough: GE-Proton11-6 → GE-Proton11-6-x86_64 when that is the tool's name
+            if ! installed_tools | cut -f1 | grep -qxF -- "${n}" && installed_tools | cut -f1 | grep -qxF -- "${n}-x86_64"; then
+                n="${n}-x86_64"
+            fi
+            if ! installed_tools | cut -f1 | grep -qxF -- "${n}"; then
+                case ${n} in proton_*|SteamLinuxRuntime*) ;; *) die "'${n}' is neither in compatibilitytools.d nor a Valve id (proton_experimental, proton_hotfix, proton_9 …)." ;; esac
+                warn "'${n}' looks like a Valve id; not verifiable locally."
+            fi
+            echo "$(app_name "${a}") (${a}): $(vdf_py ct-get "${CONFIG_VDF}" "${a}") → ${n}"
+            need_steam_down
+            vdf_py ct-set "${CONFIG_VDF}" "${a}" "${n}"
+            info "Written to ${CONFIG_VDF} (backup: .steamctl.bak)"
+            after_edit ;;
+        unset)
+            local a; a=$(resolve_app "${1:?proton unset <game>}")
+            need_steam_down
+            vdf_py ct-del "${CONFIG_VDF}" "${a}" || die "${a} has no CompatToolMapping entry."
+            info "Removed the pin for $(app_name "${a}") (${a})."
+            after_edit ;;
+        stale)
+            local have_names; have_names=$(installed_tools | cut -f1)
+            local a n p any=no
+            while IFS=$'\t' read -r a n p; do
+                case ${n} in proton_*|SteamLinuxRuntime*|"") continue ;; esac
+                grep -qxF -- "${n}" <<< "${have_names}" && continue
+                any=yes; printf '%-8s %-30.30s → %s (missing)\n' "${a}" "$(app_name "${a}")" "${n}"
+            done < <(vdf_py ct-list "${CONFIG_VDF}")
+            [[ ${any} == yes ]] && echo "(Steam silently falls back to the default tool for these; fix with: steamctl -s proton set <appid> <name>)"
+            [[ ${any} == no ]] && echo "No stale pins."
+            return 0 ;;
+        *) die "proton list|available|install|remove|get|set|unset|default|stale" ;;
+    esac
+}
+
+# tools ------------------------------------------------------------------
+cmd_tools() {
+    local line
+    printf '%-18s %-9s %s\n' TOOL STATE 'PACKAGE / NOTE'
+    while IFS='|' read -r bin pkg note; do
+        [[ -z ${bin} ]] && continue
+        if have "${bin}"; then printf '%-18s %-9s %s\n' "${bin}" installed "$(command -v "${bin}")"
+        else printf '%-18s %-9s %s\n' "${bin}" MISSING "${pkg}${note:+  — ${note}}"; fi
+    done <<'EOT'
+steam|games-util/steam-launcher|
+gamemoderun|games-util/gamemode|preset: gamemode
+mangohud|games-util/mangohud (::pwr)|preset: mangohud
+gamescope|gui-wm/gamescope|preset: gamescope
+protontricks|app-emulation/protontricks|verb: tricks
+winetricks|app-emulation/winetricks|needed by protontricks verbs
+umu-run|games-util/umu-launcher (::pwr)|verb: umu
+protonup-rs|games-util/protonup-rs (::pwr)|alternative to `proton install`
+steamtinkerlaunch|not packaged (hard dep gnome-extra/yad left ::gentoo)|launch option: steamtinkerlaunch %command%
+EOT
+    # vkBasalt is a Vulkan layer, not a binary
+    if ls /usr/share/vulkan/implicit_layer.d/vkBasalt* >/dev/null 2>&1; then printf '%-18s %-9s %s\n' vkBasalt installed 'preset: vkbasalt'
+    else printf '%-18s %-9s %s\n' vkBasalt MISSING 'media-gfx/vkBasalt  — preset: vkbasalt'; fi
+    ls /usr/share/vulkan/implicit_layer.d/MangoHud* >/dev/null 2>&1 || have mangohud && true
+    python3 -c 'import vdf' 2>/dev/null && printf '%-18s %-9s %s\n' python-vdf installed 'dev-python/vdf (used by steamctl)' \
+        || printf '%-18s %-9s %s\n' python-vdf MISSING 'dev-python/vdf — REQUIRED by opts/proton verbs'
+}
+
+cmd_gamemode() {
+    have gamemoded || die "gamemoded not installed (games-util/gamemode)."
+    gamemoded -s || true
+    if have gamemodelist; then echo; echo "Processes under gamemode:"; gamemodelist || true; fi
+    local f; for f in /etc/gamemode.ini "${XDG_CONFIG_HOME:-${HOME}/.config}/gamemode.ini"; do
+        [[ -f ${f} ]] && echo "config: ${f}"
+    done
+    return 0
+}
+
+cmd_tricks() {
+    have protontricks || die "protontricks not installed: emerge app-emulation/protontricks"
+    local appid; appid=$(resolve_app "${1:?tricks <game> [winetricks verbs | -c CMD]}"); shift
+    # STEAM_DIR skips the install-chooser; explicit APPID skips the GUI.
+    # protontricks flags (-c, --no-bwrap …) must precede the appid.
+    local -a flags=() rest=()
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -c|--command) flags+=("$1" "$2"); shift 2 ;;
+            --no-bwrap|--no-runtime|--background-wineserver|--no-background-wineserver|--cwd-app|-v) flags+=("$1"); shift ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    [[ ${#flags[@]} -gt 0 || ${#rest[@]} -gt 0 ]] || rest=(--gui)
+    if [[ ${rest[0]:-} == --gui ]]; then flags+=(--gui); rest=(); fi
+    DEBUG "STEAM_DIR=${STEAM_ROOT} protontricks ${flags[*]} ${appid} ${rest[*]}"
+    STEAM_DIR="${STEAM_ROOT}" exec protontricks "${flags[@]}" "${appid}" "${rest[@]}"
+}
+
+cmd_umu() {
+    have umu-run || die "umu-run not installed: emerge games-util/umu-launcher"
+    [[ $# -gt 0 ]] || die "umu <exe> [args]"
+    export PROTONPATH="${PROTONPATH:-GE-Proton}" GAMEID="${GAMEID:-umu-default}"
+    DEBUG "PROTONPATH=${PROTONPATH} GAMEID=${GAMEID} umu-run $*"
+    exec umu-run "$@"
+}
+
+# bench ------------------------------------------------------------------
+# MangoHud does the measuring: with logging armed it writes <exe>_<date>.csv
+# (one row per frame) and <exe>_<date>_summary.csv (0.1%/1% lows, 97th
+# percentile, average fps, GPU/CPU load, temps, VRAM) when the log stops.
+# MangoHud reads ONE config file, so `bench on` edits the global
+# ~/.config/MangoHud/MangoHud.conf (backup kept) and `bench off` restores it.
+MH_CONF="${XDG_CONFIG_HOME:-${HOME}/.config}/MangoHud/MangoHud.conf"
+BENCH_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/steamctl/bench"
+cmd_bench() {
+    local sub="${1:-}"; shift || true
+    case ${sub} in
+        on)
+            local a; a=$(resolve_app "${1:?bench on <game> [label] [-d SECONDS]}"); shift
+            local label="" dur=120
+            while [[ $# -gt 0 ]]; do case $1 in -d) dur="$2"; shift 2 ;; *) label="${label:+${label} }$1"; shift ;; esac; done
+            [[ ${dur} =~ ^[0-9]+$ ]] || die "-d wants seconds"
+            have mangohud || die "mangohud not installed."
+            local out="${BENCH_DIR}/${a}"; mkdir -p "${out}"
+            [[ -f ${MH_CONF} ]] || die "No ${MH_CONF} — create one (goverlay or the sample in /usr/share/doc/mangohud*)."
+            [[ -f ${MH_CONF}.steamctl-bak ]] || command cp -f "${MH_CONF}" "${MH_CONF}.steamctl-bak"
+            {
+                grep -vE '^(output_folder|log_duration|log_interval|autostart_log|toggle_logging|log_versioning)=' "${MH_CONF}.steamctl-bak"
+                printf '\n# --- steamctl bench (removed by: steamctl bench off) ---\n'
+                printf 'output_folder=%s\nlog_duration=%s\nlog_interval=0\nautostart_log=0\ntoggle_logging=Shift_L+F2\n' "${out}" "${dur}"
+            } > "${MH_CONF}"
+            printf '%s\t%s\n' "$(date +%s)" "${label:-run}" >> "${out}/labels.tsv"
+            echo "Armed for $(app_name "${a}") (${a}): label '${label:-run}', ${dur} s per log → ${out}"
+            echo "Now: steamctl run ${a}  → set the graphics options → start the in-game benchmark → press Shift+F2 as it begins."
+            echo "The log stops by itself after ${dur} s (or Shift+F2 again). Then: steamctl bench report ${a}"
+            [[ $(vdf_py lo-get "$(localconfig)" "${a}") == *mangohud* ]] || warn "This game has no 'mangohud' in its launch options — nothing will be logged (steamctl -s -r opts add ${a} mangohud)." ;;
+        off)
+            [[ -f ${MH_CONF}.steamctl-bak ]] || { info "Nothing armed."; return 0; }
+            command mv -f "${MH_CONF}.steamctl-bak" "${MH_CONF}"; echo "MangoHud config restored." ;;
+        label)
+            local a; a=$(resolve_app "${1:?bench label <game> <text>}"); shift
+            [[ $# -gt 0 ]] || die "label text?"
+            mkdir -p "${BENCH_DIR}/${a}"; printf '%s\t%s\n' "$(date +%s)" "$*" >> "${BENCH_DIR}/${a}/labels.tsv"
+            echo "Next logs of $(app_name "${a}") are labelled '$*'." ;;
+        report)
+            local a; a=$(resolve_app "${1:?bench report <game>}")
+            local d="${BENCH_DIR}/${a}"
+            ls "${d}"/*_summary.csv >/dev/null 2>&1 || die "No summaries in ${d} yet."
+            python3 - "${d}" <<'PYR'
+import csv, glob, os, sys, statistics, time
+d = sys.argv[1]
+labels = []
+try:
+    for line in open(os.path.join(d, "labels.tsv")):
+        t, _, l = line.rstrip("\n").partition("\t"); labels.append((int(t), l))
+except FileNotFoundError:
+    pass
+def label_for(mtime):
+    best = "run"
+    for t, l in labels:
+        if t <= mtime: best = l
+    return best
+rows = []
+for f in sorted(glob.glob(os.path.join(d, "*_summary.csv")), key=os.path.getmtime):
+    with open(f) as fh:
+        r = list(csv.reader(fh))
+    if len(r) < 2: continue
+    g = dict(zip(r[0], r[1]))
+    raw = f[:-len("_summary.csv")] + ".csv"
+    power = vram = frames = None
+    try:
+        lines = open(raw).read().splitlines()
+        i = next(i for i, l in enumerate(lines) if l.startswith("fps,"))
+        cols = lines[i].split(",")
+        data = [l.split(",") for l in lines[i+1:] if l.count(",") >= len(cols) - 1]
+        frames = len(data)
+        pi, vi = cols.index("gpu_power"), cols.index("gpu_vram_used")
+        power = statistics.mean(float(x[pi]) for x in data)
+        vram = max(float(x[vi]) for x in data)
+    except Exception:
+        pass
+    rows.append((os.path.getmtime(f), label_for(os.path.getmtime(f)), g, power, vram, frames))
+print(f"{'WHEN':12} {'LABEL':28} {'AVG':>6} {'1%':>6} {'0.1%':>6} {'97%':>6} {'GPU%':>5} {'CPU%':>5} {'W':>5} {'VRAM':>5} {'frames':>6}")
+nan = float("nan")
+for m, l, g, p, v, n in rows:
+    print(f"{time.strftime('%m-%d %H:%M', time.localtime(m)):12} {l[:28]:28} "
+          f"{float(g['Average FPS']):6.1f} {float(g['1% Min FPS']):6.1f} {float(g['0.1% Min FPS']):6.1f} "
+          f"{float(g['97% Percentile FPS']):6.1f} {float(g['GPU Load']):5.0f} {float(g['CPU Load']):5.0f} "
+          f"{(p if p is not None else nan):5.0f} {(v if v is not None else nan):5.1f} {(n if n else ''):>6}")
+print("\nfps = presented frames (frame generation counts its frames); judge a setting by 1% low and GPU% together.")
+PYR
+            ;;
+        *) die "bench on <game> [label] [-d SEC] | off | label <game> <text> | report <game>" ;;
+    esac
+}
+
+# sottr ------------------------------------------------------------------
+# Shadow of the Tomb Raider (750920, Feral/Nixxes Linux port) is the one
+# library title with a real command-line benchmark: `--feral-benchmark`
+# (what the Phoronix profile uses; the Nixxes `-benchmark` is the same run)
+# plays three scenes and writes per-scene frame times + a summary into
+# SaveData/. Settings live in the Feral preferences XML, per GPU:
+#   Graphics\<GPU> ........ TextureQuality, ShadowQuality, AA (0 off, 1 SMAA,
+#                            2 TAA, 3 SMAAT2x), ResolutionModifier (1000 = 100%),
+#                            AmbientOcclusionQuality, LevelOfDetail, MotionBlur…
+#   Setup\<GPU> ........... ScreenW/ScreenH — THIS is the render resolution;
+#                            the Graphics Fullscreen* keys are ignored for it
+#                            (found 2026-09-04: benchmark ran 1080p on a 1440p
+#                            panel until these were changed).
+#   Setup ................. GameOptionsDialogShouldShow=1 pops Feral's launcher
+#                            dialog and swallows the switch; set to 0 first.
+SOTTR_PREFS="${HOME}/.local/share/feral-interactive/Shadow of the Tomb Raider/preferences"
+SOTTR_SAVE="${HOME}/.local/share/feral-interactive/Shadow of the Tomb Raider/SaveData"
+cmd_sottr() {
+    local sub="${1:-}"; shift || true
+    [[ -f ${SOTTR_PREFS} ]] || die "No ${SOTTR_PREFS} — run the game once."
+    case ${sub} in
+        get)
+            python3 - "${SOTTR_PREFS}" <<'PYS'
+import re, sys
+s = open(sys.argv[1]).read()
+def block(section):
+    i = s.index(f'<key name="{section}">'); j = s.index('<key name="', s.index('</key>', i) if section=="Graphics" else i+1)
+    # first GPU key after the section header
+    m = re.search(r'<key name="([^"]*(?:GeForce|Radeon|Intel|Vulkan)[^"]*)">', s[i:])
+    if not m: return None, ""
+    j = i + m.start(); k = s.index('</key>', j)
+    return m.group(1), s[j:k]
+for sec in ("Graphics", "Setup"):
+    gpu, blk = block(sec)
+    vals = dict(re.findall(r'<value name="([^"]+)" type="integer">(-?[0-9]+)</value>', blk))
+    keep = [k for k in vals if not re.match(r'(Window|UserWindow|Stereo|HDR|Multi|IsBezel|Monitor|FOV|Normalized|Default|Aspect|MaxMulti|Done|Enable|Feral|Constrain|Allow|Pause|Restore|Show|Software|Specification|Ignore|Live|MinWindow|Game|Avoid)', k)]
+    print(f"[{sec}] {gpu}")
+    print("  " + " ".join(f"{k}={vals[k]}" for k in sorted(keep)))
+dialog = re.search(r'GameOptionsDialogShouldShow" type="integer">([0-9])', s)
+print(f"[launcher dialog] GameOptionsDialogShouldShow={dialog.group(1) if dialog else '?'}  (0 = benchmark switch works)")
+PYS
+            ;;
+        set)
+            [[ $# -gt 0 ]] || die "sottr set KEY=VAL...   (ScreenW/ScreenH go to Setup, the rest to Graphics; nodialog = launcher off)"
+            ps -eo comm | grep -qi ShadowOfTheTomb && die "The game is running — it rewrites preferences on exit."
+            command cp -f "${SOTTR_PREFS}" "${SOTTR_PREFS}.steamctl-bak"
+            python3 - "${SOTTR_PREFS}" "$@" <<'PYS'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+def gpu_block(section):
+    i = s.index(f'<key name="{section}">')
+    m = re.search(r'<key name="([^"]*(?:GeForce|Radeon|Intel|Vulkan)[^"]*)">', s[i:])
+    if not m: sys.exit(f"no GPU profile under {section} — run the game once")
+    j = i + m.start(); k = s.index('</key>', j)
+    return j, k
+for arg in sys.argv[2:]:
+    if arg == "nodialog":
+        s = s.replace('<value name="GameOptionsDialogShouldShow" type="integer">1</value>', '<value name="GameOptionsDialogShouldShow" type="integer">0</value>'); print("launcher dialog: off"); continue
+    key, _, val = arg.partition("=")
+    if not val.lstrip("-").isdigit(): sys.exit(f"{arg}: integer value expected")
+    sec = "Setup" if key in ("ScreenW", "ScreenH") else "Graphics"
+    j, k = gpu_block(sec); blk = s[j:k]
+    blk, n = re.subn(rf'(<value name="{key}" type="integer">)-?[0-9]+(</value>)', rf'\g<1>{val}\g<2>', blk)
+    if n != 1: sys.exit(f"{key}: not found in the {sec} GPU profile")
+    s = s[:j] + blk + s[k:]; print(f"{sec}: {key}={val}")
+open(p, "w").write(s)
+PYS
+            ;;
+        bench)
+            local label="${*:-run}"
+            ps -eo comm | grep -qiE 'ShadowOfTheTomb' && die "The game is already running."
+            grep -q 'GameOptionsDialogShouldShow" type="integer">0' "${SOTTR_PREFS}" || die "Feral launcher dialog is on — run: steamctl sottr set nodialog"
+            mkdir -p "${SOTTR_SAVE}"; local mark; mark=$(mktemp); touch "${mark}"
+            printf '%s\t%s\n' "$(date +%s)" "${label}" >> "${SOTTR_SAVE}/steamctl-labels.tsv"
+            info "Launching the benchmark (three scenes, ~3.5 min) — do not start another game meanwhile."
+            steam_cmd -applaunch 750920 --feral-benchmark
+            sleep 20
+            local i; for ((i = 0; i < 60; i++)); do ps -eo comm | grep -qi ShadowOfTheTomb || break; sleep 5; done
+            ps -eo comm | grep -qi ShadowOfTheTomb && warn "Still running after 5 min — reporting what exists."
+            cmd_sottr report 1 ;;
+        report)
+            local n="${1:-10}"
+            python3 - "${SOTTR_SAVE}" "${n}" <<'PYS'
+import glob, os, re, statistics, sys, time
+d, n = sys.argv[1], int(sys.argv[2])
+labels = []
+try:
+    for line in open(os.path.join(d, "steamctl-labels.tsv")):
+        t, _, l = line.rstrip("\n").partition("\t"); labels.append((int(t), l))
+except FileNotFoundError: pass
+def label_for(m):
+    best = ""
+    for t, l in labels:
+        if t <= m + 60: best = l
+    return best
+runs = {}
+for f in glob.glob(os.path.join(d, "*_feral_*_benchmark*.txt")):
+    m = re.search(r'_feral_(.+?)_benchmark(\d{4}-\d\d-\d\d_\d\d\.\d\d\.\d\d)\.txt$', f)
+    if m: runs.setdefault(m.group(2), {})[m.group(1)] = f
+short = {"dd_day_of_the_dead_010": "day-of-dead", "lj_lost_in_the_jungle_v2_03": "jungle", "pa_hub_paititi": "paititi"}
+for stamp in sorted(runs)[-n:]:
+    scenes = runs[stamp]; mt = time.mktime(time.strptime(stamp, "%Y-%m-%d_%H.%M.%S"))
+    summ = os.path.join(d, f"Shadow of the Tomb Raider_benchmarkresults_nvhard_{stamp}.txt")
+    res = ""
+    try:
+        t = open(summ, errors="replace").read()
+        w = re.search(r'FullscreenWidth=(\d+)', t); h = re.search(r'FullscreenHeight=(\d+)', t)
+        aa = re.search(r'\nAA=(\d+)', t); rm = re.search(r'ResolutionModifier=(\d+)', t)
+        res = f"{w.group(1)}x{h.group(1)} AA={aa.group(1) if aa else '?'} scale={int(rm.group(1))/10 if rm else '?'}%"
+    except FileNotFoundError: pass
+    print(f"== {stamp}  {label_for(mt)}  {res}")
+    for scene, f in sorted(scenes.items()):
+        ft = [float(l.split(",")[1]) for l in open(f) if l.startswith("frame_time_ms")][1:]
+        ft = [x for x in ft if x > 0]; s = sorted(ft, reverse=True); k = len(s)
+        if not k: continue
+        print(f"   {short.get(scene, scene):12} avg {1000/statistics.mean(ft):6.1f}   1% {1000/s[max(0,int(k*0.01)-1)]:6.1f}   0.1% {1000/s[max(0,int(k*0.001)-1)]:6.1f}   frames {k}")
+PYS
+            ;;
+        *) die "sottr get | set KEY=VAL... [nodialog] | bench [label] | report [N]" ;;
+    esac
+}
+
+# presets ----------------------------------------------------------------
+# ~/.config/steamctl/presets.conf — hand-editable INI; one section per preset:
+#   [cp2077 rt-ultra]          keys = Cyberpunk UserSettings.json node names
+#   RayTracing=true
+#   [sottr max]                keys = Tomb Raider preference names (+ScreenW/H)
+#   AA=3
+#   [opts perf]                one line = the whole launch-options string,
+#                              optional second line proton=<tool name> (the Proton pin)
+#   [ini gothic-q]             file=@1297900:AppData/…/GameUserSettings.ini (portable: resolved
+#                              through the appid's Proton prefix on each machine), then Section/Key=Value
+#   gamemoderun mangohud %command%
+# `preset save KIND NAME [GAME]` snapshots the live settings under NAME,
+# `preset apply KIND NAME [GAME]` writes them back (cp2077/sottr need the game
+# closed; opts needs Steam closed → -s/-r). The file is seeded with the
+# bundles measured on 2026-09-04 the first time it is needed.
+PRESETS_FILE="${XDG_CONFIG_HOME:-${HOME}/.config}/steamctl/presets.conf"
+presets_seed() {
+    [[ -f ${PRESETS_FILE} ]] && return 0
+    mkdir -p "$(dirname "${PRESETS_FILE}")"
+    cat > "${PRESETS_FILE}" <<'EOF'
+# steamctl presets — edit freely. [kind name] sections; kinds: cp2077, sottr, opts.
+# Numbers in comments: presented fps avg / 1% low, RTX 5070 Ti, 2560x1440, 2026-09-04.
+
+[cp2077 rt-ultra]                      ; 126 / 46
+RayTracing=true
+RayTracedReflections=true
+RayTracedSunShadows=true
+RayTracedLocalShadows=true
+RayTracedLighting=Ultra
+RayTracedPathTracing=false
+DLSS_D=false
+ResolutionScaling=DLSS
+DLSS_BackendPreset=Transformer
+DLSS=Quality
+FrameGeneration=DLSS
+DLSSFrameGen=true
+DLSS_MultiFrameGeneration=x2
+ReflexMode=Enabled
+
+[cp2077 path-tracing]                  ; 99 / 39  (DLSS Balanced + ray reconstruction)
+RayTracing=true
+RayTracedReflections=true
+RayTracedSunShadows=true
+RayTracedLocalShadows=true
+RayTracedLighting=Ultra
+RayTracedPathTracing=true
+DLSS_D=true
+ResolutionScaling=DLSS
+DLSS_BackendPreset=Transformer
+DLSS=Balanced
+FrameGeneration=DLSS
+DLSSFrameGen=true
+DLSS_MultiFrameGeneration=x2
+ReflexMode=Enabled
+
+[cp2077 path-tracing-q]                ; 86 / 36  (DLSS Quality + ray reconstruction)
+RayTracing=true
+RayTracedReflections=true
+RayTracedSunShadows=true
+RayTracedLocalShadows=true
+RayTracedLighting=Ultra
+RayTracedPathTracing=true
+DLSS_D=true
+ResolutionScaling=DLSS
+DLSS_BackendPreset=Transformer
+DLSS=Quality
+FrameGeneration=DLSS
+DLSSFrameGen=true
+DLSS_MultiFrameGeneration=x2
+ReflexMode=Enabled
+
+[sottr max]                            ; ~180 / ~100 (CPU-bound), Highest + SMAAT2x + HBAO+
+ScreenW=2560
+ScreenH=1440
+AA=3
+AmbientOcclusionQuality=2
+TextureQuality=3
+ShadowQuality=3
+LevelOfDetail=3
+TextureFiltering=3
+TressFX=1
+VolumetricLighting=1
+ScreenSpaceReflections=1
+ScreenSpaceContactShadows=1
+Tessellation=1
+MotionBlur=0
+VSync=0
+RefreshRate=144
+ResolutionModifier=1000
+
+[opts proton-nvidia]                   ; what Gothic/Cyberpunk run with
+PROTON_ENABLE_NVAPI=1 PROTON_DLSS_UPGRADE=1 PROTON_ENABLE_WAYLAND=1 gamemoderun mangohud %command%
+
+[opts native]
+gamemoderun mangohud %command%
+EOF
+    info "Seeded ${PRESETS_FILE}"
+}
+# preset_read KIND NAME → prints KEY=VAL lines (or the opts string)
+preset_read() {
+    python3 - "${PRESETS_FILE}" "$1" "$2" <<'PYP'
+import sys
+path, kind, name = sys.argv[1:4]
+want = f"[{kind} {name}]"; hit = False; out = []
+for line in open(path):
+    raw = line.rstrip("\n"); s = raw.split(";", 1)[0].strip() if raw.lstrip().startswith("[") else raw.strip()
+    if s.startswith("["):
+        if hit: break
+        hit = (s == want); continue
+    if hit and s and not s.startswith("#"): out.append(s)
+if not hit: sys.exit(2)
+print("\n".join(out))
+PYP
+}
+preset_write() {  # preset_write KIND NAME BODYFILE — replace or append the section
+    # (the python script itself arrives on stdin, so the body goes through a file)
+    python3 - "${PRESETS_FILE}" "$1" "$2" "$3" <<'PYP'
+import sys
+path, kind, name, bodyfile = sys.argv[1:5]
+body = open(bodyfile).read().rstrip("\n").split("\n")
+lines = open(path).read().split("\n") if __import__("os").path.exists(path) else []
+want = f"[{kind} {name}]"; out = []; skip = False; replaced = False
+for l in lines:
+    s = l.split(";", 1)[0].strip() if l.lstrip().startswith("[") else l.strip()
+    if s.startswith("["):
+        if skip: skip = False
+        if s == want:
+            skip = True; replaced = True
+            out += [l, *body, ""]; continue
+    if not skip: out.append(l)
+if not replaced:
+    if out and out[-1] != "": out.append("")
+    out += [want, *body, ""]
+open(path, "w").write("\n".join(out).rstrip("\n") + "\n")
+print("replaced" if replaced else "added")
+PYP
+}
+# ini_edit FILE apply  <<< "Section/Key=Value" lines   |   ini_edit FILE get REGEX
+# Minimal UE-style ini editor: keeps every other line/comment byte-identical,
+# CRLF preserved, adds a missing key to its section (or a missing section).
+ini_edit() {
+    python3 - "$1" "$2" "${3:-}" "${4:-}" <<'PYI'
+import re, sys
+path, mode, arg, bodyfile = sys.argv[1:5]
+raw = open(path, encoding="utf-8-sig", newline="").read()
+nl = "\r\n" if "\r\n" in raw else "\n"
+lines = raw.split(nl)
+if mode == "get":
+    pat = re.compile(arg); sec = ""
+    for l in lines:
+        t = l.strip()
+        if t.startswith("[") and t.endswith("]"): sec = t[1:-1]; continue
+        if "=" in t and not t.startswith(";") and pat.search(t.split("=", 1)[0]):
+            print(f"{sec}/{t}")
+    sys.exit(0)
+todo = {}
+for l in open(bodyfile).read().splitlines():
+    l = l.strip()
+    if not l or l.startswith(("#", ";")) or l.startswith("file="): continue
+    sk, _, v = l.partition("="); sec, _, key = sk.rpartition("/")
+    todo[(sec, key)] = v
+done = set(); out = []; sec = ""; i = 0
+def flush(sec_name):
+    # append keys for this section that were not found
+    for (s_, k), v in todo.items():
+        if s_ == sec_name and (s_, k) not in done:
+            out.append(f"{k}={v}"); done.add((s_, k))
+for l in lines:
+    t = l.strip()
+    if t.startswith("[") and t.endswith("]"):
+        flush(sec); sec = t[1:-1]; out.append(l); continue
+    if "=" in t and not t.startswith(";"):
+        k = t.split("=", 1)[0]
+        if (sec, k) in todo and (sec, k) not in done:
+            out.append(f"{k}={todo[(sec, k)]}"); done.add((sec, k)); continue
+    out.append(l)
+flush(sec)
+for (s_, k), v in todo.items():
+    if (s_, k) not in done:
+        if out and out[-1] != "": out.append("")
+        out += [f"[{s_}]", f"{k}={v}"]; done.add((s_, k))
+open(path, "w", encoding="utf-8", newline="").write(nl.join(out))
+for (s_, k), v in todo.items(): print(f"{s_}/{k}={v}")
+PYI
+}
+
+# preset_path "@1297900:AppData/Local/G1R/…/GameUserSettings.ini" → absolute path on THIS
+# machine (Proton prefix of that appid); plain paths pass through. Keeps ini presets portable.
+preset_path() {
+    local f="$1"
+    if [[ ${f} == @*:* ]]; then
+        local appid="${f#@}"; appid="${appid%%:*}"; local rel="${f#*:}"
+        local m; m=$(app_manifest "${appid}") || die "appid ${appid} is not installed here"
+        f="$(dirname "${m}")/compatdata/${appid}/pfx/drive_c/users/steamuser/${rel}"
+    fi
+    echo "${f}"
+}
+
+cmd_preset() {
+    local sub="${1:-list}"; shift || true
+    presets_seed
+    case ${sub} in
+        list)
+            grep -oP '^\[\K[^\]]+' "${PRESETS_FILE}" | awk '{printf "  %-8s %s\n", $1, $2}'; echo "file: ${PRESETS_FILE}" ;;
+        show)
+            local kind="${1:?preset show KIND NAME}" name="${2:?preset show KIND NAME}"
+            preset_read "${kind}" "${name}" || die "No [${kind} ${name}] in ${PRESETS_FILE}" ;;
+        edit)   "${EDITOR:-nano}" "${PRESETS_FILE}" ;;
+        rm)
+            local kind="${1:?preset rm KIND NAME}" name="${2:?preset rm KIND NAME}"
+            preset_read "${kind}" "${name}" >/dev/null || die "No [${kind} ${name}]"
+            python3 - "${PRESETS_FILE}" "${kind}" "${name}" <<'PYP'
+import sys
+path, kind, name = sys.argv[1:4]; want = f"[{kind} {name}]"; out = []; skip = False
+for l in open(path).read().split("\n"):
+    s = l.split(";", 1)[0].strip() if l.lstrip().startswith("[") else l.strip()
+    if s.startswith("["): skip = (s == want)
+    if not skip: out.append(l)
+open(path, "w").write("\n".join(out).rstrip("\n") + "\n")
+PYP
+            echo "removed [${kind} ${name}]" ;;
+        save)
+            local kind="${1:?preset save KIND NAME [GAME]}" name="${2:?preset save KIND NAME [GAME]}"
+            [[ ${name} =~ ^[A-Za-z0-9._-]+$ ]] || die "preset names: letters, digits, . _ -"
+            local body
+            case ${kind} in
+                cp2077) body=$(cmd_cp2077 get | sed 's/ = /=/') ;;
+                sottr)  body=$(cmd_sottr get | awk '/^\[/{next} {for(i=1;i<=NF;i++) print $i}' | grep -E '^(ScreenW|ScreenH|AA|AmbientOcclusionQuality|TextureQuality|ShadowQuality|LevelOfDetail|TextureFiltering|TressFX|VolumetricLighting|ScreenSpaceReflections|ScreenSpaceContactShadows|Tessellation|MotionBlur|VSync|RefreshRate|ResolutionModifier|DOFQuality|Bloom|LensFlares|CAS|AsyncCompute)=') ;;
+                opts)   local a; a=$(resolve_app "${3:?preset save opts NAME <game>}"); body=$(vdf_py lo-get "$(localconfig)" "${a}")
+                        local pin; pin=$(vdf_py ct-get "${CONFIG_VDF}" "${a}")
+                        [[ -n ${pin} ]] && body="${body}"$'\n'"proton=${pin}" ;;
+                ini)    local spec="${3:?preset save ini NAME <file.ini|@APPID:rel/path> [key-regex]}" f
+                        f=$(preset_path "${spec}"); [[ -f ${f} ]] || die "no such file: ${f}"
+                        body="file=${spec}"$'\n'"$(ini_edit "${f}" get "${4:-^(sg\\.|Upscaling|FrameGeneration|Streamline|FrameRateLimit|bUseVSync|ResolutionSizeX|ResolutionSizeY|FullscreenMode|bUseHDR)}")" ;;
+                *) die "kind: cp2077 | sottr | opts | ini" ;;
+            esac
+            [[ -n ${body} ]] || die "nothing to save"
+            local tmp; tmp=$(mktemp); printf '%s\n' "${body}" > "${tmp}"
+            echo "$(preset_write "${kind}" "${name}" "${tmp}") [${kind} ${name}] ($(wc -l < "${tmp}") lines)"
+            command rm -f "${tmp}" ;;
+        apply)
+            local kind="${1:?preset apply KIND NAME [GAME]}" name="${2:?preset apply KIND NAME [GAME]}" body
+            body=$(preset_read "${kind}" "${name}") || die "No [${kind} ${name}] in ${PRESETS_FILE} (steamctl preset list)"
+            case ${kind} in
+                cp2077) local -a kv; mapfile -t kv <<< "${body}"; cmd_cp2077 set "${kv[@]}" ;;
+                sottr)  local -a kv; mapfile -t kv <<< "${body}"; cmd_sottr set "${kv[@]}" ;;
+                opts)   local a; a=$(resolve_app "${3:?preset apply opts NAME <game>}")
+                        local lo pin; lo=$(grep -v '^proton=' <<< "${body}" | head -1); pin=$(grep -m1 '^proton=' <<< "${body}" | cut -d= -f2-)
+                        cmd_opts set "${a}" "${lo}"
+                        [[ -n ${pin} ]] && cmd_proton set "${a}" "${pin}" ;;
+                ini)    local f; f=$(grep -m1 '^file=' <<< "${body}" | cut -d= -f2-); f=$(preset_path "${3:-${f}}")
+                        [[ -f ${f} ]] || die "ini preset needs a 'file=PATH|@APPID:rel' line (or pass the file as 3rd arg); ${f} not found"
+                        local tmp; tmp=$(mktemp); printf '%s\n' "${body}" > "${tmp}"
+                        command cp -f "${f}" "${f}.steamctl-bak"; ini_edit "${f}" apply "" "${tmp}"; command rm -f "${tmp}" ;;
+                *) die "kind: cp2077 | sottr | opts | ini" ;;
+            esac
+            echo "→ applied [${kind} ${name}]" ;;
+        *) die "preset list | show KIND NAME | save KIND NAME [GAME] | apply KIND NAME [GAME] | rm KIND NAME | edit" ;;
+    esac
+}
+
+# cp2077 -----------------------------------------------------------------
+# Cyberpunk 2077 (1091500, Proton) runs its benchmark from the command line
+# exactly as the Phoronix profile pts/cyberpunk2077 does:
+#   steam -applaunch 1091500 --launcher-skip -benchmark -skipStartScreen
+# then the GameThread process ends by itself and the prefix holds
+#   Documents/CD Projekt Red/Cyberpunk 2077/benchmarkResults/<stamp>/
+#     summary.json (preset, resolution, DLSS/FG/RT flags, avg/min/max fps)
+#     frames.csv   (" Frame time (ms)" per frame → 1% / 0.1% lows)
+# Settings = AppData/Local/CD Projekt Red/Cyberpunk 2077/UserSettings.json,
+# a tree of {"name","value"} nodes; `cp2077 set` rewrites values by name.
+CP_PFX=""
+cp_pfx() {
+    [[ -n ${CP_PFX} ]] && return 0
+    local m; m=$(app_manifest 1091500) || die "Cyberpunk 2077 (1091500) is not installed."
+    CP_PFX="$(dirname "${m}")/compatdata/1091500/pfx/drive_c/users/steamuser"
+    [[ -d ${CP_PFX} ]] || die "No Proton prefix for 1091500 — launch the game once."
+}
+cmd_cp2077() {
+    local sub="${1:-}"; shift || true
+    cp_pfx
+    local US="${CP_PFX}/AppData/Local/CD Projekt Red/Cyberpunk 2077/UserSettings.json"
+    local RES="${CP_PFX}/Documents/CD Projekt Red/Cyberpunk 2077/benchmarkResults"
+    case ${sub} in
+        get)
+            [[ -f ${US} ]] || die "No ${US} — launch the game once."
+            python3 - "${US}" "${1:-}" <<'PYC'
+import json, re, sys
+d = json.load(open(sys.argv[1])); pat = re.compile(sys.argv[2] or r'QuickPresets|ResolutionScaling|^DLSS|FrameGen|RayTrac|Reflex|WindowMode|^Resolution$|TextureQuality|VSync|MaximumFPS|CrowdDensity|MotionBlur|LODPreset|Illumination|Occlusion|Shadows|Volumetric|Reflections', re.I)
+def walk(n):
+    if isinstance(n, dict):
+        if "name" in n and "value" in n and pat.search(str(n["name"])): print(f"{n['name']} = {n['value']}")
+        for v in n.values():
+            if isinstance(v, (dict, list)): walk(v)
+    elif isinstance(n, list):
+        for x in n: walk(x)
+walk(d)
+PYC
+            ;;
+        set)
+            [[ $# -gt 0 ]] || die "cp2077 set NAME=VALUE...  (e.g. DLSS=Quality FrameGeneration=Off RayTracedPathTracing=true)"
+            ps -eo comm | grep -qiE 'GameThread|Cyberpunk2077' && die "The game is running — it rewrites UserSettings.json on exit."
+            [[ -f ${US} ]] || die "No ${US} — launch the game once."
+            command cp -f "${US}" "${US}.steamctl-bak"
+            python3 - "${US}" "$@" <<'PYC'
+import json, sys
+p = sys.argv[1]; d = json.load(open(p))
+def coerce(old, new):
+    if isinstance(old, bool): return new.lower() in ("1", "true", "on", "yes")
+    if isinstance(old, int): return int(new)
+    if isinstance(old, float): return float(new)
+    return new
+hits = {}
+def walk(n):
+    if isinstance(n, dict):
+        if "name" in n and "value" in n and n["name"] in todo:
+            n["value"] = coerce(n["value"], todo[n["name"]]); hits[n["name"]] = n["value"]
+        for v in n.values():
+            if isinstance(v, (dict, list)): walk(v)
+    elif isinstance(n, list):
+        for x in n: walk(x)
+todo = dict(a.split("=", 1) for a in sys.argv[2:])
+walk(d)
+missing = [k for k in todo if k not in hits]
+if missing: sys.exit(f"unknown setting name(s): {' '.join(missing)}  (see: steamctl cp2077 get '.')")
+json.dump(d, open(p, "w"), indent=4)
+for k, v in hits.items(): print(f"{k} = {v}")
+PYC
+            ;;
+        preset)  cmd_preset apply cp2077 "${1:?cp2077 preset NAME  (steamctl preset list)}" ;;
+        bench)
+            local label="${*:-run}"
+            ps -eo comm | grep -qiE 'GameThread|Cyberpunk2077|ShadowOfTheTomb' && die "A game is already running — Steam runs one session; a second launch stalls both."
+            # the FG factor is invisible in summary.json → record it with the label
+            local fgcfg; fgcfg=$(python3 - "${US}" <<'PYC'
+import json, sys
+d = json.load(open(sys.argv[1])); v = {}
+def walk(n):
+    if isinstance(n, dict):
+        if n.get("name") in ("FrameGeneration", "DLSS_MultiFrameGeneration"): v[n["name"]] = n["value"]
+        for x in n.values():
+            if isinstance(x, (dict, list)): walk(x)
+    elif isinstance(n, list):
+        for x in n: walk(x)
+walk(d)
+print("" if v.get("FrameGeneration", "Off") == "Off" else f" [FG {v.get('DLSS_MultiFrameGeneration','x2')}]")
+PYC
+)
+            label="${label}${fgcfg}"
+            mkdir -p "${RES}"; printf '%s\t%s\n' "$(date +%s)" "${label}" >> "${RES}/steamctl-labels.tsv"
+            info "Launching the benchmark (~2.5 min incl. loading) — do not start another game meanwhile."
+            local before; before=$(ls -1d "${RES}"/benchmark_* 2>/dev/null | wc -l)
+            steam_cmd -applaunch 1091500 --launcher-skip -benchmark -skipStartScreen
+            # protonfixes may first download DLSS DLLs (30-60 s) — wait for the
+            # game process to APPEAR before waiting for it to go away.
+            local i; for ((i = 0; i < 36; i++)); do ps -eo comm | grep -qiE 'GameThread|Cyberpunk2077' && break; sleep 5; done
+            ps -eo comm | grep -qiE 'GameThread|Cyberpunk2077' || die "Game process did not appear within 3 min (see ~/.local/share/Steam/logs/console-linux.txt)."
+            for ((i = 0; i < 84; i++)); do ps -eo comm | grep -qiE 'GameThread|Cyberpunk2077' || break; sleep 5; done
+            ps -eo comm | grep -qiE 'GameThread|Cyberpunk2077' && warn "Still running after 7 min — reporting what exists."
+            sleep 3
+            [[ $(ls -1d "${RES}"/benchmark_* 2>/dev/null | wc -l) -gt ${before} ]] || warn "No new benchmarkResults directory — the run did not complete."
+            cmd_cp2077 report 1 ;;
+        report)
+            python3 - "${RES}" "${1:-10}" <<'PYC'
+import csv, glob, json, os, statistics, sys, time
+d, n = sys.argv[1], int(sys.argv[2])
+labels = []
+try:
+    for line in open(os.path.join(d, "steamctl-labels.tsv")):
+        t, _, l = line.rstrip("\n").partition("\t"); labels.append((int(t), l))
+except FileNotFoundError: pass
+def label_for(m):
+    best = ""
+    for t, l in labels:
+        if t <= m + 60: best = l      # label is written just before the launch
+    return best
+runs = sorted(glob.glob(os.path.join(d, "benchmark_*")))[-n:]
+print(f"{'RUN':20} {'LABEL':26} {'PRESET':16} {'RES':9} {'UPS':10} {'FG':4} {'PT':3} {'AVG':>6} {'1%':>6} {'0.1%':>6} {'MIN':>6}")
+ups = {0: "off", 1: "DLSS", 2: "FSR", 3: "XeSS"}
+for r in runs:
+    try: s = json.load(open(os.path.join(r, "summary.json")))["Data"]
+    except Exception: continue
+    fp = os.path.join(r, "frames.csv"); rows = list(csv.reader(open(fp)))
+    ci = next(i for i, h in enumerate(rows[0]) if "Frame time" in h)
+    ft = [float(x[ci]) for x in rows[1:] if len(x) > ci and x[ci].strip()]
+    sv = sorted(ft, reverse=True); k = len(sv)
+    # summary.json cannot tell x2 from x3/x4 (FrameToGenerate stays 1 — verified); bench
+    # appends the configured factor to the label instead.
+    fg = "on" if s.get("frameGenerationType") else "off"
+    # DLSSQuality enum: 0 = Auto, 2 = Quality (verified 2026-09-04 by setting DLSS=Quality); others shown raw
+    q = {0: "auto", 2: "Q"}.get(s.get("DLSSQuality"), "q" + str(s.get("DLSSQuality")))
+    u = ups.get(s.get("upscalingType"), "?") + (f"-{q}" if s.get("upscalingType") == 1 else "") + ("+RR" if s.get("DLSSDEnabled") else "")
+    pt = "yes" if s.get("rayTracedPathTracingEnabled") else ("rt" if s.get("rayTracingEnabled") else "no")
+    stamp = os.path.basename(r)[len("benchmark_"):]
+    start = time.mktime(time.strptime(stamp, "%Y-%m-%d_%H-%M-%S"))
+    print(f"{stamp:20} {label_for(start)[:26]:26} {s.get('presetName','?')[:16]:16} {s.get('renderWidth')}x{s.get('renderHeight'):<4} {u:10} {fg:4} {pt:3} {s['averageFps']:6.1f} {1000/sv[max(0,int(k*0.01)-1)]:6.1f} {1000/sv[max(0,int(k*0.001)-1)]:6.1f} {s['minFps']:6.1f}")
+print("\nfps counts presented frames: with FG on, divide by the FG factor for rendered frames; 1% low is the number to optimise.")
+PYC
+            ;;
+        *) die "cp2077 get [regex] | set NAME=VALUE... | preset rt-ultra|path-tracing[-q] | bench [label] | report [N]" ;;
+    esac
+}
+
+# display ----------------------------------------------------------------
+# KDE/Wayland: kscreen-doctor is the CLI behind System Settings > Display.
+# The mode list marks the CURRENT mode with '!' and the preferred one with '*'.
+kd() { XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" kscreen-doctor "$@"; }
+cmd_display() {
+    have kscreen-doctor || die "kscreen-doctor not found (kde-plasma/libkscreen)."
+    local out; out=$(kd -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g') || die "kscreen-doctor failed — not inside the Plasma session?"
+    local name; name=$(awk '/^Output:/{print $3; exit}' <<< "${out}")
+    [[ -n ${name} ]] || die "No output reported."
+    local sub="${1:-}"; shift || true
+    case ${sub} in
+        "")
+            local cur; cur=$(grep -oP '[0-9]+x[0-9]+@[0-9.]+(?=!)' <<< "${out}" | head -1)
+            echo "Output:   ${name}"
+            echo "Current:  ${cur}"
+            echo "Modes:    $(grep -oP '[0-9]+x[0-9]+@[0-9.]+' <<< "${out}" | awk -F@ -v r="${cur%@*}" '$1==r' | tr '\n' ' ')"
+            grep -E '^\s*(Vrr|Scale|HDR|Brightness control):' <<< "${out}" | sed 's/^\s*/  /'
+            have ddcutil && echo "DDC/CI:   ddcutil getvcp 10 (brightness) / 12 (contrast) / 60 (input); setvcp to change" ;;
+        hz)
+            local hz="${1:?display hz <N>}" cur res
+            cur=$(grep -oP '[0-9]+x[0-9]+@[0-9.]+(?=!)' <<< "${out}" | head -1); res="${cur%@*}"
+            local mode; mode=$(grep -oP '[0-9]+x[0-9]+@[0-9.]+' <<< "${out}" | awk -F@ -v r="${res}" -v h="${hz}" '$1==r && int($2+0.5)==int(h+0.5){print; exit}')
+            [[ -n ${mode} ]] || die "No ${res} mode near ${hz} Hz. Available: $(grep -oP '[0-9]+x[0-9]+@[0-9.]+' <<< "${out}" | awk -F@ -v r="${res}" '$1==r{print $2}' | tr '\n' ' ')"
+            info "kscreen-doctor output.${name}.mode.${mode}"
+            kd "output.${name}.mode.${mode}" ;;
+        vrr)
+            local pol="${1:?display vrr automatic|always|never}"
+            case ${pol} in automatic|always|never) ;; *) die "vrr automatic|always|never" ;; esac
+            kd "output.${name}.vrrpolicy.${pol}" ;;
+        *) die "display [hz <N> | vrr automatic|always|never]" ;;
+    esac
+}
+
+# ---------------------------------------------------------------- main ----
+verb="$1"; shift
+case ${verb} in
+    status)    cmd_status ;;
+    list|ls)   cmd_list ;;
+    names)     cmd_names "$@" ;;
+    search)    cmd_search "$@" ;;
+    info)      cmd_info "$@" ;;
+    compat)    cmd_compat "$@" ;;
+    run|launch) cmd_run "$@" ;;
+    install|validate|uninstall) cmd_url "${verb}" "$@" ;;
+    props)     cmd_url gameproperties "$@" ;;
+    start)     start_steam ;;
+    stop)      stop_steam ;;
+    opts)      cmd_opts "$@" ;;
+    proton)    cmd_proton "$@" ;;
+    tools)     cmd_tools ;;
+    gamemode)  cmd_gamemode ;;
+    tricks)    cmd_tricks "$@" ;;
+    umu)       cmd_umu "$@" ;;
+    display)   cmd_display "$@" ;;
+    bench)     cmd_bench "$@" ;;
+    sottr)     cmd_sottr "$@" ;;
+    cp2077)    cmd_cp2077 "$@" ;;
+    preset)    cmd_preset "$@" ;;
+    *)         die "Unknown verb '${verb}' (see -h)" ;;
+esac
