@@ -67,6 +67,9 @@ app-admin/mongo-tools
 app-admin/pass
 app-admin/passwordsafe
 app-admin/pwgen
+# ryzen_smu: only the -r1 revision carries the cpuid-include fix for kernel
+# 7.2+ (files/ryzen_smu-kernel7.2.patch), and it is ~amd64 (2026-09-05).
+app-admin/ryzen_smu
 app-admin/systemrescuecd-x86
 app-arch/brotli
 app-arch/deb2targz

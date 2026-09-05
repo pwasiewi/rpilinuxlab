@@ -1,0 +1,14 @@
+# Keyboard configurators and firmware flashing from an unprivileged seat user.
+# WebHID apps (Keychron Launcher, Dark Project Web Lab, NuPhy IO, VIA, Vial)
+# need the hidraw node; in-browser DFU flashing (WebUSB) needs the STM32
+# bootloader. Keep the file number below 73 so "uaccess" is still evaluated
+# (73-seat-late.rules). Reference: ~/Claude/info/keyboards-linux-firmware-2026.md
+
+# Keychron (K2/K3/K4/K6/K8/Q HE, QMK boards) — also granted vendor-wide by
+# 60-openrgb.rules when OpenRGB is installed; kept here so the rule does not
+# depend on OpenRGB being present.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3434", MODE="0660", TAG+="uaccess"
+
+# STM32 DFU bootloader (Keychron Launcher firmware update, Dark Project Terra
+# Nova Vial flashing with dfu-util)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="df11", MODE="0660", TAG+="uaccess"
