@@ -32,11 +32,21 @@ SCRIPTS=(
     # packages; nothing personal baked in, presets.conf is the user's
     # (added 2026-09-04)
     steamctl
+    # VirtualBox VMs from the CLI (lifecycle, disks/NICs/shares/snapshots,
+    # *.vm image specs → VM / Packer HCL / Vagrantfile); example specs ride
+    # along in tools/usr/local/share/vboxctl/specs (added 2026-09-05)
+    vboxctl
 )
+SPECS_SRC="${HOME}/Claude/vbox/specs"
+SPECS_DST=$(dirname "${HERE}")/share/vboxctl/specs
 
 mkdir -p "${HERE}"
 for s in "${SCRIPTS[@]}"; do
     command cp -f "${SRC}/${s}" "${HERE}/${s}"
     chmod 0755 "${HERE}/${s}"
 done
+if [[ -d ${SPECS_SRC} ]]; then
+    mkdir -p "${SPECS_DST}"
+    for f in "${SPECS_SRC}"/*.vm; do command cp -f "$f" "${SPECS_DST}/"; chmod 0644 "${SPECS_DST}/$(basename "$f")"; done
+fi
 echo "live/tools refreshed: ${#SCRIPTS[@]} scripts, $(du -sh "${HERE}" | cut -f1)"

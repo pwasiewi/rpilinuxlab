@@ -1,0 +1,30 @@
+# Windows 11 25H2 (pl-PL) — needs EFI + TPM 2.0; VirtualBox installs it unattended
+# (vboxctl spec detect Win11_25H2_Polish_x64_v2.iso lists "Image #N" → image_index).
+name       = win11
+ostype     = Windows11_64
+iso        = Win11_25H2_Polish_x64_v2.iso
+cpus       = 4
+ram        = 8G
+vram       = 128
+firmware   = efi
+chipset    = ich9
+graphics   = vboxsvga
+3d         = on
+tpm        = 2.0
+controller = sata
+disk       = 80G
+nic        = nat,type=82540EM             # virtio needs extra drivers on Windows
+port       = rdp,3389,3389
+usb        = xhci
+audio      = on
+clipboard  = bidirectional
+paravirt   = hyperv
+unattended = yes
+image_index = 5                          # 5 = Windows 11 Pro in this ISO (vboxctl spec detect lists them)
+user       = user
+password   = changeme
+hostname   = win11.local
+locale     = pl_PL
+timezone   = Europe/Warsaw
+additions  = on
+#product_key = XXXXX-XXXXX-XXXXX-XXXXX-XXXXX

@@ -1,0 +1,30 @@
+# Ubuntu 24.04 desktop — VirtualBox drives the subiquity installer itself
+# (vboxctl spec detect: unattended = yes).  vboxctl create ubuntu24-desktop --install --gui
+name       = ubuntu24
+ostype     = Ubuntu24_64
+iso        = ubuntu-24.04-desktop-amd64.iso     # relative = $VBOXCTL_ISO_DIR
+cpus       = 4
+ram        = 8G
+vram       = 128
+firmware   = efi
+chipset    = ich9
+graphics   = vmsvga
+3d         = on
+controller = sata
+disk       = 60G
+nic        = nat,type=virtio
+port       = ssh,2222,22
+usb        = xhci
+audio      = on
+clipboard  = bidirectional
+paravirt   = kvm
+unattended = yes
+user       = user
+password   = changeme
+hostname   = ubuntu24.local
+locale     = en_US
+timezone   = Europe/Warsaw
+additions  = on
+post_install = apt-get install -y openssh-server
+ssh_user   = user
+box        = ubuntu/noble64

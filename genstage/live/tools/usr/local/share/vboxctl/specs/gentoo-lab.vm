@@ -1,0 +1,23 @@
+# Gentoo lab box booted from an xp live ISO (squash/iso are the user's verbs);
+# no installer to automate: create, `vboxctl start gentoo-lab --gui`, install by hand.
+name       = gentoo-lab
+ostype     = Gentoo_64
+iso        = /var/tmp/iso/nvidiahard.iso  # whatever `xp <profile> iso` produced
+cpus       = 8
+ram        = 16G
+vram       = 128
+firmware   = efi
+chipset    = ich9
+3d         = on
+controller = nvme
+disk       = 64G
+nic        = nat,type=virtio
+nic        = bridged,type=virtio
+port       = ssh,2222,22
+share      = distfiles,/var/cache/distfiles,auto,mount=/var/cache/distfiles
+usb        = xhci
+audio      = on
+clipboard  = bidirectional
+paravirt   = kvm
+unattended = no
+ssh_user   = root

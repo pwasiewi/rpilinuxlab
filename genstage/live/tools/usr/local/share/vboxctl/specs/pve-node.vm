@@ -1,0 +1,16 @@
+# Proxmox VE node (nested KVM). Proxmox's own ISO is not driven by VirtualBox's
+# unattended installer: install by hand (--gui) or start from the Debian spec
+# and add the pve repos. `vboxctl vagrant pve-node` gives the 3-node cluster
+# file with --nested-hw-virt on and the 8006 forward (like Vagrantfile.proxmox).
+from       = debian12
+name       = pve
+#iso       = proxmox-ve_9.0-1.iso
+cpus       = 4
+ram        = 8G
+nested     = on
+disk       = none
+disk       = 64G
+disk       = 32G,name=ceph-osd.vdi
+port       = pve,8006,8006
+unattended = no
+box        = 42n4/proxmoxbeta

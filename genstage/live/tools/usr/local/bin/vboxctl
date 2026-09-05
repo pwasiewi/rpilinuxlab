@@ -1,0 +1,1123 @@
+#!/bin/bash
+# vboxctl — VirtualBox VMs from the command line: lifecycle, hardware edits
+# (disks, memory, NICs, port forwards, shares, snapshots) and declarative
+# image specs (*.vm) that build a VM, a Packer template or a Vagrantfile
+# from one description.
+#
+# Facts this script is built on (VirtualBox 7.2.16, checked 2026-09-05):
+#  - modifyvm switches were renamed in 7.0 (--nat-pf1, --bridge-adapter1,
+#    --nic-type1, --paravirt-provider, --rtc-use-utc, --nic-promisc1 ...).
+#    The old spellings (--natpf1, --bridgeadapter2 ...) are still accepted
+#    as aliases on 7.2 (verified: the value lands), so the existing
+#    Vagrantfile.* keep working; this script and the files it generates use
+#    the new names only.
+#  - showvminfo --machinereadable has NO key for the promisc policy, the
+#    xHCI/EHCI controllers (usb= is OHCI only) or the OS type *ID* (ostype=
+#    is the description) — those come from the human output / list ostypes.
+#  - After a snapshot the attached media are differencing images under
+#    Snapshots/{uuid}.vdi; the base file is found by walking Parent UUID.
+#  - `showvminfo --machinereadable` is the only stable parse target:
+#    VMState, memory, cpus, "SATA-0-0"="<file>", Forwarding(0)="n,tcp,,2222,,22",
+#    SharedFolderNameMachineMapping1, nic1, bridgeadapter1, macaddress1.
+#  - Memory/CPU/storage changes need the VM powered off (a *saved* VM refuses
+#    them too). NAT port forwards can be edited live via `controlvm natpf1`.
+#  - `unattended detect` prints "Unattended installation supported = yes"
+#    for ISOs whose installer VirtualBox can drive: Windows (with an
+#    "Image #N" list → image_index), Debian, Ubuntu server *and* desktop
+#    24.04 (subiquity), RHEL family, openSUSE. Anything else (Gentoo, Arch,
+#    live ISOs) is detected as Other/unsupported: install by hand or let
+#    Packer type the autoinstall boot_command.
+#  - This script only *writes* Vagrantfiles and Packer HCL; running them
+#    needs dev-util/packer and app-emulation/vagrant (both ::gentoo, vagrant
+#    is ~amd64 and pure ruby33 — no VirtualBox RDEPEND).
+#  - Guest IPs come from guest properties (/VirtualBox/GuestInfo/Net/N/V4/IP)
+#    and exist only with Guest Additions running; a NAT-only VM reports
+#    10.0.2.15, which is unreachable from the host — use a port forward.
+set -euo pipefail
+export LC_ALL=C.UTF-8
+
+VBOXCTL_SPECS=${VBOXCTL_SPECS:-$HOME/.config/vboxctl/specs}
+SPEC_DIRS=("$VBOXCTL_SPECS" /usr/local/share/vboxctl/specs)
+STATE_DIR=${VBOXCTL_STATE:-$HOME/.local/share/vboxctl}
+PACKER_DIR=${VBOXCTL_PACKER:-$STATE_DIR/packer}
+GA_ISO_SYSTEM=/usr/share/virtualbox/VBoxGuestAdditions.iso
+GA_ISO_CACHE=${VBOXCTL_ISO_CACHE:-$HOME/.cache/vboxctl}
+DEFAULT_BRIDGE=${VBOXCTL_BRIDGE:-}          # empty = first "Up" bridged interface
+DEFAULT_ISO_DIR=${VBOXCTL_ISO_DIR:-/mnt/db5/AA_PART/IMAGES}
+
+YES=0 VERBOSE=0 DRY=0
+
+help() {
+    cat <<'EOF'
+Usage: vboxctl [-y] [-v] [-n] <verb> [args]
+
+  -y  no confirmation prompts     -v  echo every VBoxManage call
+  -n  dry run: print the VBoxManage calls instead of running them
+
+VM lifecycle
+  list [-l]                         VMs: state, cpus, RAM, OS type, ssh port/IP
+  info <vm>                         Full showvminfo (human form)
+  start <vm> [--gui]                Start headless (default) or with a window
+  stop <vm> [--force]               ACPI power button and wait; --force = poweroff
+  poweroff|reset|pause|resume|save <vm>
+  ssh <vm> [-u user] [cmd...]       ssh via the NAT forward to guest:22, else guest IP
+  ip <vm>                           Guest IPs (needs Guest Additions)
+  rm <vm> [--keep-disks]            Unregister and delete the VM and its disks
+  clone <vm> <new> [--linked]       Full clone (or linked clone of the current snapshot)
+  export <vm> [file.ova]            OVA export       import <file.ova> [--name N]
+
+Hardware (VM powered off; `-- <modifyvm args>` passes anything else through)
+  set <vm> [--ram SIZE] [--cpus N] [--vram MB] [--firmware bios|efi]
+           [--nested on|off] [--3d on|off] [--audio on|off] [--usb off|ohci|ehci|xhci]
+           [--clipboard off|bidirectional|hosttoguest|guesttohost] [--ostype T]
+           [--exec-cap %] [--chipset piix3|ich9] [--tpm off|1.2|2.0] [--desc TEXT] [-- ...]
+  disk list <vm>
+  disk add <vm> <SIZE> [--ctl sata|nvme|ide|virtio|scsi] [--format vdi|vmdk|vhd]
+                       [--fixed] [--name FILE] [--port N] [--hdd]  (default: SSD flags)
+  disk attach <vm> <FILE> [--ctl C] [--port N]
+  disk detach <vm> <CTL:PORT|FILE>      keeps the file
+  disk rm <vm> <CTL:PORT|FILE>          detaches and deletes the file (FILE may name the base image)
+  disk resize <vm> <CTL:PORT|FILE> <SIZE>   grow only; VDI/VHD; guest FS grows itself
+  iso attach <vm> <ISO> | iso eject <vm> | ga <vm>   (Guest Additions ISO)
+  net list <vm>
+  net set <vm> <N> nat|bridged[:IF]|hostonly[:IF]|intnet[:NAME]|natnet[:NAME]|none
+                    [--type virtio|82540EM|82543GC|Am79C973] [--mac HEX] [--promisc]
+  net pf list <vm> | pf add <vm> <NAME> <HOSTPORT> <GUESTPORT> [udp] | pf rm <vm> <NAME>
+  share list <vm> | share add <vm> <NAME> <PATH> [--ro] [--auto] [--mount DIR] | share rm <vm> <NAME>
+  snap list <vm> | snap take <vm> [NAME] | snap restore <vm> [NAME] | snap rm <vm> <NAME>
+
+Image specs (*.vm files, key = value; see `spec new` for the template)
+  spec list                         Specs in ~/.config/vboxctl/specs and /usr/local/share/vboxctl/specs
+  spec show <spec>                  Resolved spec (after `from =` inheritance)
+  spec new <name> [--iso ISO] [--ostype T] [--ram S] [--cpus N] [--disk S]
+                                    Write a commented template; ostype auto-detected from the ISO
+  spec from <vm> [--out FILE]       Capture an existing VM as a spec
+  spec detect <ISO>                 Which OS VirtualBox sees, and whether it can install it unattended
+  create <spec> [--name N] [--start|--gui] [--install] [--folder DIR]
+                                    Build the VM; --install runs VBoxManage unattended install
+  packer <spec> [--build] [--box]   Write <state>/packer/<name>/*.pkr.hcl (+ autoinstall files);
+                                    --box adds the vagrant post-processor; --build runs packer
+  vagrant <spec> [--nodes N] [--box BOX] [--net 192.168.0.] [--first 71] [--bridge IF] [-o FILE]
+                                    Write a multi-node Vagrantfile in the Vagrantfile.* style
+
+SIZE accepts M/G/T suffixes (default MB). Env: VBOXCTL_SPECS, VBOXCTL_STATE,
+VBOXCTL_BRIDGE, VBOXCTL_ISO_DIR, VBOXCTL_SSH_USER.
+EOF
+}
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+die()  { printf 'vboxctl: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'vboxctl: %s\n' "$*" >&2; }
+log()  { printf '→ %s\n' "$*"; }
+confirm() {
+    (( YES )) && return 0
+    local a; read -r -p "$1 Type 'yes' to continue: " a
+    [[ $a == yes ]] || die "aborted."
+}
+vbm() {   # VBoxManage wrapper honouring -n / -v
+    if (( DRY )); then printf 'VBoxManage'; printf ' %q' "$@"; printf '\n'; return 0; fi
+    (( VERBOSE )) && { printf '+ VBoxManage'; printf ' %q' "$@"; printf '\n'; } >&2
+    VBoxManage "$@"
+}
+to_mb() {   # 40G → 40960 ; 512M → 512 ; 1T → 1048576 ; 2048 → 2048
+    local v=${1^^}; v=${v%B}; v=${v%IB}
+    case $v in
+        *T) [[ ${v%T} =~ ^[0-9]+$ ]] || die "bad size: $1"; echo $(( ${v%T} * 1048576 )) ;;
+        *G) [[ ${v%G} =~ ^[0-9]+$ ]] || die "bad size: $1"; echo $(( ${v%G} * 1024 )) ;;
+        *M) [[ ${v%M} =~ ^[0-9]+$ ]] || die "bad size: $1"; echo "${v%M}" ;;
+        *)  [[ $v =~ ^[0-9]+$ ]] || die "bad size: $1"; echo "$v" ;;
+    esac
+}
+human_mb() { local m=$1; if (( m % 1024 == 0 && m >= 1024 )); then echo "$((m/1024))G"; else echo "${m}M"; fi; }
+need_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing tool: $1"; }
+need_cmd VBoxManage
+
+# kv_get "40G,name=data,fixed" name [default]  ;  kv_has "…" fixed  ;  kv_first "…" → 40G
+kv_first() { printf '%s\n' "${1%%,*}"; }
+kv_get() {
+    local IFS=',' p
+    for p in $1; do [[ $p == "$2="* ]] && { printf '%s\n' "${p#*=}"; return 0; }; done
+    printf '%s\n' "${3:-}"
+}
+kv_has() { local IFS=',' p; for p in $1; do [[ $p == "$2" ]] && return 0; done; return 1; }
+
+# ── VM info ───────────────────────────────────────────────────────────────────
+VMINFO=""
+vm_exists() { VBoxManage showvminfo "$1" --machinereadable >/dev/null 2>&1; }
+vm_info() { VMINFO=$(VBoxManage showvminfo "$1" --machinereadable 2>/dev/null) || die "no such VM: $1"; }
+vm_get() {   # vm_get KEY  (KEY as printed, quotes optional) — from the cached VMINFO
+    local v
+    v=$(printf '%s\n' "$VMINFO" | grep -m1 -E "^\"?${1//\(/\\(}\"?=" ) || return 1
+    v=${v#*=}; v=${v%\"}; v=${v#\"}; printf '%s\n' "$v"
+}
+vm_grep() { printf '%s\n' "$VMINFO" | grep -E "$1" || true; }
+VMHUMAN=""
+vm_human() { VMHUMAN=$(VBoxManage showvminfo "$1" 2>/dev/null) || die "no such VM: $1"; }
+vm_promisc() { printf '%s\n' "$VMHUMAN" | awk -v n="$1" -F'Promisc Policy: ' '$0 ~ "^NIC "n":"{split($2,a,","); print a[1]; exit}'; }
+vm_usb() { local u=off; printf '%s\n' "$VMHUMAN" | grep -q '^OHCI USB: *enabled' && u=ohci; printf '%s\n' "$VMHUMAN" | grep -q '^EHCI USB: *enabled' && u=ehci; printf '%s\n' "$VMHUMAN" | grep -q '^xHCI USB: *enabled' && u=xhci; echo "$u"; }
+ostype_id() {   # "Debian 12 Bookworm (64-bit)" → Debian12_64
+    VBoxManage list ostypes | awk -F' -- ' -v d="$1" '/^ID \/ Description:/{id=$1; sub(/^ID \/ Description: */,"",id); if($2==d){print id; exit}}'; }
+vm_state() { vm_info "$1"; vm_get VMState; }
+vm_dir()   { vm_info "$1"; dirname "$(vm_get CfgFile)"; }
+need_off() {   # refuse hardware edits unless powered off
+    local st; st=$(vm_state "$1")
+    case $st in
+        poweroff|aborted) ;;
+        saved)   die "$1 is in the 'saved' state: hardware edits need a real power-off (vboxctl poweroff $1 discards the saved state)" ;;
+        *)       die "$1 is $st: stop it first (vboxctl stop $1)" ;;
+    esac
+}
+vm_running() { [[ $(vm_state "$1") == running ]]; }
+first_bridge() {
+    [[ -n $DEFAULT_BRIDGE ]] && { echo "$DEFAULT_BRIDGE"; return; }
+    VBoxManage list bridgedifs | awk -F': +' '/^Name:/{n=$2} /^Status:/{if($2=="Up" && n !~ /^(docker|br-|virbr|veth)/){print n; exit}}'
+}
+# storage controllers of the cached VMINFO: "name|type" lines
+vm_controllers() {
+    local i=0 n t
+    while n=$(vm_get "storagecontrollername$i"); do
+        t=$(vm_get "storagecontrollertype$i"); printf '%s|%s\n' "$n" "$t"; i=$((i+1))
+    done
+}
+ctl_kind() {   # controller type → sata|nvme|ide|virtio|scsi|sas|usb
+    case ${1,,} in intelahci) echo sata;; nvme) echo nvme;; piix*|ich6) echo ide;; virtio) echo virtio;;
+        lsilogic*|buslogic) echo scsi;; lsilogicsas) echo sas;; usb) echo usb;; *) echo "${1,,}";; esac
+}
+# controller name for a kind (sata/nvme/...) in the cached VMINFO, empty if absent
+ctl_by_kind() {
+    local l; while IFS='|' read -r n t; do [[ $(ctl_kind "$t") == "$1" ]] && { echo "$n"; return 0; }; done < <(vm_controllers)
+    return 1
+}
+CTL_NEW=""
+ctl_add() {   # ctl_add VM KIND [PORTCOUNT] → controller name in CTL_NEW (not echoed: -n prints commands on stdout)
+    local vm=$1 kind=$2 pc=${3:-}
+    case $kind in
+        sata)   CTL_NEW=SATA;   vbm storagectl "$vm" --name SATA --add sata --controller IntelAhci --portcount "${pc:-6}" --bootable on ;;
+        nvme)   CTL_NEW=NVMe;   vbm storagectl "$vm" --name NVMe --add pcie --controller NVMe --portcount "${pc:-4}" --bootable on ;;
+        ide)    CTL_NEW=IDE;    vbm storagectl "$vm" --name IDE --add ide --controller PIIX4 --bootable on ;;
+        virtio) CTL_NEW=VirtIO; vbm storagectl "$vm" --name VirtIO --add virtio --controller VirtIO --portcount "${pc:-6}" --bootable on ;;
+        scsi)   CTL_NEW=SCSI;   vbm storagectl "$vm" --name SCSI --add scsi --controller LsiLogic --portcount "${pc:-6}" --bootable on ;;
+        *)      die "unknown controller kind: $kind (sata|nvme|ide|virtio|scsi)" ;;
+    esac
+}
+# attached media of the cached VMINFO: "ctl|port|dev|file" for non-empty slots
+vm_media() {
+    printf '%s\n' "$VMINFO" | grep -E '^"[^"]+-[0-9]+-[0-9]+"=' | grep -vE '^"[^"]+-(ImageUUID|tempeject|IsEjected|nonrotational|discard|hot-pluggable)' \
+      | grep -v '="none"$' | sed -E 's/^"(.*)-([0-9]+)-([0-9]+)"="(.*)"$/\1|\2|\3|\4/'
+}
+free_port() {   # free_port CTLNAME → lowest port index with no medium
+    local ctl=$1 p=0 used; used=$(vm_media | awk -F'|' -v c="$ctl" '$1==c{print $2}')
+    while grep -qx "$p" <<<"$used"; do p=$((p+1)); done; echo "$p"
+}
+medium_size_mb() { VBoxManage showmediuminfo disk "$1" 2>/dev/null | awk -F': +' '/^Capacity:/{print $2+0; exit}'; }
+medium_format()  { VBoxManage showmediuminfo disk "$1" 2>/dev/null | awk -F': +' '/^Storage format:/{print $2; exit}'; }
+medium_base() {   # differencing image (after a snapshot) → its base image path; a base image → itself
+    local cur=$1 parent info i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
+        info=$(VBoxManage showmediuminfo disk "$cur" 2>/dev/null) || { echo "$1"; return; }
+        parent=$(printf '%s\n' "$info" | awk -F': +' '/^Parent UUID:/{print $2; exit}')
+        [[ -z $parent || $parent == base ]] && { printf '%s\n' "$info" | awk -F': +' '/^Location:/{print $2; exit}'; return; }
+        cur=$parent
+    done
+    echo "$1"
+}
+# resolve "<CTL:PORT>" or a file name/basename into "ctl|port|dev|file"
+resolve_slot() {
+    local vm=$1 ref=$2 line
+    vm_info "$vm"
+    if [[ $ref == *:* && $ref != /* ]]; then
+        local c=${ref%%:*} p=${ref#*:}
+        line=$(vm_media | awk -F'|' -v c="$c" -v p="$p" 'tolower($1)==tolower(c) && $2==p{print; exit}')
+    else
+        line=$(vm_media | awk -F'|' -v f="$ref" '$4==f || $4 ~ ("/" f "$"){print; exit}')
+        if [[ -z $line ]]; then local c p d f b   # differencing images: match on the base file
+            while IFS='|' read -r c p d f; do [[ $f == *.iso || $f == emptydrive ]] && continue
+                b=$(medium_base "$f"); [[ $b == "$ref" || $b == */$ref ]] && { line="$c|$p|$d|$f"; break; }; done < <(vm_media)
+        fi
+    fi
+    [[ -n $line ]] || die "$vm: no medium at '$ref' (see: vboxctl disk list $vm)"
+    printf '%s\n' "$line"
+}
+
+# ── lifecycle ─────────────────────────────────────────────────────────────────
+cmd_list() {
+    local long=0; [[ ${1:-} == -l ]] && long=1
+    local names n st cpus mem os net
+    names=$(VBoxManage list vms | sed -E 's/^"(.*)" \{.*\}$/\1/')
+    [[ -n $names ]] || { echo "no VMs registered"; return 0; }
+    printf '%-20s %-10s %4s %7s %-18s %s\n' NAME STATE CPU RAM OSTYPE ACCESS
+    while IFS= read -r n; do
+        vm_info "$n"
+        st=$(vm_get VMState); cpus=$(vm_get cpus); mem=$(vm_get memory); os=$(vm_get ostype)
+        net=$(ssh_target "$n" 2>/dev/null || true)
+        printf '%-20s %-10s %4s %7s %-18s %s\n' "$n" "$st" "$cpus" "$(human_mb "$mem")" "${os:0:18}" "${net:-–}"
+        if (( long )); then
+            vm_media | awk -F'|' '{printf "    %-6s p%-2s %s\n",$1,$2,$4}'
+            vm_grep '^Forwarding\(' | sed -E 's/^Forwarding\([0-9]+\)="(.*)"$/    pf   \1/'
+            vm_grep '^SharedFolderNameMachineMapping' | sed -E 's/^[^=]+="(.*)"$/    share \1/'
+        fi
+    done <<<"$names"
+}
+cmd_info() { [[ -n ${1:-} ]] || die "info <vm>"; VBoxManage showvminfo "$1"; }
+cmd_start() {
+    local vm=${1:-}; [[ -n $vm ]] || die "start <vm> [--gui]"; shift
+    local type=headless; [[ ${1:-} == --gui ]] && type=gui; [[ ${1:-} == --sdl ]] && type=sdl
+    vm_exists "$vm" || die "no such VM: $vm"
+    vbm startvm "$vm" --type "$type"
+}
+cmd_stop() {
+    local vm=${1:-} force=0; [[ -n $vm ]] || die "stop <vm> [--force]"; [[ ${2:-} == --force ]] && force=1
+    vm_running "$vm" || { log "$vm is $(vm_state "$vm")"; return 0; }
+    if (( force )); then vbm controlvm "$vm" poweroff; return; fi
+    vbm controlvm "$vm" acpipowerbutton
+    (( DRY )) && return 0
+    local i; for i in $(seq 1 90); do sleep 1; vm_running "$vm" || { log "$vm stopped after ${i}s"; return 0; }; done
+    die "$vm still running after 90 s of ACPI power button (no ACPI daemon in the guest?) — vboxctl stop $vm --force"
+}
+cmd_simple() { local verb=$1 vm=${2:-}; [[ -n $vm ]] || die "$verb <vm>"; vm_exists "$vm" || die "no such VM: $vm"; vbm controlvm "$vm" "$verb"; }
+cmd_save() { local vm=${1:-}; [[ -n $vm ]] || die "save <vm>"; vbm controlvm "$vm" savestate; }
+cmd_ip() {
+    local vm=${1:-}; [[ -n $vm ]] || die "ip <vm>"; vm_exists "$vm" || die "no such VM: $vm"
+    local out; out=$(VBoxManage guestproperty enumerate "$vm" 2>/dev/null | grep -E 'GuestInfo/Net/[0-9]+/V4/IP' \
+        | sed -E "s#.*Net/([0-9]+)/V4/IP[^0-9]*value: *([0-9.]+).*#nic\1 \2#; s#.*Net/([0-9]+)/V4/IP', value: '([0-9.]+)'.*#nic\1 \2#" | grep -E '^nic' || true)
+    [[ -n $out ]] || die "$vm: no guest IP published (Guest Additions not running, or VM off)"
+    printf '%s\n' "$out"
+}
+# ssh_target VM → "localhost -p PORT" style host + port, or "IP"; exit 1 if none
+ssh_target() {
+    local vm=$1 pf ip
+    vm_info "$vm"
+    pf=$(vm_grep '^Forwarding\(' | grep -E ',22"$' | head -1 | sed -E 's/^[^=]+="([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*)"$/\4/')
+    [[ -n $pf ]] && { echo "localhost:$pf"; return 0; }
+    ip=$(VBoxManage guestproperty enumerate "$vm" 2>/dev/null | grep -oE 'V4/IP[^0-9]*[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | grep -oE '[0-9.]+$' | grep -v '^10\.0\.2\.' | head -1 || true)
+    [[ -n $ip ]] && { echo "$ip"; return 0; }
+    return 1
+}
+cmd_ssh() {
+    local vm=${1:-}; [[ -n $vm ]] || die "ssh <vm> [-u user] [cmd...]"; shift
+    local user=""; [[ ${1:-} == -u ]] && { user=$2; shift 2; }
+    vm_exists "$vm" || die "no such VM: $vm"
+    [[ -n $user ]] || user=$(VBoxManage getextradata "$vm" vboxctl/ssh_user 2>/dev/null | awk -F': ' '/^Value:/{print $2}')
+    user=${user:-${VBOXCTL_SSH_USER:-$USER}}
+    local tgt; tgt=$(ssh_target "$vm") || die "$vm: no NAT forward to port 22 and no reachable guest IP — vboxctl net pf add $vm ssh 2222 22"
+    local host=${tgt%%:*} port=22; [[ $tgt == *:* ]] && port=${tgt#*:}
+    mkdir -p "$STATE_DIR"
+    exec ssh -p "$port" -o "UserKnownHostsFile=$STATE_DIR/known_hosts.$vm" -o StrictHostKeyChecking=accept-new "$user@$host" "$@"
+}
+cmd_rm() {
+    local vm=${1:-} keep=0; [[ -n $vm ]] || die "rm <vm> [--keep-disks]"; [[ ${2:-} == --keep-disks ]] && keep=1
+    vm_exists "$vm" || die "no such VM: $vm"
+    vm_info "$vm"
+    echo "VM $vm ($(vm_get VMState)) in $(dirname "$(vm_get CfgFile)")"; vm_media | awk -F'|' '{print "  "$4}'
+    confirm "Delete VM '$vm'$( (( keep )) && echo " (keeping disk files)" || echo " and its disks")?"
+    vm_running "$vm" && { vbm controlvm "$vm" poweroff; sleep 2; }
+    if (( keep )); then vbm unregistervm "$vm"; else vbm unregistervm "$vm" --delete; fi
+}
+cmd_clone() {
+    local vm=${1:-} new=${2:-}; [[ -n $vm && -n $new ]] || die "clone <vm> <new> [--linked]"
+    vm_exists "$vm" || die "no such VM: $vm"; vm_exists "$new" && die "VM exists: $new"
+    if [[ ${3:-} == --linked ]]; then
+        vm_info "$vm"; local snap; snap=$(vm_get CurrentSnapshotName) || die "$vm has no snapshot: linked clones need one (vboxctl snap take $vm base)"
+        vbm clonevm "$vm" --name "$new" --register --options link --snapshot "$snap"
+    else
+        vbm clonevm "$vm" --name "$new" --register --mode machine
+    fi
+}
+cmd_export() {
+    local vm=${1:-}; [[ -n $vm ]] || die "export <vm> [file.ova]"; local out=${2:-$PWD/$vm.ova}
+    vm_exists "$vm" || die "no such VM: $vm"; need_off "$vm"
+    vbm export "$vm" --output "$out" --ovf20 --options manifest
+}
+cmd_import() {
+    local f=${1:-}; [[ -f $f ]] || die "import <file.ova> [--name N]"; shift
+    local -a a=(); [[ ${1:-} == --name ]] && a=(--vsys 0 --vmname "$2")
+    vbm import "$f" "${a[@]}"
+}
+
+# ── hardware: set ─────────────────────────────────────────────────────────────
+cmd_set() {
+    local vm=${1:-}; [[ -n $vm ]] || die "set <vm> [options]"; shift
+    vm_exists "$vm" || die "no such VM: $vm"; need_off "$vm"
+    local -a m=()
+    while (( $# )); do
+        case $1 in
+            --ram)       m+=(--memory "$(to_mb "$2")"); shift 2 ;;
+            --cpus)      m+=(--cpus "$2"); shift 2 ;;
+            --vram)      m+=(--vram "$2"); shift 2 ;;
+            --firmware)  m+=(--firmware "$2"); shift 2 ;;
+            --nested)    m+=(--nested-hw-virt "$2"); shift 2 ;;
+            --3d)        m+=(--accelerate-3d "$2"); shift 2 ;;
+            --audio)     if [[ $2 == off ]]; then m+=(--audio-enabled off); else m+=(--audio-enabled on --audio-driver default --audio-controller hda --audio-out on); fi; shift 2 ;;
+            --usb)       case $2 in off) m+=(--usb-ohci off --usb-ehci off --usb-xhci off);; ohci) m+=(--usb-ohci on --usb-ehci off --usb-xhci off);;
+                                    ehci) m+=(--usb-ohci off --usb-ehci on --usb-xhci off);; xhci) m+=(--usb-ohci off --usb-ehci off --usb-xhci on);;
+                                    *) die "--usb off|ohci|ehci|xhci";; esac; shift 2 ;;
+            --clipboard) m+=(--clipboard-mode "$2" --drag-and-drop "$2"); shift 2 ;;
+            --ostype)    m+=(--os-type "$2"); shift 2 ;;
+            --exec-cap)  m+=(--cpu-execution-cap "$2"); shift 2 ;;
+            --chipset)   m+=(--chipset "$2"); shift 2 ;;
+            --tpm)       if [[ $2 == off ]]; then m+=(--tpm-type none); else m+=(--tpm-type "$2"); fi; shift 2 ;;
+            --desc)      m+=(--description "$2"); shift 2 ;;
+            --graphics)  m+=(--graphicscontroller "$2"); shift 2 ;;
+            --)          shift; m+=("$@"); break ;;
+            *)           die "set: unknown option $1" ;;
+        esac
+    done
+    (( ${#m[@]} )) || die "set: nothing to change"
+    vbm modifyvm "$vm" "${m[@]}"
+    (( DRY )) || { vm_info "$vm"; log "$vm: cpus=$(vm_get cpus) ram=$(human_mb "$(vm_get memory)") vram=$(vm_get vram)M firmware=$(vm_get firmware)"; }
+}
+
+# ── hardware: disks / iso ─────────────────────────────────────────────────────
+disk_list() {
+    local vm=${1:-}; [[ -n $vm ]] || die "disk list <vm>"; vm_info "$vm"
+    printf '%-8s %-4s %-6s %-8s %s\n' CTL PORT TYPE SIZE FILE
+    local c p d f sz fmt kind
+    while IFS='|' read -r c p d f; do
+        if [[ $f == *.iso || $f == emptydrive ]]; then printf '%-8s %-4s %-6s %-8s %s\n' "$c" "$p" dvd - "$f"; continue; fi
+        sz=$(medium_size_mb "$f"); fmt=$(medium_format "$f"); local b; b=$(medium_base "$f")
+        printf '%-8s %-4s %-6s %-8s %s\n' "$c" "$p" "${fmt:-?}" "$(human_mb "${sz:-0}")" "$b$([[ $b != "$f" ]] && echo "  (+snapshot diff)")"
+    done < <(vm_media)
+}
+disk_add() {
+    local vm=${1:-} size=${2:-}; [[ -n $vm && -n $size ]] || die "disk add <vm> <SIZE> [--ctl C] [--format F] [--fixed] [--name FILE] [--port N] [--hdd]"; shift 2
+    local kind="" fmt=VDI fixed=0 file="" port="" ssd=1
+    while (( $# )); do case $1 in
+        --ctl) kind=$2; shift 2;; --format) fmt=${2^^}; shift 2;; --fixed) fixed=1; shift;;
+        --name) file=$2; shift 2;; --port) port=$2; shift 2;; --hdd) ssd=0; shift;;
+        *) die "disk add: unknown option $1";; esac; done
+    vm_exists "$vm" || die "no such VM: $vm"; need_off "$vm"
+    vm_info "$vm"
+    local mb ctl dir n
+    mb=$(to_mb "$size"); dir=$(dirname "$(vm_get CfgFile)")
+    if [[ -z $kind ]]; then
+        for kind in nvme sata virtio scsi; do ctl=$(ctl_by_kind "$kind") && break; done
+        [[ -n ${ctl:-} ]] || { kind=sata; ctl=""; }
+    else ctl=$(ctl_by_kind "$kind" || true); fi
+    [[ -n $ctl ]] || { ctl_add "$vm" "$kind"; ctl=$CTL_NEW; }
+    [[ -n $port ]] || { (( DRY )) && port=0 || port=$(free_port "$ctl"); }
+    if [[ -z $file ]]; then n=1; while [[ -e "$dir/${vm}_$n.${fmt,,}" ]]; do n=$((n+1)); done; file="$dir/${vm}_$n.${fmt,,}"; fi
+    [[ $file == /* ]] || file="$dir/$file"
+    local -a v=(); (( fixed )) && v=(--variant Fixed)
+    log "$vm: new $fmt disk $(human_mb "$mb") at $ctl port $port → $file"
+    vbm createmedium disk --filename "$file" --size "$mb" --format "$fmt" "${v[@]}"
+    local -a s=(); (( ssd )) && s=(--nonrotational on --discard on)
+    vbm storageattach "$vm" --storagectl "$ctl" --port "$port" --device 0 --type hdd --medium "$file" "${s[@]}"
+}
+disk_attach() {
+    local vm=${1:-} file=${2:-}; [[ -n $vm && -f $file ]] || die "disk attach <vm> <FILE> [--ctl C] [--port N]"; shift 2
+    local kind="" port="" ctl
+    while (( $# )); do case $1 in --ctl) kind=$2; shift 2;; --port) port=$2; shift 2;; *) die "disk attach: unknown option $1";; esac; done
+    vm_exists "$vm" || die "no such VM: $vm"; need_off "$vm"; vm_info "$vm"
+    if [[ -z $kind ]]; then for kind in nvme sata virtio scsi; do ctl=$(ctl_by_kind "$kind") && break; done; [[ -n ${ctl:-} ]] || { kind=sata; ctl=""; }
+    else ctl=$(ctl_by_kind "$kind" || true); fi
+    [[ -n $ctl ]] || { ctl_add "$vm" "$kind"; ctl=$CTL_NEW; }
+    [[ -n $port ]] || port=$(free_port "$ctl")
+    vbm storageattach "$vm" --storagectl "$ctl" --port "$port" --device 0 --type hdd --medium "$(readlink -f "$file")"
+}
+disk_detach() {   # disk_detach VM REF [delete]
+    local vm=${1:-} ref=${2:-} del=${3:-}; [[ -n $vm && -n $ref ]] || die "disk detach|rm <vm> <CTL:PORT|FILE>"
+    vm_exists "$vm" || die "no such VM: $vm"; need_off "$vm"
+    local c p d f; IFS='|' read -r c p d f < <(resolve_slot "$vm" "$ref")
+    [[ $del == delete ]] && confirm "Detach AND DELETE $f ($c port $p of $vm)? (a base image still held by snapshots stays until 'snap rm')"
+    vbm storageattach "$vm" --storagectl "$c" --port "$p" --device "$d" --medium none
+    [[ $del == delete ]] && vbm closemedium disk "$f" --delete
+    return 0
+}
+disk_resize() {
+    local vm=${1:-} ref=${2:-} size=${3:-}; [[ -n $vm && -n $ref && -n $size ]] || die "disk resize <vm> <CTL:PORT|FILE> <SIZE>"
+    vm_exists "$vm" || die "no such VM: $vm"; need_off "$vm"
+    local c p d f mb cur; IFS='|' read -r c p d f < <(resolve_slot "$vm" "$ref")
+    mb=$(to_mb "$size"); cur=$(medium_size_mb "$f")
+    (( mb > cur )) || die "$f is already $(human_mb "$cur"); VirtualBox can only grow a disk"
+    vbm modifymedium disk "$f" --resize "$mb"
+    log "$f: $(human_mb "$cur") → $(human_mb "$mb"); grow the partition + filesystem inside the guest (growpart/resize2fs, or btrfs filesystem resize max)"
+}
+dvd_slot() {   # dvd slot of the cached VMINFO as "ctl|port|dev" (first dvd slot, attached or empty)
+    local l; l=$(printf '%s\n' "$VMINFO" | grep -E '^"[^"]+-[0-9]+-[0-9]+"="(.*\.iso|emptydrive)"$' | head -1 | sed -E 's/^"(.*)-([0-9]+)-([0-9]+)"=.*/\1|\2|\3/')
+    [[ -n $l ]] && { echo "$l"; return 0; }
+    # no dvd slot yet: use/create an IDE controller, port 1
+    local ide; ide=$(ctl_by_kind ide || true); echo "${ide:-NEW}|1|0"
+}
+cmd_iso() {
+    local sub=${1:-} vm=${2:-}; [[ -n $vm ]] || die "iso attach <vm> <ISO> | iso eject <vm>"
+    vm_exists "$vm" || die "no such VM: $vm"; vm_info "$vm"
+    local c p d; IFS='|' read -r c p d < <(dvd_slot)
+    case $sub in
+        attach) local iso=${3:-}; [[ -f $iso ]] || iso="$DEFAULT_ISO_DIR/$iso"; [[ -f $iso ]] || die "ISO not found: ${3:-}"
+                [[ $c == NEW ]] && { need_off "$vm"; ctl_add "$vm" ide; c=$CTL_NEW; }
+                vbm storageattach "$vm" --storagectl "$c" --port "$p" --device "$d" --type dvddrive --medium "$(readlink -f "$iso")" ;;
+        eject)  [[ $c == NEW ]] && die "$vm has no DVD drive"
+                vbm storageattach "$vm" --storagectl "$c" --port "$p" --device "$d" --type dvddrive --medium emptydrive --forceunmount ;;
+        *) die "iso attach|eject" ;;
+    esac
+}
+ga_iso() {
+    [[ -f $GA_ISO_SYSTEM ]] && { echo "$GA_ISO_SYSTEM"; return; }
+    local ver; ver=$(VBoxManage --version | sed -E 's/r.*//; s/_.*//')
+    local f="$GA_ISO_CACHE/VBoxGuestAdditions_$ver.iso"
+    [[ -f $f ]] || { mkdir -p "$GA_ISO_CACHE"; log "downloading VBoxGuestAdditions_$ver.iso"
+        curl -fL --progress-bar -o "$f.part" "https://download.virtualbox.org/virtualbox/$ver/VBoxGuestAdditions_$ver.iso" && mv "$f.part" "$f" || die "download failed (emerge app-emulation/virtualbox-additions gives $GA_ISO_SYSTEM)"; }
+    echo "$f"
+}
+cmd_ga() { local vm=${1:-}; [[ -n $vm ]] || die "ga <vm>"; cmd_iso attach "$vm" "$(ga_iso)"; log "Guest Additions ISO attached; in the guest: mount /dev/sr0 /mnt && sh /mnt/VBoxLinuxAdditions.run"; }
+
+# ── hardware: network ─────────────────────────────────────────────────────────
+net_list() {
+    local vm=${1:-}; [[ -n $vm ]] || die "net list <vm>"; vm_info "$vm"; vm_human "$vm"
+    local i mode extra
+    for i in 1 2 3 4 5 6 7 8; do
+        mode=$(vm_get "nic$i") || continue; [[ $mode == none ]] && continue
+        case $mode in bridged) extra=$(vm_get "bridgeadapter$i");; hostonly) extra=$(vm_get "hostonlyadapter$i");; intnet) extra=$(vm_get "intnet$i");; natnetwork) extra=$(vm_get "nat-network$i");; *) extra="";; esac
+        printf 'nic%s  %-10s %-12s type=%-8s mac=%s promisc=%s\n' "$i" "$mode" "$extra" "$(vm_get "nictype$i")" "$(vm_get "macaddress$i")" "$(vm_promisc "$i")"
+    done
+    vm_grep '^Forwarding\(' | sed -E 's/^Forwarding\([0-9]+\)="([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*)"$/  pf \1: host \3:\4 → guest \5:\6 (\2)/'
+}
+# nic_args N SPEC → modifyvm args ; SPEC = mode[:target][,type=T][,mac=M][,promisc]
+nic_args() {
+    local n=$1 spec=$2 head mode tgt type mac
+    head=$(kv_first "$spec"); mode=${head%%:*}; tgt=""; [[ $head == *:* ]] && tgt=${head#*:}
+    type=$(kv_get "$spec" type); mac=$(kv_get "$spec" mac)
+    local -a a=()
+    case $mode in
+        nat)      a=(--nic"$n" nat) ;;
+        bridged)  [[ -n $tgt ]] || tgt=$(first_bridge); [[ -n $tgt ]] || die "nic$n: no bridge interface given and none is Up"
+                  a=(--nic"$n" bridged --bridge-adapter"$n" "$tgt") ;;
+        hostonly) a=(--nic"$n" hostonly --host-only-adapter"$n" "${tgt:-vboxnet0}") ;;
+        intnet)   a=(--nic"$n" intnet --intnet"$n" "${tgt:-intnet}") ;;
+        natnet)   a=(--nic"$n" natnetwork --nat-network"$n" "${tgt:-NatNetwork}") ;;
+        none)     a=(--nic"$n" none) ;;
+        *)        die "nic$n: unknown mode '$mode' (nat|bridged[:IF]|hostonly[:IF]|intnet[:NAME]|natnet[:NAME]|none)" ;;
+    esac
+    [[ $mode != none ]] && a+=(--cable-connected"$n" on)
+    [[ -n $type ]] && a+=(--nic-type"$n" "$type")
+    [[ -n $mac ]] && a+=(--mac-address"$n" "${mac//:/}")
+    kv_has "$spec" promisc && a+=(--nic-promisc"$n" allow-all)
+    printf '%s\n' "${a[@]}"
+}
+net_set() {
+    local vm=${1:-} n=${2:-} mode=${3:-}; [[ -n $vm && $n =~ ^[1-8]$ && -n $mode ]] || die "net set <vm> <1-8> <mode> [--type T] [--mac M] [--promisc]"; shift 3
+    local spec=$mode
+    while (( $# )); do case $1 in --type) spec+=",type=$2"; shift 2;; --mac) spec+=",mac=$2"; shift 2;; --promisc) spec+=",promisc"; shift;; *) die "net set: unknown option $1";; esac; done
+    vm_exists "$vm" || die "no such VM: $vm"; need_off "$vm"
+    local -a a; mapfile -t a < <(nic_args "$n" "$spec")
+    vbm modifyvm "$vm" "${a[@]}"
+}
+# pf_rule SPEC → "name,proto,,hostport,,guestport" ; SPEC = name,hostport,guestport[,udp][,nic=N]
+pf_rule() { local IFS=',' f; read -r -a f <<<"$1"; (( ${#f[@]} >= 3 )) || die "port rule needs name,hostport,guestport: $1"
+            local proto=tcp; kv_has "$1" udp && proto=udp; printf '%s,%s,,%s,,%s\n' "${f[0]}" "$proto" "${f[1]}" "${f[2]}"; }
+pf_add() {   # pf_add VM SPEC
+    local vm=$1 spec=$2 n rule; n=$(kv_get "$spec" nic 1); rule=$(pf_rule "$spec")
+    if ! (( DRY )) && vm_running "$vm"; then vbm controlvm "$vm" "natpf$n" "$rule"; else vbm modifyvm "$vm" "--nat-pf$n" "$rule"; fi
+}
+pf_rm() { local vm=$1 name=$2 n=${3:-1}
+    if ! (( DRY )) && vm_running "$vm"; then vbm controlvm "$vm" "natpf$n" delete "$name"; else vbm modifyvm "$vm" "--nat-pf$n" delete "$name"; fi; }
+cmd_net() {
+    local sub=${1:-}; shift || true
+    case $sub in
+        list) net_list "$@" ;;
+        set)  net_set "$@" ;;
+        pf)   local op=${1:-} vm=${2:-}; [[ -n $vm ]] || die "net pf list|add|rm <vm> ..."; vm_exists "$vm" || die "no such VM: $vm"
+              case $op in
+                  list) vm_info "$vm"; vm_grep '^Forwarding\(' | sed -E 's/^Forwarding\([0-9]+\)="(.*)"$/\1/' ;;
+                  add)  [[ -n ${3:-} && -n ${4:-} && -n ${5:-} ]] || die "net pf add <vm> <NAME> <HOSTPORT> <GUESTPORT> [udp]"
+                        pf_add "$vm" "$3,$4,$5${6:+,$6}" ;;
+                  rm)   [[ -n ${3:-} ]] || die "net pf rm <vm> <NAME>"; pf_rm "$vm" "$3" ;;
+                  *)    die "net pf list|add|rm" ;;
+              esac ;;
+        *) die "net list|set|pf" ;;
+    esac
+}
+
+# ── hardware: shared folders / snapshots ──────────────────────────────────────
+share_add() {   # share_add VM SPEC ; SPEC = name,/path[,ro][,auto][,mount=/dir]
+    local vm=$1 spec=$2 name path; local IFS=','; read -r -a f <<<"$spec"; unset IFS
+    name=${f[0]}; path=${f[1]:-}; [[ -n $name && -d $path ]] || die "share needs name,/existing/path: $spec"
+    local -a a=(--name "$name" --hostpath "$(readlink -f "$path")")
+    kv_has "$spec" ro && a+=(--readonly); kv_has "$spec" auto && a+=(--automount)
+    local mp; mp=$(kv_get "$spec" mount); [[ -n $mp ]] && a+=(--auto-mount-point="$mp")
+    vbm sharedfolder add "$vm" "${a[@]}"
+}
+cmd_share() {
+    local sub=${1:-} vm=${2:-}; [[ -n $vm ]] || die "share list|add|rm <vm> ..."; vm_exists "$vm" || die "no such VM: $vm"
+    case $sub in
+        list) vm_info "$vm"; vm_grep '^SharedFolder(Name|Path)MachineMapping' | sed -E 's/^SharedFolder(Name|Path)MachineMapping([0-9]+)="(.*)"$/\2 \1 \3/' | sort -n | awk '{a[$1]=a[$1]" "$3} END{for(k in a) print k":"a[k]}' | sort -n ;;
+        add)  [[ -n ${3:-} && -n ${4:-} ]] || die "share add <vm> <NAME> <PATH> [--ro] [--auto] [--mount DIR]"; local s="$3,$4" sn=$3; shift 4
+              while (( $# )); do case $1 in --ro) s+=",ro"; shift;; --auto) s+=",auto"; shift;; --mount) s+=",mount=$2"; shift 2;; *) die "share add: unknown option $1";; esac; done
+              share_add "$vm" "$s"; log "in the guest: mount -t vboxsf $sn /mnt/$sn (needs Guest Additions)" ;;
+        rm)   [[ -n ${3:-} ]] || die "share rm <vm> <NAME>"; vbm sharedfolder remove "$vm" --name "$3" ;;
+        *) die "share list|add|rm" ;;
+    esac
+}
+cmd_snap() {
+    local sub=${1:-} vm=${2:-} name=${3:-}; [[ -n $vm ]] || die "snap list|take|restore|rm <vm> [NAME]"; vm_exists "$vm" || die "no such VM: $vm"
+    case $sub in
+        list)    VBoxManage snapshot "$vm" list --details 2>&1 | sed 's/^/  /' || true ;;
+        take)    local -a l=(); ! (( DRY )) && vm_running "$vm" && l=(--live)
+                 vbm snapshot "$vm" take "${name:-$(date +%Y%m%d-%H%M%S)}" "${l[@]}" ;;
+        restore) if [[ -n $name ]]; then vbm snapshot "$vm" restore "$name"; else vbm snapshot "$vm" restorecurrent; fi ;;
+        rm)      [[ -n $name ]] || die "snap rm <vm> <NAME>"; confirm "Delete snapshot '$name' of $vm?"; vbm snapshot "$vm" delete "$name" ;;
+        *) die "snap list|take|restore|rm" ;;
+    esac
+}
+
+# ── image specs ───────────────────────────────────────────────────────────────
+declare -A SPEC=()
+SPEC_DISKS=(); SPEC_NICS=(); SPEC_PORTS=(); SPEC_SHARES=()
+spec_path() {   # name | name.vm | /path/file.vm → file path
+    local n=$1 d
+    [[ -f $n ]] && { readlink -f "$n"; return 0; }
+    for d in "${SPEC_DIRS[@]}"; do [[ -f $d/$n.vm ]] && { echo "$d/$n.vm"; return 0; }; [[ -f $d/$n ]] && { echo "$d/$n"; return 0; }; done
+    return 1
+}
+spec_read() {   # spec_read FILE DEPTH — accumulate into SPEC/SPEC_*
+    local f=$1 depth=$2 line key val
+    (( depth < 5 )) || die "spec 'from =' chain too deep at $f"
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%%#*}; line=${line%"${line##*[![:space:]]}"}
+        [[ -z ${line//[[:space:]]/} ]] && continue
+        [[ $line == *=* ]] || die "$f: not key = value: $line"
+        key=${line%%=*}; key=${key//[[:space:]]/}; val=${line#*=}; val=${val#"${val%%[![:space:]]*}"}
+        case $key in
+            from)  local p; p=$(spec_path "$val") || die "$f: from = $val: spec not found"; spec_read "$p" $((depth+1)) ;;
+            disk)  [[ $val == none ]] && SPEC_DISKS=() || SPEC_DISKS+=("$val") ;;
+            nic)   [[ $val == none ]] && SPEC_NICS=() || SPEC_NICS+=("$val") ;;
+            port)  [[ $val == none ]] && SPEC_PORTS=() || SPEC_PORTS+=("$val") ;;
+            share) [[ $val == none ]] && SPEC_SHARES=() || SPEC_SHARES+=("$val") ;;
+            *)     SPEC[$key]=$val ;;
+        esac
+    done < "$f"
+}
+spec_load() {
+    local f; f=$(spec_path "$1") || die "spec not found: $1 (looked in ${SPEC_DIRS[*]}; vboxctl spec list)"
+    SPEC=(); SPEC_DISKS=(); SPEC_NICS=(); SPEC_PORTS=(); SPEC_SHARES=()
+    spec_read "$f" 0
+    SPEC[_file]=$f
+    [[ -n ${SPEC[name]:-} ]] || SPEC[name]=$(basename "${f%.vm}")
+    [[ -n ${SPEC[iso]:-} && ${SPEC[iso]} != /* ]] && SPEC[iso]="$DEFAULT_ISO_DIR/${SPEC[iso]}"
+    return 0
+}
+sp() { printf '%s\n' "${SPEC[$1]:-${2:-}}"; }   # sp KEY [DEFAULT]
+os_family() {   # ostype → ubuntu|debian|rhel|suse|arch|gentoo|windows|other
+    case ${1:-} in Ubuntu*|Lubuntu*|Xubuntu*) echo ubuntu;; Debian*) echo debian;; RedHat*|Oracle*|Fedora*) echo rhel;;
+        OpenSUSE*) echo suse;; ArchLinux*) echo arch;; Gentoo*) echo gentoo;; Windows*) echo windows;; *) echo other;; esac
+}
+spec_key() { awk -F'=' -v k="$2" '$1 ~ "^[[:space:]]*"k"[[:space:]]*$"{sub(/#.*/,"",$2); gsub(/[[:space:]]/,"",$2); print $2; exit}' "$1"; }
+spec_list() {
+    local d f
+    for d in "${SPEC_DIRS[@]}"; do
+        [[ -d $d ]] || continue
+        for f in "$d"/*.vm; do [[ -f $f ]] || continue
+            printf '%-18s %-14s %-6s %-5s %s\n' "$(basename "${f%.vm}")" "$(spec_key "$f" ostype)" "$(spec_key "$f" ram)" "$(spec_key "$f" cpus)" "$f"
+        done
+    done
+}
+spec_show() {
+    spec_load "${1:-}"; local k
+    echo "# $(sp _file)"
+    for k in $(printf '%s\n' "${!SPEC[@]}" | grep -v '^_' | sort); do printf '%-12s = %s\n' "$k" "${SPEC[$k]}"; done
+    local x; for x in "${SPEC_DISKS[@]}"; do printf '%-12s = %s\n' disk "$x"; done
+    for x in "${SPEC_NICS[@]}"; do printf '%-12s = %s\n' nic "$x"; done
+    for x in "${SPEC_PORTS[@]}"; do printf '%-12s = %s\n' port "$x"; done
+    for x in "${SPEC_SHARES[@]}"; do printf '%-12s = %s\n' share "$x"; done
+}
+spec_detect() {   # detect ISO → prints "TypeId|Version|supported(yes/no)"
+    local iso=$1 out; [[ -f $iso ]] || iso="$DEFAULT_ISO_DIR/$iso"; [[ -f $iso ]] || die "ISO not found: $1"
+    out=$(VBoxManage unattended detect --iso="$iso" 2>/dev/null || true)
+    local id ver sup
+    id=$(printf '%s\n' "$out" | awk -F'= *' '/OS TypeId/{print $2; exit}')
+    ver=$(printf '%s\n' "$out" | awk -F'= *' '/OS Version/{print $2; exit}')
+    sup=$(printf '%s\n' "$out" | awk -F'= *' '/Unattended installation supported/{print $2; exit}')
+    printf '%s|%s|%s\n' "${id:-Other_64}" "$ver" "${sup:-no}"
+}
+cmd_spec_detect() {
+    local r; r=$(spec_detect "${1:-}")
+    printf 'ostype      = %s\nversion     = %s\nunattended  = %s\n' "${r%%|*}" "$(cut -d'|' -f2 <<<"$r")" "${r##*|}"
+    [[ ${r##*|} == yes ]] || echo "(no unattended support: install by hand in the GUI, or use 'vboxctl packer' with an autoinstall boot_command)"
+}
+spec_new() {
+    local name=${1:-}; [[ -n $name ]] || die "spec new <name> [--iso ISO] [--ostype T] [--ram S] [--cpus N] [--disk S]"; shift
+    local iso="" ostype="" ram=4G cpus=4 disk=40G
+    while (( $# )); do case $1 in --iso) iso=$2; shift 2;; --ostype) ostype=$2; shift 2;; --ram) ram=$2; shift 2;; --cpus) cpus=$2; shift 2;; --disk) disk=$2; shift 2;; *) die "spec new: unknown option $1";; esac; done
+    local out="${SPEC_DIRS[0]}/$name.vm"; [[ -e $out ]] && die "exists: $out"
+    local unatt=no ver=""
+    if [[ -n $iso ]]; then [[ -f $iso ]] || iso="$DEFAULT_ISO_DIR/$iso"; [[ -f $iso ]] || die "ISO not found: $iso"
+        local r; r=$(spec_detect "$iso"); [[ -n $ostype ]] || ostype=${r%%|*}; ver=$(cut -d'|' -f2 <<<"$r"); unatt=${r##*|}; fi
+    ostype=${ostype:-Other_64}
+    local fam; fam=$(os_family "$ostype"); local user=user
+    mkdir -p "${SPEC_DIRS[0]}"
+    cat >"$out" <<EOF
+# vboxctl image spec — $name  (created $(date +%F))
+# key = value; repeat disk/nic/port/share for several; "from = other" inherits
+# another spec first (list keys accumulate; "disk = none" resets a list).
+name       = $name
+ostype     = $ostype${ver:+          # $ver}
+iso        = ${iso:-/path/to/install.iso}
+#folder    = /mnt/dc/.VirtualBox/Machines   # default machine folder if unset
+cpus       = $cpus
+ram        = $ram
+vram       = 64
+firmware   = efi                 # bios | efi
+chipset    = ich9                # piix3 | ich9
+graphics   = vmsvga              # vmsvga | vboxsvga | vboxvga
+3d         = off
+controller = sata                # sata | nvme | virtio | scsi   (system disks)
+disk       = $disk                # SIZE[,name=FILE][,fixed][,format=vdi|vmdk|vhd][,hdd]
+#disk      = 8G,name=data.vdi
+nic        = nat,type=virtio     # nat | bridged[:IF] | hostonly[:IF] | intnet[:NAME] | natnet[:NAME]
+#nic       = bridged,type=virtio,promisc            # IF defaults to the first Up bridge
+port       = ssh,2222,22         # NAME,HOSTPORT,GUESTPORT[,udp][,nic=N]  (NAT nic only)
+#share     = db1,/mnt/db1,auto,mount=/mnt/db1       # NAME,PATH[,ro][,auto][,mount=DIR]
+usb        = xhci                # off | ohci | ehci | xhci
+audio      = off
+clipboard  = bidirectional       # off | bidirectional | hosttoguest | guesttohost
+nested     = off                 # on for a Proxmox/KVM guest
+#tpm       = 2.0                 # Windows 11: TPM 2.0 (+ firmware = efi)
+paravirt   = kvm                 # kvm | hyperv | default | none
+rtc_utc    = on
+dvd_port   = 1                   # IDE port of the DVD (Vagrant base boxes expect 0)
+# ── unattended install (vboxctl create --install); supported by VirtualBox: $unatt
+unattended = $unatt
+user       = $user
+password   = changeme
+hostname   = $name.local
+locale     = en_US
+timezone   = Europe/Warsaw
+additions  = on                  # install Guest Additions during the unattended run
+#post_install = apt-get install -y openssh-server
+#image_index  = 6                # Windows: "Image #N" from vboxctl spec detect
+#product_key  = XXXXX-XXXXX-XXXXX-XXXXX-XXXXX
+# ── packer / vagrant
+ssh_user   = $user               # stored as extradata vboxctl/ssh_user; used by vboxctl ssh
+#iso_checksum = sha256:...       # packer: iso_checksum (default none)
+#box        = ubuntu/noble64     # vagrant: base box for the generated Vagrantfile
+#box_family = $fam
+EOF
+    log "written $out"
+    [[ $unatt == yes ]] || warn "this ISO has no unattended support in VirtualBox — 'create --install' will refuse; packer autoinstall or a manual install instead"
+}
+spec_from() {
+    local vm=${1:-}; [[ -n $vm ]] || die "spec from <vm> [--out FILE]"; shift; local out=""
+    [[ ${1:-} == --out ]] && out=$2
+    vm_exists "$vm" || die "no such VM: $vm"; vm_info "$vm"; vm_human "$vm"
+    local buf; buf=$(
+        echo "# captured from VM $vm on $(date +%F)"
+        printf 'name       = %s\n' "$vm"
+        local od; od=$(vm_get ostype); printf 'ostype     = %s\n' "$(ostype_id "$od")"
+        local iso; iso=$(vm_media | awk -F'|' '$4 ~ /\.iso$/{print $4; exit}'); [[ -n $iso ]] && printf 'iso        = %s\n' "$iso"
+        printf 'folder     = %s\n' "$(dirname "$(dirname "$(vm_get CfgFile)")")"
+        printf 'cpus       = %s\nram        = %s\nvram       = %s\n' "$(vm_get cpus)" "$(human_mb "$(vm_get memory)")" "$(vm_get vram)"
+        printf 'firmware   = %s\nchipset    = %s\ngraphics   = %s\n' "$(vm_get firmware | tr 'A-Z' 'a-z')" "$(vm_get chipset)" "$(vm_get graphicscontroller)"
+        printf '3d         = %s\nnested     = %s\nparavirt   = %s\nrtc_utc    = %s\n' "$(vm_get accelerate3d)" "$(vm_get nested-hw-virt || echo off)" "$(vm_get paravirtprovider)" "$(vm_get rtcuseutc)"
+        local au=off; [[ $(vm_get audio) != none ]] && au=on
+        printf 'usb        = %s\naudio      = %s\nclipboard  = %s\n' "$(vm_usb)" "$au" "$(vm_get clipboard)"
+        local c p d f kind first=1
+        while IFS='|' read -r c p d f; do
+            [[ $f == *.iso || $f == emptydrive ]] && continue
+            kind=$(ctl_kind "$(vm_controllers | awk -F'|' -v n="$c" '$1==n{print $2}')")
+            (( first )) && { printf 'controller = %s\n' "$kind"; first=0; }
+            printf 'disk       = %s,name=%s' "$(human_mb "$(medium_size_mb "$f")")" "$(basename "$(medium_base "$f")")"
+            [[ $(medium_format "$f") != VDI ]] && printf ',format=%s' "$(medium_format "$f" | tr 'A-Z' 'a-z')"; echo
+        done < <(vm_media)
+        local i mode tgt line
+        for i in 1 2 3 4 5 6 7 8; do
+            mode=$(vm_get "nic$i") || continue; [[ $mode == none ]] && continue
+            case $mode in bridged) tgt=":$(vm_get "bridgeadapter$i")";; hostonly) tgt=":$(vm_get "hostonlyadapter$i")";; intnet) tgt=":$(vm_get "intnet$i")";; natnetwork) mode=natnet; tgt=":$(vm_get "nat-network$i")";; *) tgt="";; esac
+            line="$mode$tgt,type=$(vm_get "nictype$i"),mac=$(vm_get "macaddress$i")"; [[ $(vm_promisc "$i") == allow-all ]] && line+=",promisc"
+            printf 'nic        = %s\n' "$line"
+        done
+        vm_grep '^Forwarding\(' | sed -E 's/^Forwarding\([0-9]+\)="([^,]*),([^,]*),([^,]*),([^,]*),([^,]*),([^,]*)"$/port       = \1,\4,\6,\2/; s/,tcp$//'
+        vm_grep '^SharedFolder(Name|Path)MachineMapping' | sed -E 's/^SharedFolder(Name|Path)MachineMapping([0-9]+)="(.*)"$/\2 \1 \3/' \
+          | awk '{if($2=="Name")n[$1]=$3; else p[$1]=$3} END{for(k in n) printf "share      = %s,%s\n", n[k], p[k]}'
+        local su; su=$(VBoxManage getextradata "$vm" vboxctl/ssh_user 2>/dev/null | awk -F': ' '/^Value:/{print $2}'); [[ -n $su ]] && printf 'ssh_user   = %s\n' "$su"
+    )
+    if [[ -n $out ]]; then [[ -e $out ]] && die "exists: $out"; mkdir -p "$(dirname "$out")"; printf '%s\n' "$buf" >"$out"; log "written $out"; else printf '%s\n' "$buf"; fi
+}
+cmd_spec() {
+    local sub=${1:-}; shift || true
+    case $sub in
+        list)   spec_list ;;
+        show)   spec_show "$@" ;;
+        new)    spec_new "$@" ;;
+        from)   spec_from "$@" ;;
+        detect) cmd_spec_detect "$@" ;;
+        *)      die "spec list|show|new|from|detect" ;;
+    esac
+}
+
+# ── create a VM from a spec ───────────────────────────────────────────────────
+cmd_create() {
+    local specn=${1:-}; [[ -n $specn ]] || die "create <spec> [--name N] [--start|--gui] [--install] [--folder DIR]"; shift
+    spec_load "$specn"
+    local name=$(sp name) start="" install=0 folder=$(sp folder)
+    while (( $# )); do case $1 in --name) name=$2; shift 2;; --start) start=headless; shift;; --gui) start=gui; shift;; --install) install=1; shift;; --folder) folder=$2; shift 2;; *) die "create: unknown option $1";; esac; done
+    vm_exists "$name" && die "VM '$name' already exists (vboxctl rm $name, or --name OTHER)"
+    local ostype=$(sp ostype Other_64) iso=$(sp iso) fam; fam=$(os_family "$ostype")
+    [[ -z $iso || -f $iso ]] || die "ISO not found: $iso"
+    if (( install )); then
+        [[ -n $iso ]] || die "--install needs iso = in the spec"
+        [[ $(sp unattended no) == yes || $(sp unattended) == on ]] || die "spec says unattended = $(sp unattended no): VirtualBox cannot drive this installer (vboxctl spec detect $iso); use --gui and install by hand, or vboxctl packer"
+    fi
+    log "creating $name ($ostype) cpus=$(sp cpus 2) ram=$(sp ram 2G) disks=${#SPEC_DISKS[@]} nics=${#SPEC_NICS[@]}"
+    local -a base=(--name "$name" --ostype "$ostype" --register); [[ -n $folder ]] && base+=(--basefolder "$folder")
+    vbm createvm "${base[@]}"
+    local -a m=(--cpus "$(sp cpus 2)" --memory "$(to_mb "$(sp ram 2G)")" --vram "$(sp vram 64)"
+                --firmware "$(sp firmware bios)" --chipset "$(sp chipset piix3)" --graphicscontroller "$(sp graphics vmsvga)"
+                --paravirt-provider "$(sp paravirt kvm)" --rtc-use-utc "$(sp rtc_utc on)" --ioapic on --acpi on --x2apic on
+                --hwvirtex on --nested-paging on --large-pages on --boot1 dvd --boot2 disk --boot3 none --boot4 none
+                --description "vboxctl spec: $(sp _file)")
+    [[ $(sp 3d off) == on ]] && m+=(--accelerate-3d on)
+    [[ $(sp nested off) == on ]] && m+=(--nested-hw-virt on)
+    [[ -n $(sp exec_cap) ]] && m+=(--cpu-execution-cap "$(sp exec_cap)")
+    [[ -n $(sp tpm) && $(sp tpm) != off ]] && m+=(--tpm-type "$(sp tpm)")
+    case $(sp clipboard off) in off|disabled) ;; *) m+=(--clipboard-mode "$(sp clipboard)" --drag-and-drop "$(sp clipboard)") ;; esac
+    if [[ $(sp audio off) == on ]]; then m+=(--audio-enabled on --audio-driver default --audio-controller hda --audio-out on); else m+=(--audio-enabled off); fi
+    case $(sp usb xhci) in off) m+=(--usb-ohci off);; ohci) m+=(--usb-ohci on);; ehci) m+=(--usb-ehci on);; xhci) m+=(--usb-xhci on);; *) die "usb = off|ohci|ehci|xhci";; esac
+    vbm modifyvm "$name" "${m[@]}"
+    # storage
+    local dir; if (( DRY )); then dir="${folder:-/mnt/dc/.VirtualBox/Machines}/$name"; else dir=$(vm_dir "$name"); fi
+    local ide; ctl_add "$name" ide; ide=$CTL_NEW
+    local dvdp=$(sp dvd_port 1)
+    if [[ -n $iso ]]; then vbm storageattach "$name" --storagectl "$ide" --port "$dvdp" --device 0 --type dvddrive --tempeject on --medium "$iso"
+    else vbm storageattach "$name" --storagectl "$ide" --port "$dvdp" --device 0 --type dvddrive --medium emptydrive; fi
+    local kind=$(sp controller sata) ctl="" i=0 d size fmt file
+    if (( ${#SPEC_DISKS[@]} )); then
+        if [[ $kind == ide ]]; then ctl=$ide; else ctl_add "$name" "$kind" $(( ${#SPEC_DISKS[@]} + 2 )); ctl=$CTL_NEW; fi
+        for d in "${SPEC_DISKS[@]}"; do
+            size=$(to_mb "$(kv_first "$d")"); fmt=$(kv_get "$d" format vdi); fmt=${fmt^^}
+            file=$(kv_get "$d" name "${name}_$((i+1)).${fmt,,}"); [[ $file == /* ]] || file="$dir/$file"
+            local -a v=() s=(--nonrotational on --discard on); kv_has "$d" fixed && v=(--variant Fixed); kv_has "$d" hdd && s=()
+            vbm createmedium disk --filename "$file" --size "$size" --format "$fmt" "${v[@]}"
+            local port=$i; [[ $kind == ide ]] && port=$(( i == 0 ? 0 : i ))   # ide: port 0 dev 0, dvd on dvd_port
+            vbm storageattach "$name" --storagectl "$ctl" --port "$port" --device 0 --type hdd --medium "$file" "${s[@]}"
+            i=$((i+1))
+        done
+    fi
+    # network
+    (( ${#SPEC_NICS[@]} )) || SPEC_NICS=(nat)
+    i=1; local n; for n in "${SPEC_NICS[@]}"; do local -a a; mapfile -t a < <(nic_args "$i" "$n"); vbm modifyvm "$name" "${a[@]}"; i=$((i+1)); done
+    local p; for p in "${SPEC_PORTS[@]}"; do pf_add "$name" "$p"; done
+    local s; for s in "${SPEC_SHARES[@]}"; do share_add "$name" "$s"; done
+    vbm setextradata "$name" vboxctl/spec "$(sp _file)"
+    [[ -n $(sp ssh_user "$(sp user)") ]] && vbm setextradata "$name" vboxctl/ssh_user "$(sp ssh_user "$(sp user)")"
+    if (( install )); then
+        local -a u=(--iso="$iso" --user="$(sp user user)" --user-password="$(sp password changeme)" --hostname="$(sp hostname "$name.local")"
+                    --locale="$(sp locale en_US)" --time-zone="$(sp timezone Europe/Warsaw)")
+        [[ $(sp additions on) == on ]] && u+=(--install-additions --additions-iso="$(ga_iso)") || u+=(--no-install-additions)
+        [[ -n $(sp post_install) ]] && u+=(--post-install-command="$(sp post_install)")
+        [[ -n $(sp extra_kernel) ]] && u+=(--extra-install-kernel-parameters="$(sp extra_kernel)")
+        [[ -n $(sp product_key) ]] && u+=(--key="$(sp product_key)")
+        [[ -n $(sp image_index) ]] && u+=(--image-index="$(sp image_index)")
+        [[ $fam == windows ]] && u+=(--admin-password="$(sp password changeme)")
+        u+=(--start-vm="${start:-headless}")
+        log "unattended install of $ostype into $name (user $(sp user user)); watch with: vboxctl start $name --gui"
+        vbm unattended install "$name" "${u[@]}"
+    elif [[ -n $start ]]; then vbm startvm "$name" --type "$start"; fi
+    (( DRY )) || { echo; log "VM '$name' ready. vboxctl start $name [--gui]; vboxctl ssh $name; vboxctl disk list $name"; }
+}
+
+# ── packer ────────────────────────────────────────────────────────────────────
+pw_hash() { need_cmd openssl; openssl passwd -6 "$1"; }
+packer_autoinstall() {   # packer_autoinstall FAMILY DIR → writes http/ files, echoes boot_command HCL list
+    local fam=$1 dir=$2 user=$(sp user user) pass=$(sp password changeme) host=$(sp hostname "$(sp name).local")
+    mkdir -p "$dir/http"
+    case $fam in
+        ubuntu)
+            cat >"$dir/http/meta-data" <<EOF
+instance-id: $(sp name)
+local-hostname: ${host%%.*}
+EOF
+            cat >"$dir/http/user-data" <<EOF
+#cloud-config
+autoinstall:
+  version: 1
+  locale: $(sp locale en_US).UTF-8
+  keyboard: {layout: pl}
+  identity:
+    hostname: ${host%%.*}
+    username: $user
+    password: "$(pw_hash "$pass")"
+  ssh:
+    install-server: true
+    allow-pw: true
+  storage:
+    layout: {name: direct}
+  packages: [openssh-server, build-essential, dkms, linux-headers-generic]
+  late-commands:
+    - echo '$user ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/$user
+    - chmod 440 /target/etc/sudoers.d/$user
+EOF
+            echo '"<wait>c<wait>", "linux /casper/vmlinuz autoinstall ds=nocloud-net\;s=http://{{ .HTTPIP }}:{{ .HTTPPort }}/ ---<enter><wait>", "initrd /casper/initrd<enter><wait>", "boot<enter>"' ;;
+        debian)
+            cat >"$dir/http/preseed.cfg" <<EOF
+d-i debian-installer/locale string $(sp locale en_US).UTF-8
+d-i keyboard-configuration/xkb-keymap select pl
+d-i netcfg/get_hostname string ${host%%.*}
+d-i netcfg/get_domain string ${host#*.}
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i passwd/root-login boolean false
+d-i passwd/user-fullname string $user
+d-i passwd/username string $user
+d-i passwd/user-password password $pass
+d-i passwd/user-password-again password $pass
+d-i clock-setup/utc boolean true
+d-i time/zone string $(sp timezone Europe/Warsaw)
+d-i partman-auto/method string regular
+d-i partman-auto/choose_recipe select atomic
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+tasksel tasksel/first multiselect standard, ssh-server
+d-i pkgsel/include string sudo build-essential dkms linux-headers-amd64
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/bootdev string default
+d-i preseed/late_command string echo '$user ALL=(ALL) NOPASSWD:ALL' > /target/etc/sudoers.d/$user; chmod 440 /target/etc/sudoers.d/$user
+d-i finish-install/reboot_in_progress note
+EOF
+            echo '"<esc><wait>", "auto url=http://{{ .HTTPIP }}:{{ .HTTPPort }}/preseed.cfg hostname='"${host%%.*}"' domain='"${host#*.}"' <enter>"' ;;
+        rhel)
+            cat >"$dir/http/ks.cfg" <<EOF
+text
+lang $(sp locale en_US).UTF-8
+keyboard pl
+timezone $(sp timezone Europe/Warsaw) --utc
+network --bootproto=dhcp --hostname=${host%%.*}
+rootpw --lock
+user --name=$user --password=$pass --plaintext --groups=wheel
+firewall --enabled --ssh
+selinux --permissive
+bootloader --location=mbr
+zerombr
+clearpart --all --initlabel
+autopart
+%packages
+@core
+openssh-server
+sudo
+gcc make kernel-devel kernel-headers dkms bzip2 tar
+%end
+%post
+echo '$user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/$user; chmod 440 /etc/sudoers.d/$user
+%end
+reboot
+EOF
+            echo '"<up><wait><tab> inst.text inst.ks=http://{{ .HTTPIP }}:{{ .HTTPPort }}/ks.cfg<enter>"' ;;
+        *)  echo '' ;;
+    esac
+}
+cmd_packer() {
+    local specn=${1:-}; [[ -n $specn ]] || die "packer <spec> [--build] [--box]"; shift
+    local build=0 box=0; while (( $# )); do case $1 in --build) build=1; shift;; --box) box=1; shift;; *) die "packer: unknown option $1";; esac; done
+    spec_load "$specn"
+    local name=$(sp name) ostype=$(sp ostype Other_64) iso=$(sp iso) fam; fam=$(os_family "$ostype")
+    [[ -f $iso ]] || die "packer needs an existing iso = in the spec (got: ${iso:-none})"
+    local dir="$PACKER_DIR/$name" user=$(sp ssh_user "$(sp user user)") pass=$(sp password changeme)
+    mkdir -p "$dir"
+    local bootcmd; bootcmd=$(packer_autoinstall "$fam" "$dir")
+    local shutdown='sudo -S shutdown -P now' comm=ssh
+    [[ $fam == windows ]] && { shutdown='shutdown /s /t 10 /f'; comm=winrm; }
+    local iface; case $(sp controller sata) in nvme) iface=pcie;; virtio) iface=virtio;; scsi) iface=scsi;; ide) iface=ide;; *) iface=sata;; esac
+    local nictype; nictype=$(kv_get "${SPEC_NICS[0]:-nat}" type 82540EM)
+    local disk0=$(to_mb "$(kv_first "${SPEC_DISKS[0]:-40G}")")
+    local extra_vbm=""
+    [[ $(sp nested off) == on ]] && extra_vbm+='    ["modifyvm", "{{.Name}}", "--nested-hw-virt", "on"],'$'\n'
+    [[ $(sp 3d off) == on ]] && extra_vbm+='    ["modifyvm", "{{.Name}}", "--accelerate-3d", "on"],'$'\n'
+    local d i=1; for d in "${SPEC_DISKS[@]:1}"; do
+        extra_vbm+="    [\"createmedium\", \"disk\", \"--filename\", \"{{.Name}}_$((i+1)).vdi\", \"--size\", \"$(to_mb "$(kv_first "$d")")\"],"$'\n'
+        extra_vbm+="    [\"storageattach\", \"{{.Name}}\", \"--storagectl\", \"SATA Controller\", \"--port\", \"$i\", \"--device\", \"0\", \"--type\", \"hdd\", \"--medium\", \"{{.Name}}_$((i+1)).vdi\"],"$'\n'
+        i=$((i+1)); done
+    cat >"$dir/$name.pkr.hcl" <<EOF
+# generated by vboxctl packer from $(sp _file) on $(date +%F)
+# run: cd $dir && packer init . && packer build .
+packer {
+  required_plugins {
+    virtualbox = { source = "github.com/hashicorp/virtualbox", version = ">= 1.1.0" }
+$( (( box )) && echo '    vagrant    = { source = "github.com/hashicorp/vagrant", version = ">= 1.1.0" }' )
+  }
+}
+
+variable "iso_url"      { default = "$iso" }
+variable "iso_checksum" { default = "$(sp iso_checksum none)" }
+variable "ssh_username" { default = "$user" }
+variable "ssh_password" { default = "$pass" }
+
+source "virtualbox-iso" "$name" {
+  vm_name              = "$name"
+  guest_os_type        = "$ostype"
+  iso_url              = var.iso_url
+  iso_checksum         = var.iso_checksum
+  cpus                 = $(sp cpus 2)
+  memory               = $(to_mb "$(sp ram 2G)")
+  disk_size            = $disk0
+  hard_drive_interface = "$iface"
+  hard_drive_nonrotational = true
+  hard_drive_discard   = true
+  iso_interface        = "sata"
+  firmware             = "$(sp firmware bios)"
+  chipset              = "$(sp chipset piix3)"
+  nic_type             = "$nictype"
+  gfx_controller       = "$(sp graphics vmsvga)"
+  gfx_vram_size        = $(sp vram 64)
+  audio_controller     = "hda"
+  usb                  = $( [[ $(sp usb xhci) == off ]] && echo false || echo true )
+  rtc_time_base        = "UTC"
+  headless             = $( [[ -n $bootcmd ]] && echo true || echo false )
+  guest_additions_mode = "$( [[ $(sp additions on) == on && $fam != windows ]] && echo upload || echo disable )"
+  guest_additions_path = "VBoxGuestAdditions.iso"
+  http_directory       = "http"
+  boot_wait            = "5s"
+  boot_command         = [$bootcmd]
+  communicator         = "$comm"
+  ssh_username         = var.ssh_username
+  ssh_password         = var.ssh_password
+  ssh_timeout          = "45m"
+  shutdown_command     = "echo '$pass' | $shutdown"
+  output_directory     = "output-$name"
+  vboxmanage = [
+    ["modifyvm", "{{.Name}}", "--paravirt-provider", "$(sp paravirt kvm)"],
+    ["modifyvm", "{{.Name}}", "--clipboard-mode", "$(sp clipboard bidirectional)"],
+$extra_vbm  ]
+  vboxmanage_post = [
+    ["modifyvm", "{{.Name}}", "--memory", "$(to_mb "$(sp ram 2G)")"],
+  ]
+}
+
+build {
+  sources = ["source.virtualbox-iso.$name"]
+
+  provisioner "shell" {
+    execute_command = "echo '$pass' | sudo -S -E bash '{{ .Path }}'"
+    inline = [
+      "if [ -f /root/VBoxGuestAdditions.iso ] || [ -f ~/VBoxGuestAdditions.iso ]; then mkdir -p /mnt/ga && mount -o loop \$(ls /root/VBoxGuestAdditions.iso ~/VBoxGuestAdditions.iso 2>/dev/null | head -1) /mnt/ga && (sh /mnt/ga/VBoxLinuxAdditions.run || true); umount /mnt/ga; fi",
+      "sync",
+    ]
+  }
+$( (( box )) && cat <<EOB
+
+  post-processor "vagrant" {
+    output               = "$name-{{.Provider}}.box"
+    keep_input_artifact  = false
+  }
+EOB
+)
+}
+EOF
+    if [[ -z $bootcmd ]]; then
+        warn "no autoinstall recipe for family '$fam' ($ostype): headless=false, packer will wait for you to install by hand and enable ssh for $user"
+    else
+        log "autoinstall files in $dir/http (edit before building)"
+    fi
+    (( box )) && log "vagrant post-processor added: box comes out as $dir/$name-virtualbox.box (needs a 'vagrant' user/insecure key inside for vagrant up)"
+    log "written $dir/$name.pkr.hcl"
+    if (( build )); then need_cmd packer; (cd "$dir" && packer init . && packer build .); fi
+}
+
+# ── vagrantfile ───────────────────────────────────────────────────────────────
+cmd_vagrant() {
+    local specn=${1:-}; [[ -n $specn ]] || die "vagrant <spec> [--nodes N] [--box BOX] [--net 192.168.0.] [--first 71] [--bridge IF] [-o FILE]"; shift
+    spec_load "$specn"
+    local nodes=3 box=$(sp box) net="192.168.0." first=71 bridge="" out=""
+    while (( $# )); do case $1 in --nodes) nodes=$2; shift 2;; --box) box=$2; shift 2;; --net) net=$2; shift 2;; --first) first=$2; shift 2;; --bridge) bridge=$2; shift 2;; -o) out=$2; shift 2;; *) die "vagrant: unknown option $1";; esac; done
+    [[ -n $box ]] || die "no base box: set box = in the spec or pass --box (e.g. ubuntu/noble64, generic/debian12, or a box built by 'vboxctl packer --box')"
+    [[ $net == *. ]] || net="$net."
+    [[ -n $bridge ]] || bridge=$(first_bridge); [[ -n $bridge ]] || bridge=enp0s31f6
+    local name=$(sp name) ram=$(to_mb "$(sp ram 2G)") cpus=$(sp cpus 2)
+    out=${out:-$PWD/Vagrantfile.$name}
+    local i servers="" ; for i in $(seq 1 "$nodes"); do
+        servers+="  { hostname: \"${name}$i\", ip: \$net+\"$((first+i-1))\", mac: \"$(printf '020027%06X' $(( (RANDOM*32768+RANDOM) % 16777216 )))\" },"$'\n'; done
+    local extra=""; [[ $(sp nested off) == on ]] && extra+='          "--nested-hw-virt",      "on",'$'\n'
+    local ports="" p; for p in "${SPEC_PORTS[@]}"; do local IFS=','; read -r -a f <<<"$p"; unset IFS
+        [[ ${f[2]} == 22 ]] && continue   # vagrant forwards guest 22 itself
+        ports+="      node.vm.network \"forwarded_port\", guest: ${f[2]}, host: ${f[1]} + idx * 10, auto_correct: true   # ${f[0]}"$'\n'; done
+    cat >"$out" <<EOF
+# Vagrantfile — $nodes-node cluster from vboxctl spec $(sp _file) ($(date +%F))
+# Usage: cp $out Vagrantfile && vagrant up
+# VirtualBox 7.x switch names (--bridge-adapter2, --nic-type2, --paravirt-provider ...).
+
+\$box    = "$box"
+\$net    = "$net"
+\$gw     = "${net}1"
+\$bridge = "$bridge"          # VBoxManage list bridgedifs
+\$cpus   = $cpus
+\$ram    = $ram
+
+servers = [
+$servers]
+
+Vagrant.configure("2") do |config|
+  config.vm.box_check_update = false
+
+  servers.each_with_index do |machine, idx|
+    config.vm.define machine[:hostname] do |node|
+      node.vm.box      = \$box
+      node.vm.hostname = machine[:hostname]
+      node.vm.network "public_network",
+        bridge: \$bridge,
+        ip:     machine[:ip],
+        mac:    machine[:mac]
+$ports
+      node.vm.provider "virtualbox" do |vb|
+        vb.name   = machine[:hostname]
+        vb.cpus   = \$cpus
+        vb.memory = \$ram
+        vb.customize ["modifyvm", :id,
+          "--graphicscontroller",  "$(sp graphics vmsvga)",
+          "--paravirt-provider",   "$(sp paravirt kvm)",
+          "--nic2",                "bridged",
+          "--nic-type2",           "$(kv_get "${SPEC_NICS[1]:-bridged}" type 82540EM)",
+          "--bridge-adapter2",     \$bridge,
+          "--cable-connected2",    "on",
+          "--nic-promisc2",        "allow-all",
+          "--rtc-use-utc",         "on",
+$extra        ]
+      end
+$( for s in "${SPEC_SHARES[@]}"; do local IFS=','; read -r -a f <<<"$s"; unset IFS; printf '      node.vm.synced_folder "%s", "%s"\n' "${f[1]}" "$(kv_get "$s" mount "/mnt/${f[0]}")"; done )
+    end
+  end
+
+  # default route via the bridged interface, drop the NAT one
+  config.vm.provision "shell", run: "always", inline: <<-SHELL
+    ip route add default via #{\$gw} 2>/dev/null || true
+    ip route del default via \$(ip route | awk '/default.*enp0s3 /{print \$3}') 2>/dev/null || true
+  SHELL
+end
+EOF
+    log "written $out ($nodes nodes, $box, ${net}$first..$((first+nodes-1)) via $bridge)"
+    command -v vagrant >/dev/null || warn "no 'vagrant' binary on this host: emerge app-emulation/vagrant (~amd64, keyword it)"
+}
+
+# ── main ──────────────────────────────────────────────────────────────────────
+while (( $# )); do case $1 in -y) YES=1; shift;; -v) VERBOSE=1; shift;; -n) DRY=1; shift;; -h|--help) help; exit 0;; *) break;; esac; done
+(( $# )) || { help; exit 0; }
+verb=$1; shift
+case $verb in
+    list)     cmd_list "$@" ;;
+    info)     cmd_info "$@" ;;
+    start)    cmd_start "$@" ;;
+    stop)     cmd_stop "$@" ;;
+    poweroff|reset|pause|resume) cmd_simple "$verb" "$@" ;;
+    save)     cmd_save "$@" ;;
+    ssh)      cmd_ssh "$@" ;;
+    ip)       cmd_ip "$@" ;;
+    rm)       cmd_rm "$@" ;;
+    clone)    cmd_clone "$@" ;;
+    export)   cmd_export "$@" ;;
+    import)   cmd_import "$@" ;;
+    set)      cmd_set "$@" ;;
+    disk)     sub=${1:-}; shift || true
+              case $sub in list) disk_list "$@";; add) disk_add "$@";; attach) disk_attach "$@";; detach) disk_detach "$@";;
+                  rm) disk_detach "$1" "${2:-}" delete;; resize) disk_resize "$@";; *) die "disk list|add|attach|detach|rm|resize";; esac ;;
+    iso)      cmd_iso "$@" ;;
+    ga)       cmd_ga "$@" ;;
+    net)      cmd_net "$@" ;;
+    share)    cmd_share "$@" ;;
+    snap)     cmd_snap "$@" ;;
+    spec)     cmd_spec "$@" ;;
+    create)   cmd_create "$@" ;;
+    packer)   cmd_packer "$@" ;;
+    vagrant)  cmd_vagrant "$@" ;;
+    help|-h|--help) help ;;
+    *)        die "unknown verb: $verb (vboxctl -h)" ;;
+esac

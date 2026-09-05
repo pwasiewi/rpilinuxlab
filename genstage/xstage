@@ -1335,6 +1335,10 @@ cmd_live_conf() {
 	# this function writes. Change the line if an image is meant to run
 	# elsewhere - a distant mirror only costs sync speed, never correctness.
 	sync-uri = rsync://rsync8.pl.gentoo.org/gentoo-portage
+	# rsync8.pl ships a stray top-level "lastreplicate" (its replication
+	# timestamp) that is not in the signed Manifest, so gemato rejects the whole
+	# sync (__exists__ expected False). Keep it out of the download (2026-09-05).
+	sync-rsync-extra-opts = --exclude=/lastreplicate
 	auto-sync = yes
 	# gemato: verify the MetaManifest against the releng key on every sync —
 	# needs sec-keys/openpgp-keys-gentoo-release installed (in the pkg lists)
