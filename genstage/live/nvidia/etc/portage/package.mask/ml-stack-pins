@@ -26,18 +26,16 @@
 >dev-python/nvidia-cutlass-dsl-libs-cu13-4.5.2
 
 # --- flashinfer: python and cubin halves must match exactly ------------------
-# flashinfer-python-0.6.12 requires ~flashinfer-cubin-0.6.12, and 0.6.17 would
+# flashinfer-python-0.6.17 requires ~flashinfer-cubin-0.6.17 (vllm pin 7a100bb617); 0.6.18 would
 # drag in CUTLASS 4.6.2, which the vLLM pin above forbids.
->dev-python/flashinfer-python-0.6.12
->dev-python/flashinfer-cubin-0.6.12
+>=dev-python/flashinfer-python-0.6.18
+>=dev-python/flashinfer-cubin-0.6.18
 
 # --- pinned by other installed packages, not by vLLM -------------------------
 # dev-python/model-hosting-container-standards needs <dev-python/fastapi-0.137.0
 >=dev-python/fastapi-0.137.0
 # sci-ml/transformers-5.15 needs =sci-ml/tokenizers-0.22*
 >=sci-ml/tokenizers-0.23
-# sci-ml/caffe2-9999 needs <dev-python/pybind11-3.0.5
->=dev-python/pybind11-3.0.5
 
 # quack-kernels 0.6.x ALL require cutlass >=4.6.0 (0.6.1->4.6.0, 0.6.2/0.6.3->
 # 4.6.1, 0.6.4->4.6.2), so the entire 0.6 line is unreachable while the vLLM

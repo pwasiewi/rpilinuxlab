@@ -1781,3 +1781,5 @@ gui-libs/wlroots:0.20
 media-gfx/vkBasalt
 # GOG/Epic client (Heroic) — runs GOG games through GE-Proton (2026-09-04)
 games-util/heroic-bin
+# out-of-tree vLLM bitsandbytes (vLLM >= 073c510c9), needed by unsloth-zoo shim
+dev-python/vllm-bnb-plugin
