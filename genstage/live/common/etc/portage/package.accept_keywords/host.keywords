@@ -1783,3 +1783,19 @@ media-gfx/vkBasalt
 games-util/heroic-bin
 # out-of-tree vLLM bitsandbytes (vLLM >= 073c510c9), needed by unsloth-zoo shim
 dev-python/vllm-bnb-plugin
+# Trezor stack (::pwr trezor-suite-bin + ::gentoo dev-python/trezor, all ~amd64) —
+# moved here from secure-host/live-overlay 2026-09-07 so the image builds from
+# the repo alone; hidapi/libusb1 are pulled by dev-python/trezor.
+app-crypt/trezor-udev-rules
+app-crypt/trezor-suite-bin
+dev-python/mnemonic
+dev-python/shamir-mnemonic
+dev-python/slip10
+dev-python/construct-classes
+dev-python/trezor
+dev-python/hidapi
+dev-python/libusb1
+# ntfy push server (net-misc/ntfy-bin ::pwr, LAN-only on :8090) — same move
+net-misc/ntfy-bin
+acct-group/ntfy
+acct-user/ntfy

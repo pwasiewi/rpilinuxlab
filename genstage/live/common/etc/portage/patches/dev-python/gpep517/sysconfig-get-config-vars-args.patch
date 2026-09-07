@@ -1,0 +1,27 @@
+patched_config_vars() must mirror sysconfig.get_config_vars(*args):
+new setuptools (_distutils/compilers/C/unix.py _require_config_vars)
+calls it with 9 positional names and gpep517's cross monkeypatch
+raised TypeError, breaking EVERY cross wheel build (cffi, 2026-08-16).
+Upstream v20 has the same signature; not yet fixed there.
+
+--- a/gpep517/build.py
++++ b/gpep517/build.py
+@@ -83,7 +83,7 @@
+     orig_config_vars = sysconfig.get_config_vars
+     orig_get_platform = sysconfig.get_platform
+ 
+-    def patched_config_vars():
++    def patched_config_vars(*args):
+         cvars = orig_config_vars().copy()
+ 
+         # path variables: we copy them from sysroot, and prepend sysroot
+@@ -108,6 +108,9 @@
+             if modvar in sysroot_vars:
+                 cvars[modvar] = sysroot_vars[modvar]
+ 
++        if args:
++            # sysconfig.get_config_vars(*names) returns a list of values
++            return [cvars.get(name) for name in args]
+         return cvars
+ 
+     def patched_get_platform():

@@ -1,3 +1,5 @@
 # flashinfer-python >=0.6.14 (::stuff) carries the bare NVIDIA-SDK label next to
 # NVIDIA-CUDA; the profile list only accepts NVIDIA-SDK-v2020.10.12.
 dev-python/flashinfer-python NVIDIA-SDK
+# trezor-suite-bin (::pwr) — moved from the live-overlay 2026-09-07
+app-crypt/trezor-suite-bin T-RSL
