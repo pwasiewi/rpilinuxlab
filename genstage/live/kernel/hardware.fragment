@@ -172,17 +172,72 @@ CONFIG_RTL8187=m
 CONFIG_BT_HCIBTUSB_MTK=y
 CONFIG_BT_HCIBTUSB_RTL=y
 CONFIG_BT_HCIBTUSB_BCM=y
+# BT_INTEL / BT_MTK / BT_QCA / BT_RTL / BT_BCM have NO prompt in
+# drivers/bluetooth/Kconfig — they are select-only. Listing them is documentation,
+# not configuration: they appear iff one of the options above (or a UART protocol
+# below) selects them, and a line here can never turn one on by itself.
 CONFIG_BT_INTEL=m
 CONFIG_BT_MTK=m
+CONFIG_BT_QCA=m
 # Intel BE200/BE201 (WiFi 7) carry Bluetooth over PCIe, not USB — a separate
 # driver from btusb, and increasingly common on new laptops.
 CONFIG_BT_INTEL_PCIE=m
-# Qualcomm/Atheros and some Broadcom parts attach over UART instead of USB.
+# Apple/Broadcom BCM4377 family, also PCIe rather than USB.
+CONFIG_BT_HCIBCM4377=m
+
+# Atheros AR3011/AR3012: the Bluetooth half of the AR9285/AR9485 combo cards
+# that were standard in 2012-2013 laptops. btusb alone binds the device but
+# leaves it in bootloader mode — ath3k is the firmware-download shim that turns
+# it into a working controller, and without it the machine looks exactly like a
+# machine with no Bluetooth at all. Firmware ships in linux-firmware
+# (lib/firmware/ar3k/*), which the images already carry in full.
+# Concrete case (2026-09-09): Lenovo IdeaPad P500 under corehard — no Bluetooth
+# found, and BT_ATH3K was the one vendor shim this fragment never had.
+CONFIG_BT_ATH3K=m
+
+# --- UART-attached controllers ---------------------------------------------
+# BT_HCIUART_{BCM,QCA,RTL,...} all 'depends on BT_HCIUART_SERDEV', which is a
+# hidden symbol with 'depends on SERIAL_DEV_BUS && BT_HCIUART, default y'.
+# SERIAL_DEV_BUS was never enabled here, so BT_HCIUART_BCM=y and
+# BT_HCIUART_QCA=y below were DEAD LETTERS: olddefconfig dropped them without a
+# word and the built corehard kernel had neither (verified in its .config,
+# 2026-09-09). SERIAL_DEV_CTRL_TTYPORT additionally 'depends on
+# SERIAL_DEV_BUS != m', so the bus must be =y, not =m — and BT_HCIUART_BCM
+# needs that TTYPORT half on any ACPI machine, i.e. on all of x86.
+CONFIG_SERIAL_DEV_BUS=y
+CONFIG_SERIAL_DEV_CTRL_TTYPORT=y
 CONFIG_BT_HCIUART=m
 CONFIG_BT_HCIUART_H4=y
+CONFIG_BT_HCIUART_BCSP=y
+CONFIG_BT_HCIUART_ATH3K=y
+CONFIG_BT_HCIUART_LL=y
+CONFIG_BT_HCIUART_3WIRE=y
+CONFIG_BT_HCIUART_INTEL=y
 CONFIG_BT_HCIUART_BCM=y
+CONFIG_BT_HCIUART_RTL=y
 CONFIG_BT_HCIUART_QCA=y
-CONFIG_BT_QCA=m
+CONFIG_BT_HCIUART_AG6XX=y
+CONFIG_BT_HCIUART_MRVL=y
+CONFIG_BT_HCIUART_NOKIA=m
+CONFIG_BT_NXPUART=m
+CONFIG_BT_MTKUART=m
+
+# --- SDIO and the remaining USB dongles -------------------------------------
+# Cheap breadth: each is a small =m leaf, so the cost is squashfs bytes on an
+# image that already ships 1.9 GB of firmware.
+CONFIG_BT_HCIBTSDIO=m
+CONFIG_BT_MTKSDIO=m
+CONFIG_BT_MRVL=m
+CONFIG_BT_MRVL_SDIO=m
+CONFIG_BT_HCIBCM203X=m
+CONFIG_BT_HCIBPA10X=m
+CONFIG_BT_HCIBFUSB=m
+
+# Virtual controllers: BT_VIRTIO gives the QEMU boot gate a Bluetooth device to
+# find, and BT_HCIVHCI lets bluetoothd be exercised on a machine with no radio
+# at all — both are how you tell "driver missing" from "hardware missing".
+CONFIG_BT_VIRTIO=m
+CONFIG_BT_HCIVHCI=m
 
 # --- disk controllers: SATA / NVMe / SCSI / USB ----------------------------
 # =y for the boot path (the live medium and the target disks must be visible
