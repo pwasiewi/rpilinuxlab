@@ -167,3 +167,10 @@ dev-python/mcp-types
 # overlay layer, so one line covers amdkde/amdkdehard/nvidiahard/intelhard/
 # corehard.
 dev-util/perf
+
+# app-misc/keyd (::pwr, imported from ::guru 2026-09-09): key remapping daemon,
+# KEYWORDS="~amd64 ~arm64 ~x86" upstream, so a bare atom like ddcci above.
+# acct-group/keyd needs no entry: acct-group.eclass keywords it stable on amd64.
+# Only the *hard profiles list the atom (amdkdehard and its children); this file
+# is the shared 'common' layer, so the keyword is harmless where it is unused.
+app-misc/keyd

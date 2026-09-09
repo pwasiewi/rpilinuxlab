@@ -24,3 +24,10 @@ app-forensics/lynis **
 dev-util/glslang
 dev-util/spirv-tools
 dev-util/spirv-headers
+
+# app-misc/keyd (::pwr, imported from ::guru 2026-09-09). Inherited from
+# rpi400kde via PROF_PKGS, and repeated here because xarm's confdir sync takes
+# exactly ONE directory (sysroot_sync_portage_confdir deletes every xprofile-*
+# then copies from XARM_PORTAGE_CONFDIR alone) — rpi400kde.keywords never
+# reaches this profile's cross build. acct-group/keyd needs no entry.
+app-misc/keyd ~arm64

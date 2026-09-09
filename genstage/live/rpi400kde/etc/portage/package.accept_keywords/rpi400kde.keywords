@@ -134,3 +134,9 @@ acct-group/ntfy ~arm64
 # acct-user/bitcoin & acct-group/bitcoin are stable arm64 (eclass keywords).
 net-p2p/bitcoin-cash-node-bin ~arm64
 net-misc/elopool ~arm64
+
+# --- keyd (2026-09-09) ------------------------------------------------------
+# app-misc/keyd (::pwr, imported from ::guru): KEYWORDS="~amd64 ~arm64 ~x86".
+# acct-group/keyd needs no entry — acct-group.eclass keywords it stable arm64,
+# same as the bitcoin pair above.
+app-misc/keyd ~arm64
