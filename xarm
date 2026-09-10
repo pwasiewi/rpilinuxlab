@@ -285,7 +285,8 @@ sysroot_write_makeconf() {
 # an etc/portage tree) are copied in as xprofile-<basename>. A profile that
 # sets no confdir just cleans up the previous one's files. env/ is not synced:
 # package.env fragments must reference env files the sysroot already has, or
-# the layer grows them under profile-specific names by hand.
+# the layer grows them under profile-specific names by hand. savedconfig/ is
+# the exception to the prefix rule and is handled separately below.
 sysroot_sync_portage_confdir() {
     local sub src dst f n=0
     # profile/package.provided is in the list because a cross sysroot sometimes
@@ -310,10 +311,30 @@ sysroot_sync_portage_confdir() {
             done
         fi
     done
+    # savedconfig/ is the one fragment class that cannot take the xprofile-
+    # prefix: savedconfig.eclass looks its file up by exact name — CATEGORY/PF,
+    # then CATEGORY/P, then CATEGORY/PN — so a renamed copy is simply never
+    # found and the package silently installs everything. It is also the one
+    # class nothing else writes into the sysroot: the eclass SAVES its
+    # regenerated config into the image (and from there into ROOT), never back
+    # into PORTAGE_CONFIGROOT. That makes wiping the tree on every sync safe,
+    # and it is what keeps a profile switch from leaving the previous board's
+    # trim behind — the same "rewritten, never accumulated" contract the
+    # xprofile-* files above get from their -delete.
+    local sc="${SYSROOT}/etc/portage/savedconfig"
+    [[ -n ${TARGET} && ${SYSROOT} == /usr/*-* ]] ||
+        die "refusing to touch savedconfig: SYSROOT='${SYSROOT}' does not look like a crossdev sysroot"
+    command rm -rf "${sc}"
+    local sn=0
+    if [[ -n ${PORTAGE_CONFDIR} && -d ${PORTAGE_CONFDIR}/savedconfig ]]; then
+        mkdir -p "${sc}"
+        command cp -a "${PORTAGE_CONFDIR}/savedconfig/." "${sc}/"
+        sn=$(find "${sc}" -type f | wc -l)
+    fi
     if [[ -n ${PORTAGE_CONFDIR} ]]; then
         [[ -d ${PORTAGE_CONFDIR} ]] ||
             die "XARM_PORTAGE_CONFDIR=${PORTAGE_CONFDIR}: not a directory"
-        info "Synced ${n} xprofile-* fragment(s) from ${PORTAGE_CONFDIR}"
+        info "Synced ${n} xprofile-* fragment(s) + ${sn} savedconfig file(s) from ${PORTAGE_CONFDIR}"
     fi
 }
 
