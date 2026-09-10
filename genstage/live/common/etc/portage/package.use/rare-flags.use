@@ -38,6 +38,18 @@ media-libs/libmypaint gegl
 media-libs/libvpl-tools dri
 media-libs/xine-lib xvmc
 media-plugins/gst-plugins-meta mpeg
+# NOT optional as of 1.2.29: the build FAILS to link without it. Upstream gates
+# src/tagfetcher/acoustidclient.cpp behind HAVE_TAGFETCHER, which DEPENDS on
+# HAVE_CHROMAPRINT (CMakeLists.txt:314), but leaves src/settings/
+# acoustidsettingspage.cpp in the unconditional source list (:729) — and that
+# file calls AcoustidClient::HasCompiledApiKey(). With USE=-chromaprint the
+# caller is compiled and the callee is not:
+#   libstrawberry_lib.a(acoustidsettingspage.cpp.o): undefined reference to
+#   `AcoustidClient::HasCompiledApiKey()'
+# Upstream's CMake defaults CHROMAPRINT to ON, so only distros that turn it off
+# — i.e. Gentoo's IUSE default — see this. Costs one small dep
+# (media-libs/chromaprint) and restores tag fetching. Verified 2026-09-10.
+media-sound/strawberry chromaprint
 media-video/mplayer faac
 media-video/sonic-snap mpeg
 media-video/vdrsync dvdr
