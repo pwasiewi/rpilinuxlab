@@ -1,0 +1,20 @@
+# USE flags for the 'zero' board profile. 'xarm setup'/'xarm tune' copy this
+# into the shared arm64 sysroot as package.use/xprofile-zero.use.
+
+# sys-kernel/linux-firmware installs 2.0 GB by default -- more than the whole
+# zero image. savedconfig cuts that to the ~108 KB this board actually needs
+# (see savedconfig/sys-kernel/linux-firmware).
+#
+#   savedconfig    honour the keep-list; without it the emerge is 2.0 GB
+#   -deduplicate   REQUIRED_USE forbids it together with savedconfig
+#   -initramfs     default-on, and wrong here twice over: it builds an AMD
+#                  microcode image (there is no AMD CPU on a BCM2837) and it
+#                  arms mount-boot_pkg_preinst, which insists on a mounted
+#                  /boot -- fatal in a cross emerge with --root=
+#   -compress-*    default-off, pinned so a global USE cannot turn it on:
+#                  sys-kernel/raspberrypi-image ships no .config, so whether
+#                  the prebuilt kernel has FW_LOADER_COMPRESS_XZ cannot be
+#                  checked here, and a compressed mt7662.bin that the loader
+#                  cannot decompress fails at request_firmware() time -- on
+#                  the board, not in the build
+sys-kernel/linux-firmware savedconfig -deduplicate -initramfs -compress-xz -compress-zstd

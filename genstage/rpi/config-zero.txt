@@ -26,4 +26,34 @@ dtparam=spi=on
 # USB controller in peripheral/OTG mode, so g_ether can make the board appear
 # to the machine at the other end of the cable as a USB network adapter.
 # Plug into the USB port (the inner one), not PWR IN.
+#
+# The overlay's own default is dr_mode="otg" (checked in the compiled
+# dwc2.dtbo, and the base DTB's usb@7e980000 node sets no dr_mode, no
+# id-gpios and no usb-role-switch — so the role comes from the dwc2
+# controller's own ID-pin sensing, nothing else). The ADAPTER therefore picks
+# the role at plug time, and both uses of the port work without editing this
+# file:
+#
+#   plain micro-USB data cable to a PC   ID floating -> peripheral role,
+#                                        g_ether binds, usb0 comes up at the
+#                                        address the profile pins
+#   micro-USB OTG adapter + WiFi stick   ID pulled  -> host role, the COMFAST
+#                                        low         CF-922AC (MT7612U)
+#                                                    enumerates, mt76x2u binds
+#
+# It senses the ADAPTER, not the device: a WiFi stick on a plain micro-B cable
+# leaves ID floating and the port stays a gadget. A cheap adapter that does not
+# actually pull ID low behaves the same way — that is the usual cause of "host
+# mode does not work", not the overlay.
+#
+# The two roles are mutually exclusive: the Zero 2 W has exactly ONE data port
+# (the second micro-USB, PWR IN, has no data lines to the SoC), so whenever the
+# CF-922AC is plugged in there is no usb0 and no ssh over the gadget link —
+# reach the board over WiFi or the serial console below. Power from PWR IN in
+# that case; the stick draws up to ~450 mA on TX.
+#
+# To take the adapter out of the decision, pin the role explicitly — at the
+# cost of being able to hot-swap between the two:
+#   dtoverlay=dwc2,dr_mode=host        USB WiFi always, gadget never
+#   dtoverlay=dwc2,dr_mode=peripheral  gadget always, USB WiFi never
 dtoverlay=dwc2

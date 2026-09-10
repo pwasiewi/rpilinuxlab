@@ -1,0 +1,43 @@
+# COMFAST CF-922AC USB WiFi adapter on the zero image -- two jobs.
+#
+# The card is a MediaTek MT7612U (dual-band 802.11ac, 2x2). The driver is
+# in-tree mt76x2u and sys-kernel/raspberrypi-image already ships it, together
+# with mt76, mt76-usb, mt76x02-lib, mt76x02-usb and mt76x2-common, so nothing
+# out-of-tree and no DKMS is involved. What the board does need is the
+# firmware pair (mediatek/mt7662.bin + mediatek/mt7662_rom_patch.bin, trimmed
+# out of sys-kernel/linux-firmware by etc/portage/savedconfig/) and the two
+# rules below.
+
+# 1. ZeroCD. The stick powers up as USB MASS STORAGE -- 0e8d:2870, a
+#    "MediaTek Flash autorun" CD-ROM carrying a Windows installer -- and it
+#    does not fall back to WiFi mode on its own (measured on nvhard: still a
+#    CD-ROM after 200 s). A standard SCSI eject makes the firmware
+#    re-enumerate as 0e8d:7612, at which point mt76x2u binds off the modalias
+#    with no further help.
+#
+#    eject(1) comes from sys-apps/util-linux and is therefore already in every
+#    stage3; sys-apps/usb_modeswitch would pull dev-lang/tcl and libusb onto a
+#    512 MB board to send the same SCSI command.
+#
+#    Matched on the BLOCK device rather than the USB device on purpose: by the
+#    time sr0 appears the node exists and the drive answers (on nvhard the gap
+#    was ~1 s), and ATTRS{} walks up to the USB parent by itself, so this does
+#    not depend on 60-persistent-storage.rules having run first.
+ACTION=="add", SUBSYSTEM=="block", KERNEL=="sr[0-9]*", \
+    ATTRS{idVendor}=="0e8d", ATTRS{idProduct}=="2870", \
+    RUN+="/usr/bin/eject /dev/%k"
+
+# 2. A predictable interface name. wlan0 is the ONBOARD brcmfmac43436 (SDIO,
+#    no usable path, so udev leaves the kernel name alone). The USB stick
+#    would otherwise be named by policy -- wlx<mac> or a path name that moves
+#    with the port -- which makes /etc/conf.d/net unwritable in advance. Pin
+#    it to wlanac, outside the kernel's wlanN namespace so the rename can
+#    never collide with a name mac80211 handed out itself.
+#
+#    Must stay numbered below 80-net-setup-link.rules, whose NAME assignment
+#    is guarded by NAME=="" -- first writer wins.
+#
+#    Matched on the driver, not the id pair, so any MT7612U-class stick lands
+#    on the same name. One at a time: a second one would try to take wlanac
+#    too, the rename would fail and it would keep its kernel name.
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="mt76x2u", NAME="wlanac"

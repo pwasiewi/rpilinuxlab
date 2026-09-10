@@ -1,0 +1,13 @@
+# Keywords for the 'zero' board profile. 'xarm setup'/'xarm tune' copy this
+# into the shared arm64 sysroot as package.accept_keywords/xprofile-zero.keywords.
+#
+# The sysroot's make.conf pins ACCEPT_KEYWORDS to stable arm64 (see the xarm
+# managed block: ~arm64 once pulled a gcc the cross toolchain could not match),
+# so anything ~arm64-only has to be named here.
+
+# linux-firmware has never been keyworded stable on any arch. The zero image
+# needs exactly two of its files -- mediatek/mt7662{,_rom_patch}.bin, the
+# firmware the mt76x2u driver loads for the COMFAST CF-922AC (MT7612U) USB
+# adapter -- and takes them via savedconfig; see package.use/zero.use and
+# savedconfig/sys-kernel/linux-firmware.
+sys-kernel/linux-firmware ~arm64

@@ -46,6 +46,7 @@ generated files — only the env/conf variable matters there.
 | rpi400 | Pi 400 (BCM2711) | cortex-a72 | stage3 unpack (`arm64`) | eth0 192.168.0.200 |
 | rpi3   | Pi 3 (BCM2710)   | cortex-a53 | stage3 unpack (`arm64`) | eth0 192.168.0.201 |
 | zero2w | Pi Zero 2 W + e-Paper | cortex-a53 | tiny rootfs (cross-emerge) | usb0 10.0.0.2 |
+| zero   | Pi Zero 2 W + e-Paper | cortex-a53 | stage3 unpack (`arm64`) | usb0 10.0.0.2, WiFi prepared |
 | amd64  | native host | — | catalyst native | — |
 
 ## Per-profile build trees
@@ -59,6 +60,46 @@ describe the same hardware with different init systems, and each keeps its own
 card image. Bare `xstage arm64` (no profile) uses plain
 `arm64sd` as a scratch tree. `xstage clean all` removes `arm64sd*` — all
 variants at once; `xp <profile> xstage arm64 clean` removes just one.
+
+## Wireless on the `zero` profile
+
+The Zero 2 W has no ethernet, so `zero` ships two radios' worth of support and
+enables neither — credentials are typed on the running board, never baked into
+an image.
+
+| interface | hardware | driver | firmware | bands |
+|---|---|---|---|---|
+| `wlan0`  | onboard, SDIO | `brcmfmac` | `sys-firmware/raspberrypi-wifi-ucode` | 2.4 GHz |
+| `wlanac` | COMFAST CF-922AC on USB | `mt76x2u` | `mediatek/mt7662{,_rom_patch}.bin` | 2.4 + 5 GHz |
+
+The CF-922AC is a MediaTek MT7612U. Its driver is in-tree and
+`sys-kernel/raspberrypi-image` already ships it, so three things are left for
+the profile to do, and all three live in the `zero` overlay layer:
+
+- **Firmware.** `sys-kernel/linux-firmware` installs 2.0 GB by default — more
+  than the whole image. `etc/portage/savedconfig/sys-kernel/linux-firmware`
+  cuts it to the ~108 KB of mt7662 blobs (plus their two compat symlinks, which
+  is what `modinfo` actually asks for). That file is reached through
+  `PROF_BOARD_PORTAGE_CONFDIR`; `xarm setup`/`xarm tune` copy `savedconfig/`
+  into the sysroot **verbatim**, unlike every other fragment class, because
+  `savedconfig.eclass` finds its file by exact `CATEGORY/PF|P|PN` name only.
+- **ZeroCD.** The stick powers up as a USB CD-ROM (`0e8d:2870`) holding a
+  Windows installer and does not time out into WiFi mode on its own.
+  `etc/udev/rules.d/70-cf922ac.rules` ejects it, the firmware re-enumerates as
+  `0e8d:7612`, and `mt76x2u` binds off the modalias. `eject(1)` is util-linux,
+  already in the stage3 — `sys-apps/usb_modeswitch` would drag tcl and libusb
+  onto a 512 MB board to send the same SCSI command.
+- **Naming.** The same rule pins the stick to `wlanac`, outside the kernel's
+  `wlanN` namespace, so `/etc/conf.d/net` can be written before the hardware
+  has ever been seen.
+
+**One port, one role.** `dtoverlay=dwc2` defaults to `dr_mode=otg`, so the
+cable decides: a plain data cable to a PC gives the g_ether gadget and `usb0`,
+a micro-USB OTG adapter gives host mode and the CF-922AC. They are mutually
+exclusive — with the stick plugged in there is no `usb0` and no ssh over the
+gadget link, so reach the board over WiFi or the serial console, and power it
+from PWR IN. `genstage/rpi/config-zero.txt` carries the explicit `dr_mode=`
+alternatives.
 
 ## Variant profiles
 
@@ -90,7 +131,7 @@ a few percent of tuning.
 Required always: `PROF_NAME`, `PROF_KIND` (board|native),
 `PROF_XSTAGE_TARGET`, `PROF_XLAB_TARGET`.
 Required for `PROF_KIND=board`: `PROF_TUPLE`, `PROF_PORTAGE_PROFILE`,
-`PROF_CPU`, `PROF_BOARD` (rpi400|rpi3|zero2w), `PROF_QEMU_MACHINE`,
+`PROF_CPU`, `PROF_BOARD` (rpi400|rpi3|zero2w|zero), `PROF_QEMU_MACHINE`,
 `PROF_DTB`, `PROF_IP`, `PROF_GW`, `PROF_DNS`, `PROF_IMAGE_CMD`.
 Optional: `PROF_BUILD_SUBDIR`, `PROF_PKGS`.
 Derived: the image root password AND the rootfs partition label both default

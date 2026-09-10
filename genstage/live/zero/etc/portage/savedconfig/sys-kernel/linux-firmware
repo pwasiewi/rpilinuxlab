@@ -1,0 +1,25 @@
+# sys-kernel/linux-firmware keep-list for the 'zero' board image.
+#
+# The file NAME is the interface: savedconfig.eclass looks for
+# <CATEGORY>/<PF>, then <CATEGORY>/<P>, then <CATEGORY>/<PN> under
+# ${PORTAGE_CONFIGROOT}/etc/portage/savedconfig/ -- which in a cross emerge is
+# the arm64 sysroot, not the host. 'xarm setup'/'xarm tune' copy this tree in
+# VERBATIM for exactly that reason (every other fragment class gets an
+# xprofile- prefix, which this lookup would never find).
+#
+# Everything not listed here is dropped: default USE installs 2.0 GB of
+# firmware, which is more than the entire zero image. Each line is matched as
+# a substring against the File:/Link: entries of upstream's WHENCE, so listing
+# the real file is enough -- the compat symlink at the top of /lib/firmware is
+# pulled in with it and its target appended to the list automatically
+# (${FILESDIR}/linux-firmware-copy-firmware-r9.patch, which is what puts
+# --firmware-list back into upstream's copy-firmware.sh; upstream itself
+# dropped that option, so this only works with Gentoo's patched ebuild).
+#
+# COMFAST CF-922AC == MediaTek MT7612U, driven by the in-tree mt76x2u module
+# that sys-kernel/raspberrypi-image already ships. modinfo asks for the
+# UNPREFIXED names (mt7662.bin, mt7662_rom_patch.bin); WHENCE ships the blobs
+# under mediatek/ plus a Link: for each, so both ends of that pair have to
+# survive the trim. ~108 KB in total.
+mediatek/mt7662.bin
+mediatek/mt7662_rom_patch.bin
