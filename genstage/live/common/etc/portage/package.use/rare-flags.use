@@ -35,6 +35,13 @@ media-gfx/graphviz devil
 media-gfx/photoqt devil
 media-libs/intel-mediasdk dri
 media-libs/libmypaint gegl
+
+# libdovi: Dolby Vision RPU parsing, used by libplacebo's HDR tone-mapping path
+# (mpv vo=gpu-next). Census 2026-09-14: 2 consumers in ::gentoo + ::pwr
+# (media-libs/libplacebo, media-video/handbrake), so package.use per this file's
+# rule, not PROF_LIVE_USE. Added while preparing nvhard for an HDR monitor.
+media-libs/libplacebo libdovi
+
 media-libs/libvpl-tools dri
 media-libs/xine-lib xvmc
 media-plugins/gst-plugins-meta mpeg
