@@ -1553,6 +1553,11 @@ live_prep_kconfig() {
     # cost is squashfs bytes, not RAM) — every native profile gets it, and
     # profile fragments merged later can still override single symbols
     frags+=("${LIVE_TPL}/kernel/hardware.fragment")
+    # the HDA vendor codecs + the SOF/ACP DSP path — the base configs carry
+    # only the generic HDA parser, which leaves laptop speakers and HDMI
+    # audio silent (Dell + intelhard, 2026-09-17); shared for the same
+    # reason as hardware.fragment
+    frags+=("${LIVE_TPL}/kernel/audio.fragment")
     # extra symbols the post-merge check insists on, per flavour
     # BTF is the whole point of building with clang (tracee's CO-RE reads
     # /sys/kernel/btf/vmlinux), and it is exactly the kind of symbol
@@ -1689,6 +1694,16 @@ live_prep_kconfig() {
 	           CONFIG_BLK_DEV_INITRD CONFIG_OVERLAY_FS ${kcheck}; do
 	    grep -q "^\${sym}=y" .config ||
 	        { echo "FATAL: \${sym} is not =y after merge — the ISO would not boot" >&2; exit 1; }
+	done
+	# 4. the same for audio.fragment's load-bearing modules: a vendor codec
+	#    or the SOF PCI driver silently dropped by olddefconfig (unmet gate)
+	#    is a laptop that boots mute, found only at the first demo
+	for sym in CONFIG_SND_HDA_CODEC_REALTEK CONFIG_SND_HDA_CODEC_HDMI \\
+	           CONFIG_SND_HDA_CODEC_CONEXANT CONFIG_SND_HDA_SCODEC_CS35L41 \\
+	           CONFIG_SND_SOC_SOF_PCI CONFIG_SND_SOC_SOF_TIGERLAKE \\
+	           CONFIG_SND_SOC_INTEL_SOUNDWIRE_SOF_MACH; do
+	    grep -q "^\${sym}=m" .config ||
+	        { echo "FATAL: \${sym} is not =m after merge — audio.fragment lost a gate" >&2; exit 1; }
 	done
 	EOF
 }
