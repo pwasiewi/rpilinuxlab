@@ -1355,7 +1355,16 @@ net-libs/nghttp2
 #net-libs/nodejs
 net-libs/rpcsvc-proto
 net-libs/serf
-net-libs/webkit-gtk
+# net-libs/webkit-gtk is deliberately NOT keyworded here. A bare atom accepts
+# ~amd64 in EVERY slot, which is not what this stack wants: slots 4.1 and 6 are
+# stable at 2.52.6-r410/-r600 and are to stay there, while a bare entry would
+# pull 2.54.0 in both — two of the longest C++ builds in the tree, for nothing
+# (they are also why net-libs/webkit-gtk is capped to j12 in package.env).
+# The ONLY ~arch webkit this stack needs is slot 4, which ::gentoo dropped and
+# ::pwr carries: Cisco Secure Client's acwebhelper links libwebkit2gtk-4.0.so.37
+# and slots 4.1/6 do not substitute (different soname, and only the :4 ebuild
+# builds -DUSE_SOUP2=ON). That one is pinned by exact version in image.keywords
+# as '=net-libs/webkit-gtk-2.48.3-r1 ~amd64' — keep it there, not here.
 net-misc/bridge-utils
 net-misc/curl
 net-misc/dropbox
