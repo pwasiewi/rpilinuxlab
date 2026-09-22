@@ -1262,7 +1262,6 @@ media-libs/libwebp
 media-libs/libwmf
 media-libs/libzmf
 media-libs/mesa
-media-libs/mesa
 media-libs/nv-codec-headers
 media-libs/nvidia-vaapi-driver
 #media-libs/opencv
@@ -1799,3 +1798,6 @@ dev-python/libusb1
 net-misc/ntfy-bin
 acct-group/ntfy
 acct-user/ntfy
+
+# 2026-09-21: dev-python/jiter-0.17 (::stuff) needs >=maturin-1.15, ~amd64 only
+dev-util/maturin

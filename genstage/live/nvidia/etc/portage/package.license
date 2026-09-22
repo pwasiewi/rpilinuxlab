@@ -3,3 +3,9 @@
 dev-python/flashinfer-python NVIDIA-SDK
 # trezor-suite-bin (::pwr) — moved from the live-overlay 2026-09-07
 app-crypt/trezor-suite-bin T-RSL
+# nvidia-cutlass-dsl (and its libs-* halves) were installed under the NVIDIA-CUDA
+# label; ::stuff relabelled every version to NVIDIA-CUTLASS (same NVIDIA terms),
+# so a --newuse rebuild of the pinned 4.5.2 is licence-masked without this.
+dev-python/nvidia-cutlass-dsl NVIDIA-CUTLASS
+dev-python/nvidia-cutlass-dsl-libs-base NVIDIA-CUTLASS
+dev-python/nvidia-cutlass-dsl-libs-cu13 NVIDIA-CUTLASS

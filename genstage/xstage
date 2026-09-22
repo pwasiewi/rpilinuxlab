@@ -2668,7 +2668,7 @@ cmd_live_rmkernel() {
     need_root
     local ver="${1:-}"
     [[ -n ${ver} ]] ||
-        die "Usage: $0 ${TGT} rmkernel <version>   (e.g. rmkernel 7.1.5)"
+        die "Usage: $0 ${TGT} rmkernel <upstream version>   (e.g. rmkernel 7.1.5 — not the /lib/modules name 7.1.5-zen1-x86_64)"
     [[ -d ${LIVE_ROOT} ]] || die "No live tree at ${LIVE_ROOT}"
 
     # Refuse the SELECTED kernel, whichever it is. Not "select a newer one":
@@ -2709,6 +2709,35 @@ cmd_live_rmkernel() {
 
     [[ ${#victims[@]} -gt 0 || ${#vdb[@]} -gt 0 ]] ||
         die "Nothing matching kernel ${ver} in ${LIVE_ROOT}"
+
+    # The argument is the UPSTREAM version ('7.2.3'), which is what the sources
+    # package carries. Passing the /lib/modules name ('7.2.3-zen1-x86_64')
+    # instead matches SOME of the globs above and not others: /lib/modules/<ver>
+    # and the bare /boot pair are collected, while the 12 GB built source tree,
+    # the .old and .img boot files, the genkernel cpio and the vdb package are
+    # all missed -- and the guard above stays quiet, because victims is not
+    # empty. Deleting a package's files while leaving the package merged is
+    # worse than either doing the job or refusing it, so name the mistake.
+    # The tell is exact: an installed *sources package whose version is a strict
+    # prefix of what was passed. An orphaned /lib/modules left behind by an
+    # already-unmerged kernel -- the case the nullglob comment above is about --
+    # has no such package and still removes normally.
+    # (2026-09-22, found while moving the four hard images 7.2.3 -> 7.2.7.)
+    if [[ ${#vdb[@]} -eq 0 ]]; then
+        shopt -s nullglob
+        local s pv
+        for s in "${LIVE_ROOT}/var/db/pkg/sys-kernel/"*sources-*; do
+            [[ -d ${s} ]] || continue
+            pv=$(basename "${s}")
+            pv="${pv##*sources-}"
+            # a revbump still takes the bare version: '*sources-${ver}-'* covers -rN
+            [[ ${pv} =~ ^(.+)-r[0-9]+$ ]] && pv="${BASH_REMATCH[1]}"
+            [[ ${ver} == "${pv}"-* ]] || continue
+            shopt -u nullglob
+            die "'${ver}' looks like the /lib/modules name, not a kernel version — sys-kernel/$(basename "${s}") is the package that owns this kernel. Re-run with: rmkernel ${pv}"
+        done
+        shopt -u nullglob
+    fi
 
     # a tree with exactly one kernel left is not a tree to take a kernel from.
     # Count what does NOT belong to ${ver} rather than comparing array sizes.
