@@ -1629,6 +1629,7 @@ sys-libs/tdb
 sys-libs/tevent
 sys-libs/zlib
 sys-power/acpi
+sys-power/asusctl
 sys-power/bbswitch
 sys-power/cpufrequtils
 sys-power/powertop

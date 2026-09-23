@@ -140,10 +140,35 @@ CONFIG_IPU_BRIDGE=m
 CONFIG_VIDEO_IPU3_CIO2=m
 CONFIG_VIDEO_INTEL_IPU6=m
 CONFIG_INTEL_VSC=m
-# NOTE: the AMD ISP (isp4) has no Kconfig symbol in 7.1.5-zen, and the
-# atomisp/ipu3-imgu drivers live under drivers/staging, which these images do
-# not enable (CONFIG_STAGING is unset). Nothing to add for the Krackan iGPU —
-# kdehard's own camera is plain USB UVC anyway.
+# INT3472 is the camera power controller (TPS68470 PMIC, uP6641Q, or discrete
+# GPIOs + power gates) that switches the sensor ON. Without it every IPU3/6/7
+# sensor below enumerates and then never answers — so until 2026-09-23 the
+# IPU6 line above plus eight laptop sensors were configured for cameras that
+# could not work. Built in (=y), not =m, as its Kconfig help asks: on
+# Chrome-OS-designed machines it provides an ACPI OpRegion that must exist
+# before the sensors probe. All its dependencies are =y in these images.
+CONFIG_INTEL_SKL_INT3472=y
+# Staging media (2026-09-23). STAGING itself is opened in hardware.fragment;
+# repeated here so this fragment stands on its own for any profile using it.
+# Both drivers below have their firmware in linux-firmware already
+# (intel/ipu3-fw.bin + irci_*.bin; intel/ipu7_fw.bin + ipu7ptl_fw.bin).
+#   IPU3_IMGU  the ISP half of Skylake/Kaby Lake IPU3 (Surface & co.); CIO2
+#              above is only the receiver, libcamera's ipu3 pipeline needs both
+#   IPU7       Lunar Lake / Panther Lake laptop cameras (2024+); capped at =m
+#              by 'depends on IPU_BRIDGE || !IPU_BRIDGE' with IPU_BRIDGE=m
+# Deliberately NOT enabled from the same menu:
+#   atomisp    Bay/Cherry Trail ISP — needs the INTEL_ATOMISP platform switch
+#              plus PMIC_OPREGION and still yields images on few devices
+#   MAX96712   automotive GMSL2 deserializer, no laptop carries one
+#   STAGING_MEDIA_DEPRECATED — drivers queued for removal
+# Userspace note: IPU6/IPU7 produce raw Bayer; a usable picture needs libcamera
+# (software ISP), UVC-style plug-and-play does not apply.
+CONFIG_STAGING=y
+CONFIG_STAGING_MEDIA=y
+CONFIG_VIDEO_IPU3_IMGU=m
+CONFIG_VIDEO_INTEL_IPU7=m
+# The AMD ISP (isp4) had no Kconfig symbol as of 7.1.5-zen; kdehard's own
+# camera is plain USB UVC anyway.
 
 # --- MIPI sensor sub-drivers ----------------------------------------------
 # MEDIA_SUBDRV_AUTOSELECT=y already pulls whatever a platform driver selects;

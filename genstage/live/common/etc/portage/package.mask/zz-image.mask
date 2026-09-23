@@ -23,6 +23,21 @@
 # app-emulation/qemu-10.2.3 requires ~sys-firmware/edk2-bin-202408
 >sys-firmware/edk2-bin-202408
 
+# libddcutil aborts its client when a monitor answers VCP xDF with a version
+# outside the MCCS spec — this host's PG34WCDN says 2.18 — so ddcui dies with
+# SIGABRT the moment the feature view opens. ::pwr carries the fix
+# (project_ddcutil_fork). Unlike the entries around it this mask is NOT pinned
+# to a version, and deliberately so: ::gentoo shipped 2.2.7 four hours before
+# the ::pwr fork of the SAME version existed, the host merged the unpatched
+# build, and 'emerge --update' will never swap a package that differs only by
+# repository — it ran broken for two days (2026-09-23, fixed with --newrepo).
+# A version-pinned mask would let the next ::gentoo release repeat that
+# silently. ddcui itself needs no fork: the bug is entirely in libddcutil.
+# Cost of this shape: ::pwr must be bumped for every ddcutil release, or the
+# image stays on the forked version. 'pwrup check app-misc/ddcutil' is the
+# signal.
+app-misc/ddcutil::gentoo
+
 # Same GitHub-regenerated-tarball failure as 1.6.0 above, now on 1.7.0 (size
 # drifted 8 bytes: 3192054 -> 3192062). Content is unchanged - the tarball's
 # pax header still carries commit 1ca15a3d, which is what the
