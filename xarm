@@ -244,6 +244,10 @@ sysroot_write_makeconf() {
 	# binpkgs for the Pi: ROOT-relative, served by 'xarm binhost'. The name
 	# carries the profile (${PROFILE}) — see PKGDIR_NAME in xarm.
 	PKGDIR="\${ROOT}var/cache/${PKGDIR_NAME}"
+	# Share the HOST distdir. Without this line Portage falls back to its
+	# default /var/cache/distfiles, which sits on the host's root fs and
+	# outside ramstart1's bind mounts — 8.3G had piled up there by 2026-09-24.
+	DISTDIR="$(portageq distdir)"
 	FEATURES="buildpkg -news"
 	# qemu-user chroot cannot take the namespace sandboxes (Embedded Handbook)
 	FEATURES="\${FEATURES} -pid-sandbox -ipc-sandbox -network-sandbox"
@@ -867,6 +871,8 @@ cmd_chroot() {
         chroot_mount bind /var/db/repos/gentoo "${grepo}"
     fi
     chroot_mount bind  /var/cache/distfiles "${ddir}"
+    # the sysroot make.conf names the host DISTDIR path — make it valid inside too
+    [[ ${ddir} == /var/cache/distfiles ]] || chroot_mount bind "${ddir}" "${ddir}"
 
     # Portage's pid-sandbox (unshared PID namespace) breaks qemu-user: every
     # guest process dies with "qemu: qemu_thread_create: Invalid argument"
