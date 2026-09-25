@@ -129,6 +129,12 @@ app-misc/ddcci-driver-linux
 # KEYWORDS="-* ~amd64", pinned distfile, so a bare atom like ddcci above.
 games-util/modrinth-app-bin
 
+# games-action/prismlauncher (::pwr 11.1.0, copied from ::gentoo 11.0.3
+# 2026-09-25): ::gentoo stable is 9.4-r1; the ::pwr bump is KEYWORDS="~amd64
+# ~arm64" with a pinned release tarball, so a bare atom. Pulls
+# app-text/cmark, dev-cpp/tomlplusplus and dev-qt/qtnetworkauth (all stable).
+games-action/prismlauncher
+
 # nvidiahard, 2026-08-19. The Trezor set (::pwr): trezor-suite-bin is
 # KEYWORDS="-* ~amd64" (prebuilt Electron, amd64 only by construction),
 # dev-python/trezor carries the trezorctl CLI, and the four small ::pwr
