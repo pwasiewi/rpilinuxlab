@@ -33,7 +33,7 @@ root. `xp` exports these together with `XP_LAB_DIR`, so they reach
 ```
 xp profiles                      # rpi3 rpi400 rpi400kde rpi400hard rpi400openrc
                                  #   zero zero2w | amd64 amdkde amdkdehard
-                                 #   nvidiahard intelhard intelgnome
+                                 #   nvidiahard intelhard corehard ryzenhard intelgnome
 sudo xp rpi400kde setup          # xarm toolchain + xstage catalyst dirs
      xp rpi400kde seed           # stage3 in the profile's flavour -> dl/,
                                  #   sha256 + releng GPG verified (no root)

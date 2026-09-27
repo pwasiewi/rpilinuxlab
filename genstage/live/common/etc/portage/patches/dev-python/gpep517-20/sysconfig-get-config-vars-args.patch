@@ -2,7 +2,11 @@ patched_config_vars() must mirror sysconfig.get_config_vars(*args):
 new setuptools (_distutils/compilers/C/unix.py _require_config_vars)
 calls it with 9 positional names and gpep517's cross monkeypatch
 raised TypeError, breaking EVERY cross wheel build (cffi, 2026-08-16).
-Upstream v20 has the same signature; not yet fixed there.
+Upstream v20 has the same signature. Fixed upstream in v23 (identical
+'return [cvars.get(name) for name in args] if args else cvars'), where this
+patch no longer applies and broke the whole ryzenhard pass 1 (2026-09-27) —
+hence the version-scoped directory gpep517-20: Portage applies it to
+gpep517-20 only.
 
 --- a/gpep517/build.py
 +++ b/gpep517/build.py

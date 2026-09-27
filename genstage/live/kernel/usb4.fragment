@@ -1,0 +1,28 @@
+# Kconfig fragment: USB4 / Thunderbolt, as modules — for eGPU docks, TB
+# docks and TB networking on machines that have a USB4 host router.
+#
+# Before this the hard images had no USB4 at all ('# CONFIG_USB4 is not
+# set') and no native PCIe hotplug, so a Thunderbolt eGPU or dock could never
+# enumerate, whatever the machine. None of the current laptops needs it (the
+# Vivobook 18 M1807GA has USB 3.2 Gen 1 only, the T14 image target is
+# covered for plain USB-C), but a future board or laptop with a USB4 port
+# should work out of the box instead of waiting for a kernel rebuild.
+#
+# Everything loadable: the thunderbolt module binds only to a USB4 host
+# interface (PCI class 0c03, prog-if 40), so machines without one never load
+# it. Device authorization is sys-apps/bolt (boltd + boltctl, and the Plasma
+# KCM kde-plasma/plasma-thunderbolt), listed in amdkdehard's package list.
+# Hardening note: bolt's default policy asks before authorizing a new device;
+# with the AMD/Intel IOMMU on, the kernel additionally reports "iommu DMA
+# protection" and PCIe tunnels only open after authorization.
+
+# --- the USB4/Thunderbolt connection manager (drivers/thunderbolt) ---------
+CONFIG_USB4=m
+# IP over Thunderbolt/USB4 (host-to-host cable networking).
+CONFIG_USB4_NET=m
+
+# --- PCIe side of the tunnel -----------------------------------------------
+# Native PCIe hotplug: a tunnelled eGPU or dock appears as a hot-added PCIe
+# bridge; without pciehp nothing behind the tunnel is ever enumerated.
+# bool, so =y (HOTPLUG_PCI itself is already =y in the base).
+CONFIG_HOTPLUG_PCI_PCIE=y

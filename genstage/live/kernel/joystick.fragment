@@ -1,0 +1,83 @@
+# Kconfig fragment: game controllers — gamepads, wheels, Bluetooth pads.
+#
+# What the hard images had before this (amdkdehard kernel.config, 7.2.7-zen,
+# 2026-09-27): INPUT_JOYSTICK=y with no joystick driver under it, no xpad,
+# no joydev, HID_SONY=y without rumble, and every other vendor pad driver
+# off. Steam Input covers some of that from userspace (it reads hidraw and
+# emits through uinput, both already on), but games that read evdev or
+# /dev/input/js* directly, Bluetooth LE pads (which bluez delivers through
+# uhid) and force feedback all need the kernel side.
+#
+# One dependency matters beyond the pads: HID_PLAYSTATION and HID_LOGITECH
+# both 'depends on LEDS_CLASS_MULTICOLOR', which was off. That silently hid
+# the DualSense driver AND the whole Logitech family, including
+# hid-logitech-dj/-hidpp — so Unifying/Bolt receivers had no driver while the
+# image ships app-misc/solaar. Turning the LED class on fixes both.
+#
+# Everything is =m: nothing is resident until udev matches a device. Cost is
+# squashfs bytes, not RAM. Listed in amdkdehard's PROF_LIVE_KFRAGS (and
+# restated by nvidiahard, which re-sets that variable), so every hard profile
+# gets it.
+
+# --- core ------------------------------------------------------------------
+# /dev/input/js* — the legacy joystick API; older native games and some
+# emulators still open it instead of evdev.
+CONFIG_INPUT_JOYDEV=m
+CONFIG_INPUT_JOYSTICK=y
+CONFIG_INPUT_FF_MEMLESS=y
+# Bluetooth LE HID (Xbox Series pads on current firmware, many cheap pads):
+# bluez hands those to the kernel through /dev/uhid. Classic BT HID uses
+# BT_HIDP, already =m.
+CONFIG_UHID=m
+# Controller battery level in Plasma's battery applet (power_supply class).
+CONFIG_HID_BATTERY_STRENGTH=y
+# The LED class the PlayStation and Logitech drivers depend on (see header).
+CONFIG_LEDS_CLASS_MULTICOLOR=m
+
+# --- Xbox ------------------------------------------------------------------
+# xpad: wired Xbox 360/One/Series and the many third-party pads that
+# present as one; also the Xbox 360 wireless receiver.
+CONFIG_JOYSTICK_XPAD=m
+CONFIG_JOYSTICK_XPAD_FF=y
+CONFIG_JOYSTICK_XPAD_LEDS=y
+# hid-microsoft: Xbox One/Series pads over Bluetooth (rumble).
+CONFIG_HID_MICROSOFT=m
+
+# --- PlayStation -----------------------------------------------------------
+# hid-playstation: DualSense (PS5) incl. touchpad, lightbar, player LEDs.
+CONFIG_HID_PLAYSTATION=m
+CONFIG_PLAYSTATION_FF=y
+# hid-sony stays built in (=y in the base, left alone); it covers DS3/DS4.
+CONFIG_SONY_FF=y
+
+# --- Nintendo, Valve, Google -----------------------------------------------
+# Switch Pro controller and Joy-Cons.
+CONFIG_HID_NINTENDO=m
+CONFIG_NINTENDO_FF=y
+CONFIG_HID_WIIMOTE=m
+# Steam Controller / Steam Deck controls outside the Steam client.
+CONFIG_HID_STEAM=m
+CONFIG_STEAM_FF=y
+CONFIG_HID_GOOGLE_STADIA_FF=m
+
+# --- Logitech: pads, wheels, and the receivers -----------------------------
+CONFIG_HID_LOGITECH=m
+CONFIG_HID_LOGITECH_DJ=m
+CONFIG_HID_LOGITECH_HIDPP=m
+CONFIG_LOGITECH_FF=y
+CONFIG_LOGIRUMBLEPAD2_FF=y
+CONFIG_LOGIG940_FF=y
+CONFIG_LOGIWHEELS_FF=y
+
+# --- generic and budget pads (force feedback) ------------------------------
+CONFIG_HID_DRAGONRISE=m
+CONFIG_DRAGONRISE_FF=y
+CONFIG_HID_GREENASIA=m
+CONFIG_GREENASIA_FF=y
+CONFIG_HID_SMARTJOYPLUS=m
+CONFIG_SMARTJOYPLUS_FF=y
+CONFIG_HID_THRUSTMASTER=m
+CONFIG_THRUSTMASTER_FF=y
+CONFIG_HID_ZEROPLUS=m
+CONFIG_ZEROPLUS_FF=y
+CONFIG_HID_BETOP_FF=m
