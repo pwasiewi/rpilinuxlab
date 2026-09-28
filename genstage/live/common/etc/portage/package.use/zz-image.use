@@ -204,3 +204,22 @@ sys-devel/gcc pgo lto
 # Also relevant if someone reconsiders: binutils trains on the dejagnu TEST
 # SUITE (that is why pgo BDEPENDs dejagnu + bc), which is synthetic, unlike
 # gcc's train stage that compiles gcc itself.
+
+# Rust 1.94 + LLVM/clang 21 diet (2026-09-28). Two build-only chains kept an
+# old Rust (<=1.94, llvm_slot_21) and the whole LLVM 21 toolchain in every
+# hard image, ~2.5 GB each:
+#   lvm2[thin] -> PDEPEND sys-block/thin-provisioning-tools (Rust <=1.94)
+#   app-text/foliate -> dev-libs/gjs -> dev-lang/spidermonkey:140 (the same)
+# No machine here uses LVM thin pools (btrfs, LUKS, plain partitions), so
+# 'thin' goes; plain LVM volumes and snapshots do not need it. This overrides
+# host.use's '>=sys-fs/lvm2-2.03.22-r2 thin' on purpose — host.use stays a
+# verbatim copy of the host's list, and zz-image.use is read last.
+# The atom MUST carry host.use's version range: Portage lets the more
+# specific (versioned) atom win regardless of file order, so a bare
+# 'sys-fs/lvm2 -thin' here was silently ignored (every image kept thin on
+# the first run).
+>=sys-fs/lvm2-2.03.22-r2 -thin
+# foliate left amdkdehard's list; Okular (already in via @pwr-kdegraphics)
+# takes over e-books: epub via app-text/ebook-tools, mobi via
+# kde-apps/kdegraphics-mobipocket (both stable).
+kde-apps/okular epub mobi

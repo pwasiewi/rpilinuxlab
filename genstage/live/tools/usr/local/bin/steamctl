@@ -472,7 +472,26 @@ hdr|env|PROTON_ENABLE_HDR=1
 mesa-fps|env|MANGOHUD=1
 dxvk-hud|env|DXVK_HUD=fps,frametimes
 nvshader|env|__GL_SHADER_DISK_CACHE_SKIP_CLEANUP=1
+fps|env|DXVK_FRAME_RATE=60
+fsr|env|WINE_FULLSCREEN_FSR=1
 '
+# Composite presets: one name expands into several items (added/removed as a
+# group). igpu = the low-end integrated-GPU bundle (Radeon 840M/780M class,
+# 2026-09-28): gamemode for the CPU governor, a 60 fps DXVK cap so the GPU is
+# not pinned at 100 % rendering frames the panel never shows (heat -> clock
+# throttling -> stutter), and GE-Proton's FSR1 so a game set to a lower
+# fullscreen resolution in its own menu is upscaled to the panel.
+COMPOSITES='
+igpu|gamemode fps fsr
+'
+composite_lookup() {
+    local line
+    while IFS= read -r line; do
+        [[ -z ${line} ]] && continue
+        [[ ${line%%|*} == "$1" ]] && { echo "${line#*|}"; return 0; }
+    done <<< "${COMPOSITES}"
+    return 1
+}
 preset_lookup() {  # preset_lookup <name> -> "placement|tokens" or 1
     local line
     while IFS= read -r line; do
@@ -489,6 +508,13 @@ cmd_opts_presets() {
     done <<< "${PRESETS}"
     echo
     echo "gamescope=ARGS overrides its flags, e.g. gamescope='-W 3440 -H 1440 -f --'."
+    echo "fps=N sets the DXVK frame cap (default 60); a second fps=N replaces the first."
+    echo
+    printf '%-10s %s\n' COMPOSITE EXPANDS-TO
+    local n e
+    while IFS='|' read -r n e; do
+        [[ -n ${n} ]] && printf '%-10s %s\n' "${n}" "${e}"
+    done <<< "${COMPOSITES}"
 }
 
 # Launch-option string model: [env...] [wrappers...] %command% [game args...]
@@ -515,11 +541,20 @@ has_tok() { local x; for x in "${@:2}"; do [[ ${x} == "$1" ]] && return 0; done;
 
 # apply_item add|rm <item>  — mutates LO_* arrays
 apply_item() {
-    local mode="$1" item="$2" place tokens spec arg=""
+    local mode="$1" item="$2" place tokens spec arg="" sub
+    if spec=$(composite_lookup "${item}"); then
+        for sub in ${spec}; do apply_item "${mode}" "${sub}"; done
+        return 0
+    fi
     if [[ ${item} == gamescope=* ]]; then arg="${item#gamescope=}"; item=gamescope; fi
+    if [[ ${item} == fps=* ]]; then
+        arg="${item#fps=}"; item=fps
+        [[ ${arg} =~ ^[0-9]+$ ]] || die "fps=N needs a number, got '${arg}'"
+    fi
     if spec=$(preset_lookup "${item}"); then
         place="${spec%%|*}"; tokens="${spec#*|}"
         [[ ${item} == gamescope && -n ${arg} ]] && tokens="gamescope ${arg}"
+        [[ ${item} == fps && -n ${arg} ]] && tokens="DXVK_FRAME_RATE=${arg}"
     elif [[ ${item} == *=* && ${item} != -* ]]; then place=env; tokens="${item}"
     elif [[ ${item} == -* ]]; then place=post; tokens="${item}"
     else place=pre; tokens="${item}"; fi
@@ -527,7 +562,11 @@ apply_item() {
     local first="${tk[0]}"
     if [[ ${mode} == add ]]; then
         case ${place} in
-            env)  has_tok "${first}" "${LO_ENV[@]}"  || LO_ENV+=("${tk[@]}") ;;
+            env)  if [[ ${first} == DXVK_FRAME_RATE=* ]]; then
+                      local -a keep=(); local e
+                      for e in "${LO_ENV[@]}"; do [[ ${e} == DXVK_FRAME_RATE=* ]] || keep+=("${e}"); done
+                      LO_ENV=("${keep[@]}" "${tk[@]}")
+                  else has_tok "${first}" "${LO_ENV[@]}" || LO_ENV+=("${tk[@]}"); fi ;;
             pre)  has_tok "${first}" "${LO_PRE[@]}"  || LO_PRE+=("${tk[@]}") ;;
             post) has_tok "${first}" "${LO_POST[@]}" || LO_POST+=("${tk[@]}") ;;
         esac
@@ -537,7 +576,7 @@ apply_item() {
         local -a src=() dst=(); local x drop=no
         case ${place} in env) src=("${LO_ENV[@]}");; pre) src=("${LO_PRE[@]}");; post) src=("${LO_POST[@]}");; esac
         for x in "${src[@]}"; do
-            if [[ ${x} == "${first}" ]]; then drop=yes; continue; fi
+            if [[ ${x} == "${first}" || ( ${first} == DXVK_FRAME_RATE=* && ${x} == DXVK_FRAME_RATE=* ) ]]; then drop=yes; continue; fi
             if [[ ${drop} == yes && ${place} == pre && ( ${x} == -* || ${x} =~ ^[0-9]+$ ) ]]; then continue; fi
             drop=no; dst+=("${x}")
         done

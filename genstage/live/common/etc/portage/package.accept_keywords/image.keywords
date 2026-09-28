@@ -185,6 +185,11 @@ dev-util/ruff
 # every hard profile) 2026-09-27. ::gentoo has only ~amd64 (2.5.0); bare atom.
 sys-power/uhubctl
 
+# x11-apps/igt-gpu-tools (intel_gpu_top), intelhard + corehard 2026-09-28:
+# ::gentoo has only ~amd64 2.3 (the 9999 has no KEYWORDS, so a bare atom
+# cannot select it).
+x11-apps/igt-gpu-tools
+
 # app-misc/keyd (::pwr, imported from ::guru 2026-09-09): key remapping daemon,
 # KEYWORDS="~amd64 ~arm64 ~x86" upstream, so a bare atom like ddcci above.
 # acct-group/keyd needs no entry: acct-group.eclass keywords it stable on amd64.
