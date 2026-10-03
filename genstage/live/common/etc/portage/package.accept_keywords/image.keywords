@@ -217,5 +217,9 @@ dev-python/opentelemetry-exporter-otlp-common
 # dev-python/httpx2: openai-3.24.0 (::stuff) requires >=httpx2-2.12.0; ::gentoo
 # keeps 2.12.0-2.13.1 at ~amd64 only (the installed 2.10.0 has left the tree).
 # Its runtime deps (anyio 4.14, idna 3.18+, h11 0.16, truststore 0.10) are all
-# stable and already installed, so the bare atom pulls nothing else testing.
+# stable and already installed. ::stuff's split httpx2/httpcore2 pair is masked in
+# zz-image.mask, so this resolves to ::gentoo's combined httpx2.
 dev-python/httpx2
+
+# fastfetch (host.keywords) 2.69.0 needs >=dev-libs/yyjson-0.13.0, ~amd64 only (2026-10-03).
+dev-libs/yyjson

@@ -52,3 +52,17 @@ app-misc/ddcutil::gentoo
 # 26.04 line until the image moves to 26.08 sets; any other set member that
 # shows the same conflict gets the same cap here.
 >=kde-apps/ark-26.04.50
+
+# net-libs/webkit-gtk 2.54.0 (-r411 :4.1, -r601 :6) is stable (seen 2026-10-03); every hard
+# image has 2.52.6 in both slots and binpkgs of it. Each bump is a multi-hour
+# rebuild of two slots that nothing in the images asks for. Hold on 2.52.x; lift
+# deliberately (security release) together with a binpkg build.
+>=net-libs/webkit-gtk-2.54
+
+# ::stuff splits httpx2 2.13.1 into httpx2 + httpcore2 without a blocker against the
+# combined ::gentoo httpx2 (which ships the httpcore2 module itself): pkgs merged
+# httpcore2 first and died on file collisions with the installed httpx2-2.10.0,
+# taking httpx2 and openai-3.24.0 with it (2026-10-03). ::gentoo's httpx2-2.13.1
+# satisfies openai's >=2.12.0 on its own.
+dev-python/httpx2::stuff
+dev-python/httpcore2::stuff
