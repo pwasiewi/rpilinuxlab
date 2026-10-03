@@ -1,0 +1,24 @@
+sci-misc/llama-cpp-9999 user patch (portage applies only *.patch / *.diff here)
+
+0002-cuda-mmq-mul-mat-id-pad-src1-q8-1-issue27792.patch
+  What:  CUDA MMQ mul_mat_id (MoE expert matmul) reads full J-wide tiles past the
+         last used row of src1_q8_1 / ids_dst; the patch pads both buffers.
+         Upstream issue #27792, fix proposed in PR #27044 (the src1_q8_1 hunk);
+         this patch is a superset (also pads ids_dst, floor of 8 rows).
+  Why:   without it a MoE model with experts on the CPU (--n-cpu-moe / -ot) can die
+         on the first request with Xid 31 / illegal memory access on Blackwell
+         (sm_120). Reproduced on nvhard (RTX 5070 Ti, 3/3 deaths without, 0/8 with)
+         and by others on RTX 5060 Ti (#27044 comments, issue #29847).
+  Cost:  none measured; it only enlarges two scratch allocations.
+  Scope: nvidia layer, so every profile with a CUDA llama-cpp gets it (nvidiahard,
+         amdkde). The expert-cache patches 0001/0003 used on nvhard are NOT here:
+         they are opt-in and still under test (llm/night/research/30-*).
+
+Rot check BEFORE each 'pkgs' (the image builds current master; a patch that no
+longer applies aborts the llama-cpp build):
+  git clone --depth 1 https://github.com/ggml-org/llama.cpp /tmp/lc-check &&
+  git -C /tmp/lc-check apply --check "$PWD/0002-cuda-mmq-mul-mat-id-pad-src1-q8-1-issue27792.patch"
+  (run from this directory; last verified OK on master 1537a0a, 2026-10-03)
+
+Remove this patch when upstream merges #27044 or any other fix for #27792: the
+'apply --check' then fails with "patch does not apply" on mmq.cu.
