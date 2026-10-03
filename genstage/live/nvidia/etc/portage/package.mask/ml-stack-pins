@@ -77,3 +77,20 @@
 # out at 4.2.5, which is what is installed and what nothing in this image
 # depends on anyway. Mask the ::stuff version rather than keyword an old sip.
 >=dev-python/wxpython-4.3.1
+# --- 2026-10-03: update-seed died on two more ::stuff bumps (xp nvidiahard pkgs) ---
+# nvidia-cuda-toolkit-13.4.2::stuff vs the installed 13.3.1-1::pwr: tilelang,
+# vllm-9999 and sci-ml/tensorpipe all carry `nvidia-cuda-toolkit:0/13.3.1=` slot
+# deps, and the installed tilelang-0.1.9-4 can no longer be rebuilt (0.1.9 is
+# gone from ::stuff, >0.1.9 is masked above for vLLM) — so the toolkit cannot
+# move until vLLM's tilelang pin moves. Same 13.4 wave as cuda-bindings above.
+>=dev-util/nvidia-cuda-toolkit-13.4
+# fastsafetensors::stuff switched to DISTUTILS_SINGLE_IMPL (PYTHON_SINGLE_TARGET)
+# in EVERY version it still carries (0.2.2-r1, 0.3.3-r1, 0.4.0), but vllm-9999
+# asks for >=fastsafetensors-0.3.2[python_targets_python3_14] — a multi-impl USE
+# dep that a single-impl package can never satisfy. The installed 0.3.3 (r0,
+# multi-impl, gone from the repo) matches it, so hold everything above it. The
+# real fix is in ::pwr: vllm-9999's dep -> [${PYTHON_SINGLE_USEDEP}]; then drop this.
+# Both sides are needed: with only the upper bound, @installed DOWNGRADES to
+# 0.2.2-r1 (also single-impl) and hits the same conflict (2026-10-03, 3rd run).
+>=dev-python/fastsafetensors-0.3.3-r1
+<dev-python/fastsafetensors-0.3.3

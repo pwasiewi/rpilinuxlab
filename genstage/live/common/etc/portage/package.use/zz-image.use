@@ -223,3 +223,12 @@ sys-devel/gcc pgo lto
 # takes over e-books: epub via app-text/ebook-tools, mobi via
 # kde-apps/kdegraphics-mobipocket (both stable).
 kde-apps/okular epub mobi
+
+# EasyEffects plugin packs (hard profiles, 2026-10-03). EasyEffects loads LV2
+# plugins only, so calf needs lv2; calf's jack flag builds only the standalone
+# calfjackhost and REQUIRED_USE ties it to gui (jack? ( gui )), so both go off.
+# lsp-plugins X / zam-plugins opengl build the plugins' own editor windows,
+# which EasyEffects never opens.
+media-plugins/calf lv2 -jack -gui
+media-libs/lsp-plugins -X
+media-plugins/zam-plugins -opengl

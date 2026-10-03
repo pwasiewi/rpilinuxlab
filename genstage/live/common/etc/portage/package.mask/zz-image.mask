@@ -44,3 +44,11 @@ app-misc/ddcutil::gentoo
 # cuda-pathfinder-v1.7.0 tag points to - so only the gzip stream moved. ::pwr
 # carries the same ebuild with a refreshed Manifest (2026-08-24).
 =dev-python/cuda-pathfinder-1.7.0::stuff
+
+# KDE Gear 26.08 reached the tree (2026-10): host.keywords accepts ~amd64 for
+# kde-apps/ark, so @installed proposes ark-26.08.1, but the image's
+# @pwr-kdeutils-26.04 set requires <kde-apps/ark-26.04.50 -> slot conflict and
+# update-seed merges nothing (xp nvidiahard pkgs, 2026-10-03). Hold ark on the
+# 26.04 line until the image moves to 26.08 sets; any other set member that
+# shows the same conflict gets the same cap here.
+>=kde-apps/ark-26.04.50

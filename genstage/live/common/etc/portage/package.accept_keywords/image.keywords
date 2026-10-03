@@ -196,3 +196,26 @@ x11-apps/igt-gpu-tools
 # Only the *hard profiles list the atom (amdkdehard and its children); this file
 # is the shared 'common' layer, so the keyword is harmless where it is unused.
 app-misc/keyd
+
+# EasyEffects 8.0.5 (amdkdehard and every hard child, 2026-10-03): ::gentoo has
+# 8.x only as ~amd64 (7.2.5 is the stable GTK4 line), and 8.x needs the
+# webrtc-audio-processing:2 slot, ~amd64 only (2.1). Slot-limited so the stable
+# :0/:1 slots other consumers use stay on stable keywords.
+media-sound/easyeffects
+media-libs/webrtc-audio-processing:2
+
+# dev-python/opentelemetry-exporter-http-transport (::stuff, new package): the
+# opentelemetry 1.45.0 wave splits it out of exporter-otlp-proto-http, which now
+# requires ~1.45.0 of it. The rest of the family is accepted bare in
+# host.keywords; this one is not there yet (xp nvidiahard pkgs, 2026-10-03).
+dev-python/opentelemetry-exporter-http-transport
+# Same wave: opentelemetry-exporter-otlp-common-1.45.0 is a second new package
+# that exporter-otlp-proto-http-1.45.0 requires (~${PV}). Checked the whole
+# family in ::stuff at 1.45.0 - these two were the only atoms not yet accepted.
+dev-python/opentelemetry-exporter-otlp-common
+
+# dev-python/httpx2: openai-3.24.0 (::stuff) requires >=httpx2-2.12.0; ::gentoo
+# keeps 2.12.0-2.13.1 at ~amd64 only (the installed 2.10.0 has left the tree).
+# Its runtime deps (anyio 4.14, idna 3.18+, h11 0.16, truststore 0.10) are all
+# stable and already installed, so the bare atom pulls nothing else testing.
+dev-python/httpx2
