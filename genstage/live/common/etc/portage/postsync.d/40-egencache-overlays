@@ -1,0 +1,15 @@
+#!/bin/sh
+# Regenerate the metadata cache of every overlay after a sync (2026-10-04).
+# ::gentoo ships a complete md5-cache; overlays either ship none (::stuff) or one that a
+# ::gentoo eclass change invalidates (::pwr). Without this, the FIRST emerge after a sync
+# re-sources those ebuilds one by one (~30-45 s here). --external-cache-only writes only
+# /var/cache/edb/dep, never the repository itself, so a git overlay stays clean.
+# Changes nothing that emerge resolves; only when the work is done.
+jobs=$(nproc)
+for repo in $(portageq get_repos /); do
+	[ "${repo}" = gentoo ] && continue
+	egencache --update --repo="${repo}" --external-cache-only \
+		--jobs="${jobs}" --load-average="${jobs}" ||
+		echo "40-egencache-overlays: egencache failed for ${repo}" >&2
+done
+exit 0

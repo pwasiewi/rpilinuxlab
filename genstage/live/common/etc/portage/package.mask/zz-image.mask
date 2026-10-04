@@ -66,3 +66,10 @@ app-misc/ddcutil::gentoo
 # satisfies openai's >=2.12.0 on its own.
 dev-python/httpx2::stuff
 dev-python/httpcore2::stuff
+
+# Resolver hold (2026-10-04): every 'pkgs' / @world run retried kde-apps/dolphin-26.08.1,
+# which the @pwr-*-26.04 sets cannot take, and backtracked on it each time. Holding it
+# changes nothing that gets merged and cuts resolver backtracks (measured with the
+# nvidia-layer holds: 177 s / 10 backtracks -> 70 s / 2). Lift with the move to the
+# 26.08 sets, together with the ark cap above.
+>=kde-apps/dolphin-26.08

@@ -1,0 +1,26 @@
+# Resolver holds (2026-10-04). Each entry is an update that an INSTALLED package forbids,
+# so emerge can never take it - but it retried every one on every run and backtracked
+# (~10-12 s per backtrack, the whole graph is rebuilt). Holding them at the installed
+# version leaves the merge plan identical and cut 'pkgs' pass 1 from 177 s / 10 backtracks
+# to 70 s / 2 (nvidiahard, measured). A hold that outlives its blocker silently pins the
+# package, so every line names its lift trigger; re-check with this file moved aside:
+#   emerge -puDN @world   ->  "skipped due to a dependency conflict" lists what still blocks.
+
+# ::pwr carries gamescope 3.16.28 (bundled libdisplay-info); ::gentoo 3.16.31 cannot
+# replace it. Lift when ::pwr gets a 3.16.31+ bump.
+>gui-wm/gamescope-3.16.28
+
+# dev-python/cuda-core 1.2.1 and cuda-bindings 13.3.1 (::stuff) require <cython-3.3.
+# Without this the image flips cython 3.2.9 <-> 3.3.0 between runs. Lift when both accept 3.3.
+>=dev-python/cython-3.3
+
+# dev-python/cloudpickle 3.1.2 requires <flit-core-4. Lift when cloudpickle moves.
+# (Image only: the host already has flit-core 4.0.2, so its copy of this file omits it.)
+>=dev-python/flit-core-4
+
+# dev-python/anthropic 1.11.0 (::stuff) requires <docstring-parser-1, and ::pwr's
+# docstring-parser-9999 sorts above it. Lift when anthropic relaxes the bound.
+>=dev-python/docstring-parser-1
+
+# dev-python/pyarrow-24.0.0 pins ~dev-libs/apache-arrow-24.0.0. Lift with pyarrow 25.
+>=dev-libs/apache-arrow-25
