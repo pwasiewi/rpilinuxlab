@@ -140,3 +140,7 @@ net-misc/elopool ~arm64
 # acct-group/keyd needs no entry — acct-group.eclass keywords it stable arm64,
 # same as the bitcoin pair above.
 app-misc/keyd ~arm64
+# --- chezmoi (2026-10-07) ---------------------------------------------------
+# app-admin/chezmoi-bin (::pwr): prebuilt arm64 asset; rpi400hard layers this
+# directory, so one entry covers both boards.
+app-admin/chezmoi-bin ~arm64

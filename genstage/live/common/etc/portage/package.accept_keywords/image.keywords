@@ -223,3 +223,7 @@ dev-python/httpx2
 
 # fastfetch (host.keywords) 2.69.0 needs >=dev-libs/yyjson-0.13.0, ~amd64 only (2026-10-03).
 dev-libs/yyjson
+# --- chezmoi (2026-10-07) ---------------------------------------------------
+# app-admin/chezmoi-bin (::pwr, KEYWORDS="-* ~amd64 ~arm64"): dotfile manager,
+# in amdkde's and amdkdehard's overlay lists (all hard x86 children inherit).
+app-admin/chezmoi-bin
