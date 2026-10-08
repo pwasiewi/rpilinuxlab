@@ -133,3 +133,16 @@ dev-lang/R -openmp
 # "cp: cannot stat .../src/debug/libgitcore.a" (2026-08-31). The Rust bits
 # are an optional pilot in 2.55; drop the flag rather than patch the script.
 dev-vcs/git -rust
+# --- EasyEffects 8 (2026-10-08) ---------------------------------------------
+# webengine only renders the in-app help; off = no dev-qt/qtwebengine on the Pi.
+media-sound/easyeffects -webengine
+# Same as the x86 images (common zz-image.use): EasyEffects loads LV2 only;
+# calf jack needs gui; lsp/calf editor windows are never opened from EasyEffects.
+media-plugins/calf lv2 -jack -gui
+media-libs/lsp-plugins -X
+# EasyEffects 8 RDEPENDs dev-libs/libportal:=[qt6]; without it the rootfs
+# update DROPS easyeffects (2026-10-08) instead of failing.
+dev-libs/libportal qt6
+# git 2.55 turned rust ON by default (+rust). Host Rust is rust-bin with no
+# aarch64 std, so a cross build with it fails; git's Rust parts are optional.
+dev-vcs/git -rust

@@ -144,3 +144,20 @@ app-misc/keyd ~arm64
 # app-admin/chezmoi-bin (::pwr): prebuilt arm64 asset; rpi400hard layers this
 # directory, so one entry covers both boards.
 app-admin/chezmoi-bin ~arm64
+# --- EasyEffects 8 (2026-10-08) ---------------------------------------------
+# media-sound/easyeffects-8.x is Qt6/Kirigami (the GTK4 line is 7.x) and is
+# keyworded ~amd64 only — nobody has tested it on arm64, every dependency IS
+# keyworded there, so '**' on this one package, capped below the live 9999 (which '**'
+# would otherwise pick). USE=-webengine (rpi400kde.use)
+# keeps dev-qt/qtwebengine (a Chromium build) out. The rest are ~arm64-only.
+<media-sound/easyeffects-9999 **
+media-libs/webrtc-audio-processing:2 ~arm64
+media-libs/zita-convolver ~arm64
+media-libs/libbs2b ~arm64
+media-libs/libsoundtouch ~arm64
+dev-qt/qtgraphs ~arm64
+dev-libs/kirigami-addons ~arm64
+# effect packs: lsp-plugins is stable arm64; calf and mda-lv2 are ~arm64.
+# media-plugins/zam-plugins (Maximizer only) is KEYWORDS="amd64" — left out.
+media-plugins/calf ~arm64
+media-plugins/mda-lv2 ~arm64
