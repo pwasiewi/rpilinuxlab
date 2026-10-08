@@ -40,6 +40,10 @@
 #                   when the sysroot already has a completed build in it
 #                   (see rpilinuxlab/crosscompile skill for why)         [root]
 #   pkgs            cross-emerge $PROF_PKGS into the profile rootfs     [root]
+#   update [-n]     full update: sysroot, then rootfs -uDN @world + $PROF_PKGS
+#                   (xarm tune, Qt lockstep, PROF_SYSROOT_PKGS, qca-fix,
+#                   gcc + PROF_UPDATE_EXCLUDE held; -n = print both plans)
+#                                                                       [root]
 #   conf            overlay PROF_BOARD_OVERLAY_DIR layers onto the
 #                   rootfs (also runs first inside 'image')             [root]
 #   rpi             Pi boot payload into the rootfs                     [root]
@@ -174,7 +178,7 @@ case "$1" in
 esac
 
 # a profile file named like a verb would shadow it — refuse such confs
-RESERVED=" status setup enter emerge 1by1 rootgcc sysroot-prep pkgs lock unlock clean-world seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel livekernel rmkernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
+RESERVED=" status setup enter emerge 1by1 rootgcc sysroot-prep pkgs update lock unlock clean-world seed snapshot spec stage1 stage2 stage3 all verify crossstage log qlop qlog build rpi image gate run kernel livekernel rmkernel sd binhost distcc unpack conf configure restrict-run squash isolinux iso live usb xarm xstage xlab profiles help "
 
 PROF=""
 if [[ -f ${PROFDIR}/$1.conf ]]; then
@@ -219,6 +223,71 @@ prof_build_dir() {
         [[ ${T} == tiny ]] && sub=tinyroot || sub=arm64sd
     fi
     echo "${XP_BUILD_DIR:-${XP_LAB_DIR}/build}/${sub}"
+}
+
+# rootgcc_guard ROOT — a cross-emerge COMPILES with the cross gcc and LINKS
+# against ITS libstdc++, while the binaries RUN against whatever gcc-config
+# selected inside ROOT. A major gap is invisible at build time and fatal on the
+# board ("GLIBCXX_3.4.35 not found"), so refuse rather than build something
+# unloadable. Not fixed automatically: aligning them can mean an hours-long
+# native gcc build, which must not start as a surprise inside another verb.
+rootgcc_guard() {
+    local xg rg
+    xg=$("${PROF_TUPLE}-gcc" -dumpversion 2>/dev/null | cut -d. -f1)
+    rg=$(ROOT="$1/" gcc-config -c "${PROF_TUPLE}" 2>/dev/null |
+         sed -n "s|^${PROF_TUPLE}-\([0-9]\+\).*|\1|p")
+    [[ -z ${xg} || -z ${rg} || ${xg} == "${rg}" ]] ||
+        die "$1 is on gcc-${rg}, cross toolchain is gcc-${xg} — cross-built C++ would not load on the board. Run first: sudo xp ${PROF} rootgcc"
+}
+
+# sysroot_portageq CMD ARGS — portageq against the crossdev sysroot's own
+# config (its profile, keywords and installed db), not the host's. The root
+# MUST be portageq's positional argument: with '/' there, ROOT= in the env is
+# ignored and match/best_version answer from the HOST's vardb (found
+# 2026-10-08: the host's qtwebengine showed up as a sysroot Qt module).
+sysroot_portageq() {
+    PORTAGE_CONFIGROOT="/usr/${PROF_TUPLE}" \
+        portageq "$1" "/usr/${PROF_TUPLE}/" "${@:2}" 2>/dev/null
+}
+
+# update_qt_lockstep — bring every installed dev-qt/*:6 in the sysroot to the
+# version portage would pick for qtbase, one package at a time.
+#
+# A plain '-uDN @world' cannot do this (2026-10-08, Qt 6.11.1 -> 6.11.2):
+# every Qt module pins ~qtbase-<same ver>, a module in the set RDEPENDs on
+# ~qttranslations-<ver>, and qttranslations' cmake needs the SYSROOT's
+# Qt6Linguist (from qttools) at that exact version. Portage orders
+# qttranslations before qttools, it fails on "Qt6Linguist 6.11.2 requested,
+# 6.11.1 found", --keep-going drops the rest, and the sysroot is left
+# half-upgraded (qtbase new, everything else old) — after which even
+# '-1 qttools' is a slot conflict. --nodeps in this fixed order is the way
+# out; it is idempotent, so a rerun after a failure resumes.
+update_qt_lockstep() {
+    local want have p ver order=()
+    want=$(sysroot_portageq best_visible dev-qt/qtbase:6)
+    [[ -n ${want} ]] || { info "Qt: no dev-qt/qtbase:6 visible in the sysroot — skipped"; return 0; }
+    ver=${want#dev-qt/qtbase-}; ver=${ver%%-r*}
+    # every installed Qt 6 module, core ones first, qttools then
+    # qttranslations last (qttranslations needs the new Linguist)
+    for p in qtbase qtshadertools qtsvg qtdeclarative; do
+        [[ -n $(sysroot_portageq best_version "dev-qt/${p}:6") ]] && order+=("${p}")
+    done
+    while read -r p; do
+        case ${p} in qtbase|qtshadertools|qtsvg|qtdeclarative|qttools|qttranslations) continue ;; esac
+        order+=("${p}")
+    done < <(sysroot_portageq match "dev-qt/*:6" | sed -E 's|^dev-qt/||; s/-[0-9].*//' | sort -u)
+    for p in qttools qttranslations; do
+        [[ -n $(sysroot_portageq best_version "dev-qt/${p}:6") ]] && order+=("${p}")
+    done
+    for p in "${order[@]}"; do
+        have=$(sysroot_portageq best_version "dev-qt/${p}:6")
+        if [[ ${have} == "dev-qt/${p}-${ver}"* ]]; then continue; fi
+        info "Qt lockstep: ${have:-dev-qt/${p} (missing)} -> ${ver}"
+        EMERGE_DEFAULT_OPTS="" "${PROF_TUPLE}-emerge" --oneshot --nodeps \
+            --usepkg --buildpkg "=dev-qt/${p}-${ver}*" ||
+            die "Qt lockstep stopped at dev-qt/${p}-${ver} — fix it, then rerun: sudo xp ${PROF} update"
+    done
+    info "Qt: sysroot modules all at ${ver}"
 }
 
 case "${VERB}" in
@@ -302,21 +371,86 @@ pkgs)
     [[ -n ${PROF_PKGS:-} ]] || die "Profile ${PROF} sets no PROF_PKGS"
     root="$(prof_build_dir)/rootfs"
     [[ -d ${root} ]] || die "No ${root} — run: sudo xp ${PROF} build"
-    # The emerge below COMPILES with the cross gcc and LINKS against ITS
-    # libstdc++, while the binaries RUN against whatever gcc-config selected
-    # inside the rootfs. A major gap is invisible here and fatal on the board
-    # ("GLIBCXX_3.4.35 not found"), so refuse rather than build something
-    # unloadable. Not fixed automatically: aligning them can mean an hours-long
-    # native gcc build, which must not start as a surprise inside another verb.
-    _xg=$("${PROF_TUPLE}-gcc" -dumpversion 2>/dev/null | cut -d. -f1)
-    _rg=$(ROOT="${root}/" gcc-config -c "${PROF_TUPLE}" 2>/dev/null |
-          sed -n "s|^${PROF_TUPLE}-\([0-9]\+\).*|\1|p")
-    [[ -z ${_xg} || -z ${_rg} || ${_xg} == "${_rg}" ]] ||
-        die "${root} is on gcc-${_rg}, cross toolchain is gcc-${_xg} — cross-built C++ would not load on the board. Run first: sudo xp ${PROF} rootgcc"
+    rootgcc_guard "${root}"
     info "Installing into ${root}: ${PROF_PKGS}"
     # shellcheck disable=SC2086 — word splitting of the package list is intended
     timed "${PROF_TUPLE}-emerge" --root="${root}" --root-deps=rdeps \
         --usepkg --buildpkg --oneshot -q ${PROF_PKGS}
+    ;;
+update)
+    # Full system update of a board: sysroot first (what the cross builds
+    # link against), then the rootfs (what goes on the card), with
+    # $PROF_PKGS merged on top. 'pkgs' only installs the list; this moves
+    # everything. Order and every step below came out of the 2026-10-08
+    # rpi400kde Qt 6.11.1->6.11.2 / Plasma 6.6->6.7 update; each one fixed a
+    # real failure. Idempotent: after a failure, fix it and rerun.
+    need_board
+    dry=0
+    case "${1:-}" in -n|--pretend) dry=1; shift ;; esac
+    no_args "$@"
+    [[ -n ${PROF_PKGS:-} ]] || die "Profile ${PROF} sets no PROF_PKGS"
+    root="$(prof_build_dir)/rootfs"
+    [[ -d ${root} ]] || die "No ${root} — run: sudo xp ${PROF} build"
+    rootgcc_guard "${root}"
+    # gcc is never updated here: the rootfs gcc must stay on the cross
+    # toolchain's major, and moving it is 'rootgcc', an explicit hours-long
+    # verb. The profile adds packages it cannot (or will not) move now.
+    xa="sys-devel/gcc ${PROF_UPDATE_EXCLUDE:-}"
+    xb="${xa} ${PROF_UPDATE_ROOTFS_EXCLUDE:-}"
+    # --with-bdeps=n: build-only deps resolve on the host through the cross
+    # wrapper; the arch-independent ones cmake finds IN the sysroot
+    # (extra-cmake-modules, ...) are PROF_SYSROOT_PKGS, updated in step 3.
+    a_args=(-uDN --with-bdeps=n --keep-going --usepkg --buildpkg --exclude "${xa}" @world)
+    # shellcheck disable=SC2206 — word splitting of the package list is intended
+    b_args=(--root="${root}" --root-deps=rdeps -uDN --with-bdeps=n --keep-going
+            --usepkg --buildpkg --exclude "${xb}" @world ${PROF_PKGS})
+    # EMERGE_DEFAULT_OPTS="" everywhere: a host --update/--deep would leak in
+    export EMERGE_DEFAULT_OPTS=""
+    if (( dry )); then
+        info "Dry run — sysroot plan, then rootfs plan (the sysroot config is NOT retuned in a dry run)"
+        "${PROF_TUPLE}-emerge" -p "${a_args[@]}" || warn "sysroot plan did not resolve"
+        "${PROF_TUPLE}-emerge" -p "${b_args[@]}" || warn "rootfs plan did not resolve"
+        exit 0
+    fi
+    # every step needs its own || die: timed runs this under "|| rc=$?",
+    # which switches set -e off inside the function
+    update_run() {
+        # 1. the sysroot is shared by every ARM profile: point its portage
+        #    config at THIS one (xarm tune without XPROFILE wipes fragments)
+        info "1/7 xarm tune for ${PROF}"
+        XPROFILE="${PROF}" "$(xarm_bin)" tune || die "xarm tune failed"
+        # 2. Qt must move as one set, in an order portage will not pick
+        info "2/7 Qt lockstep in the sysroot"
+        update_qt_lockstep
+        # 3. sysroot pre-seed set: cmake-config packages a KF6/Plasma bump
+        #    needs at the new version (ECM 6.27 vs "requested 6.29" otherwise)
+        if [[ -n ${PROF_SYSROOT_PKGS:-} ]]; then
+            info "3/7 updating PROF_SYSROOT_PKGS in the sysroot"
+            # shellcheck disable=SC2086
+            "${PROF_TUPLE}-emerge" --oneshot -u --usepkg --buildpkg --exclude "${xa}" ${PROF_SYSROOT_PKGS} ||
+                die "sysroot pre-seed update failed — fix it, then rerun: sudo xp ${PROF} update"
+        fi
+        # 4. qca re-merged = host paths back in its cmake export, and the
+        #    next KF6 link picks the HOST libqca ("file in wrong format",
+        #    kwallet-runtime). Move it now, alone, and repatch before @world.
+        if [[ -n $(sysroot_portageq best_version app-crypt/qca) ]]; then
+            info "4/7 qca update + qca-fix"
+            "${PROF_TUPLE}-emerge" --oneshot -u --usepkg --buildpkg app-crypt/qca ||
+                die "qca update failed — fix it, then rerun: sudo xp ${PROF} update"
+        fi
+        "$(xarm_bin)" qca-fix || die "xarm qca-fix failed"
+        # 5. the sysroot world. Stop on failure: the rootfs builds against it.
+        info "5/7 sysroot -uDN @world (excluding: ${xa})"
+        "${PROF_TUPLE}-emerge" "${a_args[@]}" ||
+            die "sysroot update had failures (see above) — fix them, then rerun: sudo xp ${PROF} update"
+        # 6. a qca bump inside step 5 would have undone step 4
+        info "6/7 qca-fix"
+        "$(xarm_bin)" qca-fix || die "xarm qca-fix failed"
+        # 7. the rootfs world + the profile's package list
+        info "7/7 rootfs -uDN @world + PROF_PKGS (excluding: ${xb})"
+        "${PROF_TUPLE}-emerge" "${b_args[@]}"
+    }
+    timed update_run
     ;;
 seed|snapshot|spec|stage1|stage2|stage3|all|verify)
     # 'seed' on a native profile fetches the flavour the profile asks for
