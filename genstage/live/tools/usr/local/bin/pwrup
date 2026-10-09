@@ -97,8 +97,14 @@ def remote_id(pkgdir: Path):
     meta = pkgdir / "metadata.xml"
     if not meta.is_file():
         return None, None
-    m = re.search(r'remote-id type="([^"]+)">([^<]+)<', meta.read_text())
-    return (m.group(1), m.group(2)) if m else (None, None)
+    # Prefer the github remote-id: check/bump only understand github, and
+    # metadata.xml often lists pypi/google-code first (daff, vllm, encfs, …
+    # were silently skipped while only the first entry was read).
+    ids = re.findall(r'remote-id type="([^"]+)">([^<]+)<', meta.read_text())
+    for rtype, rid in ids:
+        if rtype == "github":
+            return rtype, rid.strip()
+    return (ids[0][0], ids[0][1].strip()) if ids else (None, None)
 
 
 def installed_version(cat: str, pkg: str):
@@ -289,7 +295,13 @@ def latest_upstream(rid, pkg, asset_re=None):
     """Newest final-release version for a github repo, or (None, why)."""
     cand, note = [], None
     try:
-        rels = gh_get(f"https://api.github.com/repos/{rid}/releases?per_page=30")
+        # 100, not 30: an upstream that publishes several channels as full
+        # releases can push the newest FINAL one of the wanted channel off a
+        # short window. Brave does exactly that -- nightly and beta releases
+        # outnumber stable roughly 4:1, and with the stable-asset filter below
+        # a 30-entry page matched nothing at all, reporting "no release has an
+        # asset matching" for a package that simply had 40 nightlies on top.
+        rels = gh_get(f"https://api.github.com/repos/{rid}/releases?per_page=100")
         for rel in rels:
             if rel.get("draft") or rel.get("prerelease"):
                 continue

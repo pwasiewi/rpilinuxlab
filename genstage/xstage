@@ -4165,6 +4165,48 @@ cmd_arm64_conf() {
             warn "PROF_BOARD_OVERLAY_DIR names '${ovdir}' but ${ov} does not exist"
         fi
     done
+    arm64_iptables_backend
+}
+
+# The hardened layer ships a default-deny ruleset for iptables-restore.service,
+# and iptables defaults to the LEGACY xtables backend. The Raspberry Pi vendor
+# kernels (6.18) build no legacy ip_tables/iptable_filter at all — only
+# nf_tables + nft_compat — so both restores failed at boot and the card came up
+# with NO firewall (rpi400kde gate, 2026-10-09; it was logged as a "known"
+# first-boot failure). Pick the backend from what the image's kernels provide:
+# legacy only if EVERY installed kernel has ip_tables (we cannot know which one
+# the board boots), otherwise nft. eselect runs host-side on the foreign root
+# (ROOT=), no qemu. The same ruleset loads unchanged through iptables-nft.
+arm64_iptables_backend() {
+    local rules="${TINY_ROOT}/var/lib/iptables/rules-save"
+    [[ -s ${rules} ]] || return 0
+    local kdir legacy=1 nft=1 any=0
+    for kdir in "${TINY_ROOT}"/lib/modules/*/; do
+        [[ -f ${kdir}modules.dep ]] || continue
+        any=1
+        grep -qE '(^|/)ip_tables\.ko' "${kdir}modules.dep" ||
+            grep -qE '(^|/)ip_tables\.ko' "${kdir}modules.builtin" 2>/dev/null || legacy=0
+        { grep -qE '(^|/)nf_tables\.ko' "${kdir}modules.dep" ||
+            grep -qE '(^|/)nf_tables\.ko' "${kdir}modules.builtin" 2>/dev/null; } &&
+        { grep -qE '(^|/)nft_compat\.ko' "${kdir}modules.dep" ||
+            grep -qE '(^|/)nft_compat\.ko' "${kdir}modules.builtin" 2>/dev/null; } || nft=0
+    done
+    if (( ! any )); then
+        warn "iptables ruleset present but no /lib/modules/*/modules.dep — backend left as is"
+        return 0
+    fi
+    (( legacy )) && { info "iptables backend: legacy (every kernel has ip_tables)"; return 0; }
+    (( nft )) || die "no kernel in the image has legacy ip_tables, and not every one has" \
+        "nf_tables + nft_compat — iptables-restore would fail and the board boot with NO firewall"
+    [[ -x ${TINY_ROOT}/usr/bin/xtables-nft-multi ]] ||
+        die "kernels lack legacy ip_tables but xtables-nft-multi is missing (net-firewall/iptables USE=nftables)"
+    ROOT="${TINY_ROOT}" eselect iptables set xtables-nft-multi ||
+        die "eselect iptables set xtables-nft-multi failed on ${TINY_ROOT}"
+    local cur
+    cur=$(readlink "${TINY_ROOT}/usr/sbin/iptables-restore")
+    [[ ${cur##*/} == xtables-nft-multi ]] ||
+        die "iptables-restore still points at '${cur}' after eselect"
+    info "iptables backend: nft (a kernel lacks legacy ip_tables; ruleset loads via nft_compat)"
 }
 
 # The desktop half of arm64_configure — a non-root user, sddm autologin,
