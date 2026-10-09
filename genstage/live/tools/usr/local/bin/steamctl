@@ -1354,10 +1354,15 @@ for l in lines:
             out.append(f"{k}={todo[(sec, k)]}"); done.add((sec, k)); continue
     out.append(l)
 flush(sec)
+# missing sections: ONE header per section, its keys grouped under it
+# (keys used to get a header each — duplicate [SystemSettings] blocks)
 for (s_, k), v in todo.items():
-    if (s_, k) not in done:
-        if out and out[-1] != "": out.append("")
-        out += [f"[{s_}]", f"{k}={v}"]; done.add((s_, k))
+    if (s_, k) in done: continue
+    if out and out[-1] != "": out.append("")
+    out.append(f"[{s_}]")
+    for (s2, k2), v2 in todo.items():
+        if s2 == s_ and (s2, k2) not in done:
+            out.append(f"{k2}={v2}"); done.add((s2, k2))
 open(path, "w", encoding="utf-8", newline="").write(nl.join(out))
 for (s_, k), v in todo.items(): print(f"{s_}/{k}={v}")
 PYI
