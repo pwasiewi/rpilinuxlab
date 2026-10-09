@@ -56,7 +56,7 @@ sudo xp rpi400kde pkgs           # PROF_PKGS into the rootfs (cross-emerge).
                                  #   names one it cannot find
 sudo xp rpi400kde rpi            # Pi payload: kernel8.img, start*.elf, DTBs
 sudo xp rpi400kde image          # conf + configure + sd.img (FAT32 boot + ext4)
-     xp rpi400kde gate           # qemu boot gate (raspi3b / raspi4b per board)
+     xp rpi400kde gate           # qemu boot gate (raspi3b / raspi4b per board); stops itself: PASS/FAIL/TIMEOUT
 sudo xp rpi400kde sd /dev/sdX    # dd to the card                     [confirm]
 sudo xp rpi400kde enter          # aarch64 shell in the rootfs (qemu-user)
      xp rpi400kde log            # watch a long build (also: log emerge, qlop)

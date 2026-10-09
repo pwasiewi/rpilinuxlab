@@ -118,7 +118,12 @@
 #                    on the display                                      [root]
 #   run-rpi          boot sd.img in qemu (raspi4b or raspi3b, matching the
 #                    board the image was built for): boot GATE only — output
-#                    on ttyAMA1, but qemu can't inject input into it
+#                    on ttyAMA1, but qemu can't inject input into it. Stops by
+#                    itself: PASS on the init's success marker (systemd default
+#                    target / OpenRC 'local'), FAIL on panic/emergency, else
+#                    XSTAGE_GATE_TIMEOUT (900 s); console log in the build dir.
+#                    XSTAGE_GATE_PASS='<ERE>' overrides the marker,
+#                    XSTAGE_GATE_HOLD=1 = watch-and-quit (Ctrl-A X) as before
 #   sd DEV           dd sd.img onto a real SD card (/dev/sdX or
 #                    /dev/mmcblkN, removable-only safety)        [root,confirm]
 #   clean            rm ../build/tinyroot                            [confirm]
@@ -3858,13 +3863,76 @@ cmd_tiny_run_rpi() {
     # -snapshot: guest writes go to a temporary overlay, never to sd.img. The
     # gate boots a rootfs that generates ssh host keys on first boot; without
     # this, every card dd'ed from the image would ship the keys qemu made.
-    info "Booting sd.img for ${board} (-M ${machine}, -snapshot; OUTPUT-ONLY — quit qemu: Ctrl-A X)"
-    exec qemu-system-aarch64 -M "${machine}" -snapshot \
-        -kernel "${TINY_ROOT}/boot/kernel8.img" \
-        -dtb "${TINY_ROOT}/boot/${dtb}" \
-        -drive "file=${TINY_IMG},format=raw,if=sd" \
-        -append "console=ttyAMA1,115200 root=PARTUUID=${ptuuid}-02 rootwait rw init=${TINY_INIT}" \
-        -nographic
+    local -a qemu=(qemu-system-aarch64 -M "${machine}" -snapshot
+        -kernel "${TINY_ROOT}/boot/kernel8.img"
+        -dtb "${TINY_ROOT}/boot/${dtb}"
+        -drive "file=${TINY_IMG},format=raw,if=sd"
+        -append "console=ttyAMA1,115200 root=PARTUUID=${ptuuid}-02 rootwait rw init=${TINY_INIT}"
+        -nographic)
+
+    # Self-terminating gate. The models are output-only, so an interactive
+    # session buys nothing — but the old exec never returned: a 2026-10-09 run
+    # idled 40 min after the boot had finished and qemu had to be killed by
+    # hand. Now the console is logged, polled for a success marker, and qemu
+    # is stopped on PASS, FAIL or timeout. XSTAGE_GATE_HOLD=1 = the old
+    # behaviour (watch it, quit with Ctrl-A X).
+    local pass
+    pass=$(rpi_gate_pass_marker)
+    if [[ ${XSTAGE_GATE_HOLD:-0} == 1 || -z ${pass} ]]; then
+        [[ -n ${pass} ]] || warn "no success marker known for init ${TINY_INIT} — set XSTAGE_GATE_PASS='<ERE>' for an automatic gate"
+        info "Booting sd.img for ${board} (-M ${machine}, -snapshot; OUTPUT-ONLY — quit qemu: Ctrl-A X)"
+        exec "${qemu[@]}"
+    fi
+    local timeout="${XSTAGE_GATE_TIMEOUT:-900}"
+    local fail='Kernel panic|end Kernel panic|You are in emergency mode|Entering emergency mode|Failed to mount /sysroot|Cannot open root device|VFS: Unable to mount root'
+    local log="${TINY_BLD}/gate-$(date +%Y%m%d-%H%M%S).log"
+    info "Gate: sd.img for ${board} (-M ${machine}, -snapshot), timeout ${timeout}s, PASS on /${pass}/"
+    info "Console log: ${log}"
+    # stdin from /dev/null: a backgrounded -nographic qemu must not read the tty
+    "${qemu[@]}" </dev/null >"${log}" 2>&1 &
+    local qpid=$!
+    trap 'kill "${qpid}" 2>/dev/null; wait "${qpid}" 2>/dev/null || true' EXIT INT TERM
+    local t=0 verdict="" tailpos=1
+    while (( t < timeout )); do
+        sleep 5; t=$(( t + 5 ))
+        # stream new console lines so the operator still sees the boot
+        tail -n +"${tailpos}" "${log}" | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g'
+        tailpos=$(( $(wc -l <"${log}") + 1 ))
+        if grep -qE "${fail}" "${log}"; then verdict=FAIL; break; fi
+        if grep -qE "${pass}" "${log}"; then sleep 10; verdict=PASS; break; fi   # let late units log
+        kill -0 "${qpid}" 2>/dev/null || { verdict=FAIL; warn "qemu exited on its own"; break; }
+    done
+    kill "${qpid}" 2>/dev/null || true; wait "${qpid}" 2>/dev/null || true   # 143 = our SIGTERM
+    trap - EXIT INT TERM
+    [[ -n ${SUDO_UID:-} ]] && chown "${SUDO_UID}:${SUDO_GID}" "${log}"
+    local failed
+    failed=$(sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' "${log}" | grep -oE 'Failed to start .*' | sort -u || true)
+    echo
+    [[ -n ${failed} ]] && { warn "units that failed during boot:"; printf '    %s\n' "${failed}"; }
+    case ${verdict} in
+        PASS) info "GATE PASS after ${t}s (/${pass}/ seen) — log ${log}" ;;
+        FAIL) die "GATE FAIL after ${t}s — see ${log}" ;;
+        *)    die "GATE TIMEOUT: /${pass}/ not seen within ${timeout}s — see ${log} (raise XSTAGE_GATE_TIMEOUT if the boot is just slow)" ;;
+    esac
+}
+
+# Success marker for the self-terminating run-rpi gate, from the rootfs's init:
+# systemd → its default target (graphical when the image boots a desktop),
+# OpenRC → the 'local' service, the last one in the default runlevel. A tiny
+# custom /init has no generic marker: the gate then falls back to the old
+# watch-and-quit mode unless XSTAGE_GATE_PASS names one.
+rpi_gate_pass_marker() {
+    if [[ -n ${XSTAGE_GATE_PASS:-} ]]; then echo "${XSTAGE_GATE_PASS}"; return; fi
+    case ${TINY_INIT} in
+        */systemd)
+            if [[ $(readlink "${TINY_ROOT}/etc/systemd/system/default.target" 2>/dev/null) == *graphical.target ]]; then
+                echo 'Reached target .*Graphical Interface'
+            else
+                echo 'Reached target .*Multi-User System'
+            fi ;;
+        */openrc-init|/sbin/init|*/init.sysv)
+            [[ -x ${TINY_ROOT}/sbin/openrc ]] && echo 'Starting local' ;;
+    esac
 }
 
 cmd_tiny_sd() {
