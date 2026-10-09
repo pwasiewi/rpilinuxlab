@@ -42,7 +42,9 @@
 #   pkgs            cross-emerge $PROF_PKGS into the profile rootfs     [root]
 #   update [-n]     full update: sysroot, then rootfs -uDN @world + $PROF_PKGS
 #                   (xarm tune, Qt lockstep, PROF_SYSROOT_PKGS, qca-fix,
-#                   gcc + PROF_UPDATE_EXCLUDE held; -n = print both plans)
+#                   perl moved in the qemu chroot, stale :=-consumers
+#                   rebuilt explicitly; gcc + PROF_UPDATE_EXCLUDE held;
+#                   -n = stale lists + both plans)
 #                                                                       [root]
 #   conf            overlay PROF_BOARD_OVERLAY_DIR layers onto the
 #                   rootfs (also runs first inside 'image')             [root]
@@ -250,6 +252,163 @@ sysroot_portageq() {
         portageq "$1" "/usr/${PROF_TUPLE}/" "${@:2}" 2>/dev/null
 }
 
+# stale_consumers ROOT — "cat/pn<TAB>dep-cat/pn" for every package installed
+# in ROOT whose recorded slot-operator dependency (dep:SLOT/SUB=) no longer
+# matches the installed SUB. Portage should schedule those rebuilds itself,
+# but in a cross graph (--root-deps=rdeps, and in the sysroot) it does not:
+# it reaches for stale binpkgs or tries a downgrade, and the update dies on
+# a slot conflict or "no ebuilds to satisfy <dep>:<slot>/<OLD SUB>=" (podman
+# vs shadow 0/6, 20 Qt/KDE packages vs qtbase 6.11.1, 2026-10-08). Naming
+# them as atoms is what makes the resolver rebuild them.
+stale_consumers() {
+    python3 - "$1" <<'PYEOF'
+import glob, os, re, sys
+db = sys.argv[1].rstrip("/") + "/var/db/pkg"
+def pn(pf):
+    m = re.match(r"(.+?)-(\d.*)$", pf)
+    return m.group(1) if m else pf
+inst = {}
+for d in glob.glob(db + "/*/*"):
+    cat, pf = d.split("/")[-2:]
+    try:
+        slot, _, sub = open(d + "/SLOT").read().strip().partition("/")
+    except OSError:
+        continue
+    inst.setdefault(cat + "/" + pn(pf), {})[slot] = sub or slot
+dep_re = re.compile(r"[<>=~]*([a-z0-9-]+/[A-Za-z0-9_+-]+?)(?:-\d[^\s:\[]*)?:([^\s/\[]+)/([^\s=\[]+)=")
+out = set()
+for d in glob.glob(db + "/*/*"):
+    cat, pf = d.split("/")[-2:]
+    deps = ""
+    for f in ("RDEPEND", "DEPEND"):
+        if os.path.exists(d + "/" + f):
+            deps += " " + open(d + "/" + f).read()
+    for cp, slot, sub in dep_re.findall(deps):
+        have = inst.get(cp, {}).get(slot)
+        if have and have != sub:
+            out.add((cat + "/" + pn(pf), cp))
+for me, cp in sorted(out):
+    print(me + "\t" + cp)
+PYEOF
+}
+
+# drop_held "ATOMS" "PATTERNS" — the atoms not matched by any hold pattern
+# (globs such as dev-texlive/*); a held atom named explicitly would only turn
+# into "masked by: exclude option"
+drop_held() {
+    local a p keep out=()
+    for a in $1; do
+        keep=1
+        for p in $2; do
+            # shellcheck disable=SC2053 — glob match against the hold pattern is intended
+            [[ ${a} == ${p} ]] && { keep=0; break; }
+        done
+        (( keep )) && out+=("${a}")
+    done
+    echo "${out[*]}"
+}
+
+# stale_rebuild ROOT HOLDS — rebuild what stale_consumers still lists, as a
+# pass of its own WITHOUT --update. Riding along in the -uDN @world command
+# is not enough: --update skips an atom already at its newest version, and a
+# stale :=-consumer is exactly that (dolphin, kate, pyqt6 stayed stale after
+# a clean world run, 2026-10-09). --usepkg=n: the binpkg of that same version
+# is the stale build.
+stale_rebuild() {
+    local root="$1" holds="$2" atoms rootarg=()
+    atoms=$(drop_held "$(stale_consumers "${root}" | cut -f1 | sort -u | tr '\n' ' ')" "${holds}")
+    if [[ -z ${atoms// } ]]; then
+        info "${root}: no stale :=-consumers left"
+        return 0
+    fi
+    [[ ${root%/} == "/usr/${PROF_TUPLE}" ]] || rootarg=(--root="${root}" --root-deps=rdeps)
+    info "${root}: rebuilding stale :=-consumers: ${atoms}"
+    # shellcheck disable=SC2086 — word splitting of the atom list is intended
+    "${PROF_TUPLE}-emerge" "${rootarg[@]}" --oneshot --usepkg=n --buildpkg --keep-going \
+        --with-bdeps=n --ignore-built-slot-operator-deps=y --exclude "${holds}" ${atoms}
+}
+
+# perl_align ROOT — a perl subslot bump (5.42 -> 5.44) cannot happen inside a
+# cross graph: every dev-perl/*, perl-core/*, virtual/perl-* and :=-bound
+# consumer must move in the SAME transaction, and XS modules only build
+# natively. Run it as one emerge in the QEMU chroot of ROOT. No-op when perl
+# is current and nothing is bound to an old perl subslot. ROOT must carry a
+# native gcc (the sysroot and the board rootfs both do).
+perl_align() {
+    local root="$1" atoms best perl_atom=""
+    ls -d "${root}"/var/db/pkg/dev-lang/perl-[0-9]* >/dev/null 2>&1 || return 0
+    # best_visible can fail against a root's own config (the board rootfs
+    # answers rc=1, empty): then only the stale-consumer check below decides
+    best=$(PORTAGE_CONFIGROOT="${root}" portageq best_visible "${root}/" dev-lang/perl 2>/dev/null) || best=""
+    [[ -n ${best} ]] && ! PORTAGE_CONFIGROOT="${root}" portageq has_version "${root}/" "=${best}" 2>/dev/null &&
+        perl_atom="=${best}"
+    atoms=$(stale_consumers "${root}" | awk -F'\t' '$2=="dev-lang/perl"{print $1}' | sort -u | tr '\n' ' ')
+    if [[ -z ${perl_atom} && -z ${atoms// } ]]; then
+        info "perl in ${root}: current, nothing bound to an old subslot"
+        return 0
+    fi
+    atoms+=" $(cd "${root}/var/db/pkg" && ls -d virtual/perl-* perl-core/* 2>/dev/null | sed -E 's/-[0-9].*//' | sort -u | tr '\n' ' ')"
+    info "perl in ${root}: ${perl_atom:-perl current} + $(wc -w <<<"${atoms}") bound packages, one transaction in the qemu chroot"
+    # NOT --update: the consumers are already at their newest version and must
+    # be REbuilt against the new perl. xarm chroot runs its arguments as
+    # bash -lc "$*", so the command goes in as ONE string.
+    # The chroot cannot use the root's make.conf as-is when it is a CROSS one
+    # (the sysroot's says ROOT=/usr/<tuple>/, CBUILD=x86_64-…,
+    # PORTAGE_TMPDIR=${ROOT}tmp/): inside the chroot that ROOT is a real
+    # directory (binutils' target dir), so the vardb looked empty (541
+    # packages planned for 60) and every ebuild died "merged-usr profile, but
+    # disk is split-usr" — ROOT=/ in the ENVIRONMENT reaches the resolver but
+    # not the ebuild phases (2026-10-09). So emerge runs on a native COPY of
+    # /etc/portage (PORTAGE_CONFIGROOT) with those lines dropped and ${ROOT}
+    # paths made absolute; the root's own config is never touched. Harmless
+    # on a native rootfs make.conf. NOT proven for the sysroot: emerge there
+    # still died on the split-usr check even with this copy (2026-10-09), so
+    # 'update' prunes the sysroot's perl modules instead (sysroot_perl_prune)
+    # and calls perl_align only for the board rootfs, whose config is native.
+    # on a native rootfs make.conf. make.profile is re-pointed absolute: its
+    # relative link (../../../../var/db/...) breaks one level deeper.
+    # /var/tmp, not /tmp: xarm chroot
+    # bind-mounts the host's /tmp over the root's.
+    local native
+    # shellcheck disable=SC2016 — expanded inside the chroot, not here
+    native='N=/var/tmp/xp-native; mkdir -p $N/etc && rm -rf $N/etc/portage && cp -a /etc/portage $N/etc/ && sed -i -E '"'"'/^[[:space:]]*(ROOT|SYSROOT|CBUILD|PORTAGE_TMPDIR)=/d; s#\$\{ROOT\}#/#g'"'"' $N/etc/portage/make.conf && echo PORTAGE_TMPDIR=/var/tmp >> $N/etc/portage/make.conf && ln -sfn "$(readlink -f /etc/portage/make.profile)" $N/etc/portage/make.profile'
+    XARM_CHROOT_ROOT="${root}" "$(xarm_bin)" chroot \
+        "${native} && PORTAGE_CONFIGROOT=/var/tmp/xp-native emerge --ignore-default-opts --oneshot --usepkg=n --keep-going ${perl_atom} ${atoms}"
+}
+
+# sysroot_perl_prune — the SYSROOT's own answer to a perl subslot bump.
+# Cross builds run the HOST's perl; dev-perl/*, perl-core/* and virtual/perl-*
+# land in the sysroot only as leftovers of earlier cross-emerges, and after
+# the sysroot's perl moves (5.42 -> 5.44) they block every later sysroot
+# graph. They cannot be rebuilt there either: XS modules only build natively,
+# and a qemu chroot of the sysroot runs on its CROSS make.conf, whose ROOT
+# (/usr/<tuple>/) exists inside the chroot as binutils' target dir — every
+# ebuild then dies "merged-usr profile, but disk is split-usr" (2026-10-09).
+# So unmerge them — but only when nothing non-perl in the sysroot depends on
+# them and none is in its world file; otherwise stop and say why.
+sysroot_perl_prune() {
+    local sr="/usr/${PROF_TUPLE}" atoms users inworld
+    atoms=$(cd "${sr}/var/db/pkg" 2>/dev/null &&
+            ls -d dev-perl/* perl-core/* virtual/perl-* 2>/dev/null | sed -E 's/-[0-9].*//' | sort -u | tr '\n' ' ')
+    if [[ -z ${atoms// } ]]; then
+        info "sysroot: no perl modules installed — nothing to prune"
+        return 0
+    fi
+    if [[ -z $(stale_consumers "${sr}" | awk -F'\t' '$2=="dev-lang/perl"') ]]; then
+        info "sysroot: perl modules match the installed perl — kept"
+        return 0
+    fi
+    users=$(cd "${sr}/var/db/pkg" && grep -lE '(dev-perl|perl-core|virtual/perl-)' ./*/*/RDEPEND ./*/*/DEPEND 2>/dev/null |
+            sed -E 's|^\./||; s|/[A-Z]*DEPEND$||' | grep -vE '^(dev-perl|perl-core|virtual)/' | sort -u | tr '\n' ' ') || true
+    # no match is the GOOD case: grep exits 1, which pipefail + set -e would turn fatal
+    inworld=$(grep -E '^(dev-perl|perl-core|virtual/perl-)' "${sr}/var/lib/portage/world" 2>/dev/null | tr '\n' ' ') || true
+    [[ -z ${users// } && -z ${inworld// } ]] ||
+        die "sysroot perl modules are bound to the old perl but still needed (users: ${users:-none}; world: ${inworld:-none}) — rebuild them natively, they cannot cross-build"
+    info "sysroot: unmerging $(wc -w <<<"${atoms}") stale perl modules (unused there; cross builds run the host's perl)"
+    # shellcheck disable=SC2086 — word splitting of the atom list is intended
+    "${PROF_TUPLE}-emerge" --unmerge ${atoms}
+}
+
 # update_qt_lockstep — bring every installed dev-qt/*:6 in the sysroot to the
 # version portage would pick for qtbase, one package at a time.
 #
@@ -400,16 +559,28 @@ update)
     # --with-bdeps=n: build-only deps resolve on the host through the cross
     # wrapper; the arch-independent ones cmake finds IN the sysroot
     # (extra-cmake-modules, ...) are PROF_SYSROOT_PKGS, updated in step 3.
-    a_args=(-uDN --with-bdeps=n --keep-going --usepkg --buildpkg --exclude "${xa}" @world)
+    # --ignore-built-slot-operator-deps: the RECORDED :=-subslots of installed
+    # packages are what let a held package (cryptography on cffi:0/2.0.0=)
+    # block the whole graph. Safe here because every stale :=-consumer is
+    # named explicitly below (stale_consumers), which is the only job those
+    # recorded subslots would have done (2026-10-09).
+    a_args=(-uDN --with-bdeps=n --keep-going --usepkg --buildpkg --ignore-built-slot-operator-deps=y
+            --exclude "${xa}" @world)
     # shellcheck disable=SC2206 — word splitting of the package list is intended
     b_args=(--root="${root}" --root-deps=rdeps -uDN --with-bdeps=n --keep-going
-            --usepkg --buildpkg --exclude "${xb}" @world ${PROF_PKGS})
+            --usepkg --buildpkg --ignore-built-slot-operator-deps=y --exclude "${xb}" @world ${PROF_PKGS})
     # EMERGE_DEFAULT_OPTS="" everywhere: a host --update/--deep would leak in
     export EMERGE_DEFAULT_OPTS=""
     if (( dry )); then
         info "Dry run — sysroot plan, then rootfs plan (the sysroot config is NOT retuned in a dry run)"
-        "${PROF_TUPLE}-emerge" -p "${a_args[@]}" || warn "sysroot plan did not resolve"
-        "${PROF_TUPLE}-emerge" -p "${b_args[@]}" || warn "rootfs plan did not resolve"
+        info "sysroot stale :=-consumers: $(stale_consumers "/usr/${PROF_TUPLE}" | cut -f1 | sort -u | tr '\n' ' ')"
+        info "rootfs stale :=-consumers: $(stale_consumers "${root}" | cut -f1 | sort -u | tr '\n' ' ')"
+        # shellcheck disable=SC2046 — word splitting of the atom lists is intended
+        "${PROF_TUPLE}-emerge" -p "${a_args[@]}" $(drop_held "$(stale_consumers "/usr/${PROF_TUPLE}" | cut -f1 | sort -u | tr '\n' ' ')" "${xa}") ||
+            warn "sysroot plan did not resolve"
+        # shellcheck disable=SC2046
+        "${PROF_TUPLE}-emerge" -p "${b_args[@]}" $(drop_held "$(stale_consumers "${root}" | cut -f1 | sort -u | tr '\n' ' ')" "${xb}") ||
+            warn "rootfs plan did not resolve"
         exit 0
     fi
     # every step needs its own || die: timed runs this under "|| rc=$?",
@@ -439,16 +610,37 @@ update)
                 die "qca update failed — fix it, then rerun: sudo xp ${PROF} update"
         fi
         "$(xarm_bin)" qca-fix || die "xarm qca-fix failed"
-        # 5. the sysroot world. Stop on failure: the rootfs builds against it.
-        info "5/7 sysroot -uDN @world (excluding: ${xa})"
-        "${PROF_TUPLE}-emerge" "${a_args[@]}" ||
+        # 4b. binpkgs whose version has left the tree: with --usepkg the
+        #     resolver reaches for them (qtbase-6.11.1, kio-6.27) to satisfy
+        #     stale consumers and the graph ends in a slot conflict. eclean-pkg
+        #     without --deep removes exactly those (169 files / 2 GB, 2026-10-09).
+        info "4b/7 removing binpkgs whose ebuild left the tree"
+        PORTAGE_CONFIGROOT="/usr/${PROF_TUPLE}" eclean-pkg ||
+            warn "eclean-pkg failed — stale binpkgs may cause slot conflicts"
+        # 5. stale perl modules pruned (sysroot_perl_prune), then the sysroot
+        #    world with every remaining stale :=-consumer named as an atom.
+        #    Stop on failure: the rootfs builds against the sysroot.
+        info "5/7 sysroot: prune stale perl modules, then -uDN @world (excluding: ${xa})"
+        sysroot_perl_prune ||
+            die "sysroot perl prune failed — fix it, then rerun: sudo xp ${PROF} update"
+        stale=$(drop_held "$(stale_consumers "/usr/${PROF_TUPLE}" | cut -f1 | sort -u | tr '\n' ' ')" "${xa}")
+        # shellcheck disable=SC2086 — word splitting of the atom list is intended
+        "${PROF_TUPLE}-emerge" "${a_args[@]}" ${stale} &&
+            stale_rebuild "/usr/${PROF_TUPLE}" "${xa}" ||
             die "sysroot update had failures (see above) — fix them, then rerun: sudo xp ${PROF} update"
         # 6. a qca bump inside step 5 would have undone step 4
         info "6/7 qca-fix"
         "$(xarm_bin)" qca-fix || die "xarm qca-fix failed"
         # 7. the rootfs world + the profile's package list
-        info "7/7 rootfs -uDN @world + PROF_PKGS (excluding: ${xb})"
-        "${PROF_TUPLE}-emerge" "${b_args[@]}"
+        # 7. the rootfs: perl alignment, then world + PROF_PKGS + its own
+        #    stale :=-consumers
+        info "7/7 rootfs: perl alignment, then -uDN @world + PROF_PKGS (excluding: ${xb})"
+        perl_align "${root}" ||
+            die "rootfs perl alignment failed — fix it, then rerun: sudo xp ${PROF} update"
+        stale=$(drop_held "$(stale_consumers "${root}" | cut -f1 | sort -u | tr '\n' ' ')" "${xb}")
+        # shellcheck disable=SC2086 — word splitting of the atom list is intended
+        "${PROF_TUPLE}-emerge" "${b_args[@]}" ${stale} &&
+            stale_rebuild "${root}" "${xb}"
     }
     timed update_run
     ;;
