@@ -1429,10 +1429,10 @@ PYP
                 cp2077) local -a kv; mapfile -t kv <<< "${body}"; cmd_cp2077 set "${kv[@]}" ;;
                 sottr)  local -a kv; mapfile -t kv <<< "${body}"; cmd_sottr set "${kv[@]}" ;;
                 opts)   local a; a=$(resolve_app "${3:?preset apply opts NAME <game>}")
-                        local lo pin; lo=$(grep -v '^proton=' <<< "${body}" | head -1); pin=$(grep -m1 '^proton=' <<< "${body}" | cut -d= -f2-)
+                        local lo pin; lo=$({ grep -v '^proton=' <<< "${body}" || true; } | head -1); pin=$({ grep -m1 '^proton=' <<< "${body}" || true; } | cut -d= -f2-)
                         cmd_opts set "${a}" "${lo}"
-                        [[ -n ${pin} ]] && cmd_proton set "${a}" "${pin}" ;;
-                ini)    local f; f=$(grep -m1 '^file=' <<< "${body}" | cut -d= -f2-); f=$(preset_path "${3:-${f}}")
+                        if [[ -n ${pin} ]]; then cmd_proton set "${a}" "${pin}"; fi ;;   # a bare `&& ` here returned 1 for pin-less presets
+                ini)    local f; f=$({ grep -m1 '^file=' <<< "${body}" || true; } | cut -d= -f2-); f=$(preset_path "${3:-${f}}")
                         [[ -f ${f} ]] || die "ini preset needs a 'file=PATH|@APPID:rel' line (or pass the file as 3rd arg); ${f} not found"
                         local tmp; tmp=$(mktemp); printf '%s\n' "${body}" > "${tmp}"
                         command cp -f "${f}" "${f}.steamctl-bak"; ini_edit "${f}" apply "" "${tmp}"; command rm -f "${tmp}" ;;
@@ -1597,7 +1597,7 @@ cmd_display() {
     local sub="${1:-}"; shift || true
     case ${sub} in
         "")
-            local cur; cur=$(grep -oP '[0-9]+x[0-9]+@[0-9.]+(?=!)' <<< "${out}" | head -1)
+            local cur; cur=$({ grep -oP '[0-9]+x[0-9]+@[0-9.]+(?=!?\*)' <<< "${out}" || true; } | head -1)   # '*' = current, '!' = preferred
             echo "Output:   ${name}"
             echo "Current:  ${cur}"
             echo "Modes:    $(grep -oP '[0-9]+x[0-9]+@[0-9.]+' <<< "${out}" | awk -F@ -v r="${cur%@*}" '$1==r' | tr '\n' ' ')"
@@ -1605,8 +1605,8 @@ cmd_display() {
             have ddcutil && echo "DDC/CI:   ddcutil getvcp 10 (brightness) / 12 (contrast) / 60 (input); setvcp to change" ;;
         hz)
             local hz="${1:?display hz <N>}" cur res
-            cur=$(grep -oP '[0-9]+x[0-9]+@[0-9.]+(?=!)' <<< "${out}" | head -1); res="${cur%@*}"
-            local mode; mode=$(grep -oP '[0-9]+x[0-9]+@[0-9.]+' <<< "${out}" | awk -F@ -v r="${res}" -v h="${hz}" '$1==r && int($2+0.5)==int(h+0.5){print; exit}')
+            cur=$({ grep -oP '[0-9]+x[0-9]+@[0-9.]+(?=!?\*)' <<< "${out}" || true; } | head -1)   # '*' = current, '!' = preferred; res="${cur%@*}"
+            local mode; mode=$({ grep -oP '[0-9]+x[0-9]+@[0-9.]+' <<< "${out}" || true; } | awk -F@ -v r="${res}" -v h="${hz}" '$1==r && int($2+0.5)==int(h+0.5) && !m{print; m=1}')
             [[ -n ${mode} ]] || die "No ${res} mode near ${hz} Hz. Available: $(grep -oP '[0-9]+x[0-9]+@[0-9.]+' <<< "${out}" | awk -F@ -v r="${res}" '$1==r{print $2}' | tr '\n' ' ')"
             info "kscreen-doctor output.${name}.mode.${mode}"
             kd "output.${name}.mode.${mode}" ;;
@@ -2184,7 +2184,7 @@ gh_release_asset() {
     else tag=$(curl -fsI "https://github.com/${repo}/releases/latest" | tr -d '\r' | sed -n 's#^[Ll]ocation: .*/releases/tag/##p' | head -1); fi
     [[ -n ${tag} ]] || return 1
     html=$(curl -fsSL "https://github.com/${repo}/releases/expanded_assets/${tag}") || return 1
-    local path; path=$(grep -oiE "/${repo}/releases/download/[^\"]+" <<< "${html}" | grep -E "${pat}" | head -1)
+    local path; path=$({ grep -oiE "/${repo}/releases/download/[^\"]+" <<< "${html}" || true; } | { grep -E "${pat}" || true; } | head -1)
     [[ -n ${path} ]] || return 1
     printf '%s\t%s\n' "${tag}" "https://github.com${path}"
 }
