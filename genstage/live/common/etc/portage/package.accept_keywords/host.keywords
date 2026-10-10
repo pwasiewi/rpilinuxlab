@@ -1811,3 +1811,5 @@ acct-user/ntfy
 
 # 2026-09-21: dev-python/jiter-0.17 (::stuff) needs >=maturin-1.15, ~amd64 only
 dev-util/maturin
+# aiohttp 3.14.4 (vllm/unsloth-zoo chain) needs >=yarl-1.25.1, ~amd64 only (2026-10-10)
+~dev-python/yarl-1.25.1 ~amd64

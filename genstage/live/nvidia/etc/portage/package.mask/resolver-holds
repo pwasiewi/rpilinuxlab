@@ -24,3 +24,8 @@
 
 # dev-python/pyarrow-24.0.0 pins ~dev-libs/apache-arrow-24.0.0. Lift with pyarrow 25.
 >=dev-libs/apache-arrow-25
+
+# dev-python/scipy 1.18.x (1.18.0 and 1.18.1) requires >=dev-libs/boost-1.91.0, which is ~amd64 only and deliberately NOT
+# keyworded (#dev-libs/boost in host.keywords - a boost bump rebuilds every consumer). 2026-10-10.
+# Lift when boost >=1.91 goes stable, or when the boost keyword is taken on purpose.
+>=dev-python/scipy-1.18

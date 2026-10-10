@@ -164,7 +164,10 @@ rate limit for `proton available/install`), STEAMCTL_CACHE
 EOF
 }
 
-die()  { echo "❌ $*" >&2; exit 1; }
+# die inside $(...) only ends the subshell; kill the script too, or the caller runs on with an
+# empty value (steamctl opts get with several accounts -> traceback on "/config/localconfig.vdf").
+die()  { echo "❌ $*" >&2; [[ ${BASHPID} != "$$" ]] && kill -TERM "$$" 2>/dev/null; exit 1; }
+trap 'exit 1' TERM   # the kill from a die in a subshell ends the script quietly with 1
 warn() { echo "⚠  $*" >&2; }
 info() { echo "→ $*" >&2; }
 DEBUG() { [[ ${VERBOSE} == yes ]] && echo "   … $*" >&2; return 0; }
@@ -222,7 +225,23 @@ account_dir() {
     case ${#found[@]} in
         0) die "No userdata/<account>/config/localconfig.vdf — log into Steam once." ;;
         1) echo "${found[0]}" ;;
-        *) die "Several accounts under userdata/: $(printf '%s ' "${found[@]##*/}")— set STEAM_ACCOUNT." ;;
+        *)  # several accounts: the one Steam marks MostRecent in loginusers.vdf (SteamID64 -> account id)
+            local recent
+            recent=$(python3 - "${STEAM_ROOT}/config/loginusers.vdf" <<'PYA' 2>/dev/null || true
+import sys, vdf
+users = vdf.load(open(sys.argv[1])).get("users", {})
+best = [k for k, v in users.items() if str(v.get("MostRecent", "0")) == "1"]
+if not best:
+    best = sorted(users, key=lambda k: int(users[k].get("Timestamp", "0") or 0), reverse=True)[:1]
+if best: print(int(best[0]) - 76561197960265728)
+PYA
+)
+            if [[ -n ${recent} && -f ${STEAM_ROOT}/userdata/${recent}/config/localconfig.vdf ]]; then
+                DEBUG "several accounts; using the most recent login ${recent}"
+                echo "${STEAM_ROOT}/userdata/${recent}"
+            else
+                die "Several accounts under userdata/: $(printf '%s ' "${found[@]##*/}")— set STEAM_ACCOUNT (no MostRecent login found)."
+            fi ;;
     esac
 }
 localconfig() { echo "$(account_dir)/config/localconfig.vdf"; }
