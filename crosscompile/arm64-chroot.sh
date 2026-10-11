@@ -29,6 +29,9 @@ fi
 
 # OC flags → the kernel resolves the interpreter inside the chroot: static qemu must be there
 install -m755 "${QEMU_BIN}" "${CHROOT}/usr/bin/" || die "Cannot copy ${QEMU_BIN}"
+# rm first: if the chroot's resolv.conf is an absolute symlink (systemd stage3),
+# cp would write through it onto the HOST's file
+command rm -f "${CHROOT}/etc/resolv.conf"
 cp -L /etc/resolv.conf "${CHROOT}/etc/resolv.conf" || die "resolv.conf copy failed"
 
 MOUNTED=()

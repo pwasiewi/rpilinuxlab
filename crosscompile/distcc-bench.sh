@@ -12,12 +12,12 @@ C=/mnt/db1/rpilinuxlab/arm64-chroot
 DLOG=/var/tmp/xarm/distccd.log
 run() {
     local name="$1" cmd="$2" t0 dt j0 j1
-    j0=$(grep -c COMPILE_OK "$DLOG" 2>/dev/null || echo 0)
+    j0=$(grep -c COMPILE_OK "$DLOG" 2>/dev/null || true)
     echo "=== RUN $name: $cmd"
     t0=$SECONDS
     XARM_CHROOT_ROOT=$C xarm chroot "$cmd"
     dt=$((SECONDS-t0))
-    j1=$(grep -c COMPILE_OK "$DLOG" 2>/dev/null || echo 0)
+    j1=$(grep -c COMPILE_OK "$DLOG" 2>/dev/null || true)
     echo "=== RESULT $name: ${dt}s wall, $((j1-j0)) distcc jobs"
 }
 run nano-distcc      "DISTCC_FALLBACK=0 FEATURES='-ccache distcc' emerge --oneshot --nodeps app-editors/nano"

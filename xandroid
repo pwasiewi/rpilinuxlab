@@ -285,12 +285,26 @@ cmd_flash() {
     info "Phone must be in fastboot mode (adb reboot bootloader / VolDown+Power),"
     info "bootloader unlocked, stock Android 16 firmware installed."
     fastboot devices | grep -q . || die "No device in fastboot mode"
+    # the connected phone must BE the codename we built for — fastboot flashes
+    # whatever is plugged in (audit 2026-10-11; getvar prints to stderr)
+    fastboot_product() { fastboot getvar product 2>&1 | sed -n 's/^product: *//p' | head -1; }
+    wait_fastboot() {   # poll until the bootloader answers with our product, 60 s max
+        local i p
+        for i in $(seq 1 30); do
+            p=$(fastboot_product); [[ ${p} == "${dev}" ]] && return 0
+            sleep 2
+        done
+        die "fastboot: expected product '${dev}', got '${p:-none}' — wrong phone or not back in the bootloader"
+    }
+    wait_fastboot
     confirm "Flash boot/dtbo/vendor_kernel_boot/vendor_boot to the connected ${dev}?"
     fastboot flash boot "${d}/boot.img"
     fastboot flash dtbo "${d}/dtbo.img"
     fastboot flash vendor_kernel_boot "${d}/vendor_kernel_boot.img"
     fastboot reboot bootloader
-    sleep 5
+    # not a fixed sleep: under set -e a phone that is slow to come back left
+    # boot/dtbo/vendor_kernel_boot flashed and vendor_boot not
+    wait_fastboot
     fastboot flash vendor_boot "${d}/vendor_boot.img"
     info "Done. On the phone select 'Recovery Mode' (Lineage recovery),"
     info "then: Factory reset -> Apply update -> Apply from ADB, and run: $0 sideload ${dev}"

@@ -7,7 +7,8 @@
 # here: this tree is committed to the (shareable) lab repo.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)/tools/usr/local/bin
-SRC="${HOME}/Claude/bin"
+# under sudo HOME is /root — resolve the invoking user's tree
+SRC="$(getent passwd "${SUDO_USER:-$USER}" | cut -d: -f6)/Claude/bin"
 
 SCRIPTS=(
     # install chain: partition, format, unpack squashfs, boot + Secure Boot
@@ -45,8 +46,16 @@ for s in "${SCRIPTS[@]}"; do
     command cp -f "${SRC}/${s}" "${HERE}/${s}"
     chmod 0755 "${HERE}/${s}"
 done
+# files dropped from SCRIPTS are never pruned — say so instead of letting a
+# stale mirror ride along into every image
+for f in "${HERE}"/*; do
+    [[ -f ${f} ]] || continue
+    case " ${SCRIPTS[*]} " in *" $(basename "${f}") "*) ;; *) echo "WARNING: ${f} is not in SCRIPTS — stale mirror, remove it or add it to the list" >&2 ;; esac
+done
 if [[ -d ${SPECS_SRC} ]]; then
     mkdir -p "${SPECS_DST}"
+    shopt -s nullglob   # an empty specs dir must not feed a literal '*.vm' to cp
     for f in "${SPECS_SRC}"/*.vm; do command cp -f "$f" "${SPECS_DST}/"; chmod 0644 "${SPECS_DST}/$(basename "$f")"; done
+    shopt -u nullglob
 fi
 echo "live/tools refreshed: ${#SCRIPTS[@]} scripts, $(du -sh "${HERE}" | cut -f1)"

@@ -192,10 +192,17 @@ cmd_src_init() {
     mkdir -p "${XDIR}"
     if [[ ! -d ${SRC_DIR}/.git ]]; then
         info "Cloning openwrt.git tag v${RELEASE} (~15 min with history)"
-        git clone -b "v${RELEASE}" https://git.openwrt.org/openwrt/openwrt.git "${SRC_DIR}"
+        # clone into a temp dir and rename: an interrupted clone leaves .git
+        # behind and would count as "done" forever
+        command rm -rf "${SRC_DIR}.partial"
+        git clone -b "v${RELEASE}" https://git.openwrt.org/openwrt/openwrt.git "${SRC_DIR}.partial" &&
+            mv "${SRC_DIR}.partial" "${SRC_DIR}" || { command rm -rf "${SRC_DIR}.partial"; die "clone failed"; }
     fi
     cd "${SRC_DIR}"
-    ./scripts/feeds update -a && ./scripts/feeds install -a
+    # two statements: inside an && list a failed 'update' does not trip set -e
+    # and defconfig would run with no feeds
+    ./scripts/feeds update -a || die "feeds update failed"
+    ./scripts/feeds install -a || die "feeds install failed"
     # seed the device selection, let defconfig resolve the rest
     local t="${TARGET%%/*}" st="${TARGET##*/}"
     {

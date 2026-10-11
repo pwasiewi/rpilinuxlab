@@ -22,7 +22,7 @@
 #   chroot [CMD]     QEMU user chroot into sysroot (mounts + trap umount)
 #   1by1 [--fresh] ARGS  resolve deps (any emerge args, e.g. -e @world), build each
 #                    package --nodeps: cross first, fall back to qemu chroot;
-#                    logs in /var/tmp/xarm/ (done.log: atom<TAB>mode<TAB>secs);
+#                    logs in /var/tmp/xarm/ (done.<profile>.<cpu>.log: atom<TAB>mode<TAB>secs);
 #                    --fresh rotates previous logs first
 #   binhost [PORT]   serve sysroot binpkgs over HTTP for the Pi (default 8686)
 #   distcc start|stop|status  host distccd on loopback (compile offload for the
@@ -243,9 +243,18 @@ sysroot_write_makeconf() {
     if grep -q "^# xarm settings" "${mc}" && ! grep -q "^# >>> xarm managed" "${mc}"; then
         sed -i '/^# xarm settings/,$d' "${mc}"
     fi
-    sed -i '/^# >>> xarm managed/,/^# <<< xarm managed/d' "${mc}"
+    # both markers or neither: a start marker without its end (an interrupted
+    # earlier write) would make the range delete eat everything to EOF
+    if grep -q "^# >>> xarm managed" "${mc}" && ! grep -q "^# <<< xarm managed" "${mc}"; then
+        die "${mc}: '# >>> xarm managed' without its '# <<< xarm managed' end marker — fix by hand before rerunning"
+    fi
+    local distdir
+    distdir=$(portageq distdir) && [[ -n ${distdir} ]] || die "portageq distdir failed — refusing to write DISTDIR=\"\" into ${mc}"
+    # build the new file next to the old one and mv it into place
+    local mcnew="${mc}.new.$$"
+    sed '/^# >>> xarm managed/,/^# <<< xarm managed/d' "${mc}" > "${mcnew}"
     info "Writing managed block in ${mc} (-mtune=${CPU})"
-    cat >> "${mc}" <<-EOF
+    cat >> "${mcnew}" <<-EOF
 	# >>> xarm managed — rewritten by 'xarm setup' / 'xarm tune', do not edit inside
 	# All ARM profiles share this one sysroot: -march=armv8-a keeps every binary
 	# runnable on every ARMv8 board (Pi 3 / 400 / Zero 2 W); -mtune only changes
@@ -262,7 +271,7 @@ sysroot_write_makeconf() {
 	# Share the HOST distdir. Without this line Portage falls back to its
 	# default /var/cache/distfiles, which sits on the host's root fs and
 	# outside ramstart1's bind mounts — 8.3G had piled up there by 2026-09-24.
-	DISTDIR="$(portageq distdir)"
+	DISTDIR="${distdir}"
 	FEATURES="buildpkg -news"
 	# qemu-user chroot cannot take the namespace sandboxes (Embedded Handbook)
 	FEATURES="\${FEATURES} -pid-sandbox -ipc-sandbox -network-sandbox"
@@ -291,12 +300,13 @@ sysroot_write_makeconf() {
     # xp-profile additions land inside the managed block, so the next
     # setup/tune under a different profile removes them with the rest
     if [[ -n ${USE_EXTRA} ]]; then
-        echo "# xp profile USE (XARM_USE_EXTRA)" >> "${mc}"
-        echo "USE=\"\${USE} ${USE_EXTRA}\"" >> "${mc}"
+        echo "# xp profile USE (XARM_USE_EXTRA)" >> "${mcnew}"
+        echo "USE=\"\${USE} ${USE_EXTRA}\"" >> "${mcnew}"
     fi
-    [[ -z ${VIDEO_CARDS_EXTRA} ]]   || echo "VIDEO_CARDS=\"${VIDEO_CARDS_EXTRA}\"" >> "${mc}"
-    [[ -z ${INPUT_DEVICES_EXTRA} ]] || echo "INPUT_DEVICES=\"${INPUT_DEVICES_EXTRA}\"" >> "${mc}"
-    echo "# <<< xarm managed" >> "${mc}"
+    [[ -z ${VIDEO_CARDS_EXTRA} ]]   || echo "VIDEO_CARDS=\"${VIDEO_CARDS_EXTRA}\"" >> "${mcnew}"
+    [[ -z ${INPUT_DEVICES_EXTRA} ]] || echo "INPUT_DEVICES=\"${INPUT_DEVICES_EXTRA}\"" >> "${mcnew}"
+    echo "# <<< xarm managed" >> "${mcnew}"
+    mv -f "${mcnew}" "${mc}" || die "could not replace ${mc}"
 }
 
 # Per-xp-profile portage fragments in the shared sysroot: every xprofile-*
@@ -579,7 +589,9 @@ cmd_setup() {
     # symlinks: an absolute link would be re-resolved inside the prefix.
     local gcclibdir
     gcclibdir=$(dirname "$("${TARGET}-gcc" -print-file-name=libgcc_s.so.1 2>/dev/null)")
-    if [[ -d ${gcclibdir} ]]; then
+    # not found → gcc echoes the bare name, dirname gives "." and the loop
+    # below would copy ./*.so.* from the caller's cwd into the sysroot
+    if [[ ${gcclibdir} == /* && -d ${gcclibdir} ]]; then
         local so n=0
         mkdir -p "${SYSROOT}/usr/lib64"
         for so in "${gcclibdir}"/*.so.[0-9]*; do
@@ -829,17 +841,25 @@ cmd_qca_fix() {
         info "No ${cfg} — app-crypt/qca not in the sysroot, nothing to fix"
         return 0
     fi
-    if grep -q "\"${SYSROOT}/usr/include/Qca-qt6/QtCrypto\"" "${cfg}" 2>/dev/null; then
-        info "qca cmake export already sysroot-prefixed — nothing to do"
-        return 0
+    # every per-config export (-relwithdebinfo, -release, -debug …), not just
+    # one name: the build type that qca was built with decides which exists,
+    # and an unpatched one is exactly the host-libqca link this verb exists
+    # to prevent (audit 2026-10-11)
+    local f bad=""
+    shopt -s nullglob
+    local cfgs=( "${dir}"/Qca-qt6Targets-*.cmake )
+    shopt -u nullglob
+    for f in "${cfgs[@]}"; do
+        sed -i -E "s#\"(/usr/lib64/libqca-qt6\.so[0-9.]*)\"#\"${SYSROOT}\1\"#g" "${f}"
+        grep -qE "\"/usr/lib64/libqca-qt6\.so[0-9.]*\"" "${f}" && bad+=" ${f##*/}"
+    done
+    if ! grep -q "\"${SYSROOT}/usr/include/Qca-qt6/QtCrypto\"" "${cfg}"; then
+        sed -i "s#\"/usr/include/Qca-qt6/QtCrypto\"#\"${SYSROOT}/usr/include/Qca-qt6/QtCrypto\"#" "${cfg}"
+        grep -q "\"${SYSROOT}/usr/include/Qca-qt6/QtCrypto\"" "${cfg}" ||
+            die "sed did not take on ${cfg} — check the upstream string still matches"
     fi
-    sed -i "s#\"/usr/include/Qca-qt6/QtCrypto\"#\"${SYSROOT}/usr/include/Qca-qt6/QtCrypto\"#" "${cfg}"
-    [[ -f ${rwdi} ]] && sed -i -E \
-        "s#\"(/usr/lib64/libqca-qt6\.so[0-9.]*)\"#\"${SYSROOT}\1\"#g" \
-        "${rwdi}"
-    grep -q "\"${SYSROOT}/usr/include/Qca-qt6/QtCrypto\"" "${cfg}" ||
-        die "sed did not take on ${cfg} — check the upstream string still matches"
-    info "Patched ${dir}/*.cmake to sysroot-relative paths"
+    [[ -z ${bad} ]] || die "host-absolute libqca path still present in:${bad} — upstream export format changed?"
+    info "qca cmake export sysroot-prefixed: ${cfg##*/} + ${#cfgs[@]} per-config file(s)"
 }
 
 # ---------------------------------------------------------------------------
@@ -858,10 +878,15 @@ chroot_umount() {
 chroot_mount() {
     local tgt="${CHROOT_BASE}$2"
     mkdir -p "${tgt}"
+    # already mounted (a concurrent or leftover session) → not ours, never
+    # unmounted by us; a failed mount is fatal, cmd_chroot often runs inside
+    # an 'if' where set -e is off (audit 2026-10-11)
+    mountpoint -q "${tgt}" && return 0
     case "$1" in
-        proc)  mountpoint -q "${tgt}" || mount -t proc proc "${tgt}" ;;
-        rbind) mountpoint -q "${tgt}" || { mount --rbind "$3" "${tgt}"; mount --make-rslave "${tgt}"; } ;;
-        bind)  mountpoint -q "${tgt}" || mount --bind "$3" "${tgt}" ;;
+        proc)  mount -t proc proc "${tgt}" || die "mount proc on ${tgt} failed" ;;
+        rbind) mount --rbind "$3" "${tgt}" || die "rbind $3 -> ${tgt} failed"
+               mount --make-rslave "${tgt}" || { umount -R "${tgt}"; die "make-rslave ${tgt} failed — would propagate umounts to the host"; } ;;
+        bind)  mount --bind "$3" "${tgt}" || die "bind $3 -> ${tgt} failed" ;;
     esac
     MOUNTED+=("${tgt}")
 }
@@ -937,7 +962,10 @@ cmd_1by1() {
     [[ ${1:-} == --fresh ]] && { fresh=1; shift; }
     [[ $# -gt 0 ]] || die "Usage: xarm 1by1 [--fresh] <emerge-args|@set> (e.g. @system, -e @world)"
     mkdir -p "${LOGDIR}"
-    local done_log="${LOGDIR}/done.log" failed_log="${LOGDIR}/failed.log" chroot_log="${LOGDIR}/via-chroot.log"
+    # per profile + tune: a shared done.log said "already done, skipping" for
+    # atoms built for a DIFFERENT sysroot profile (or before a sysroot wipe)
+    local tag="${PKGDIR_NAME#binpkgs-}.${CPU}"
+    local done_log="${LOGDIR}/done.${tag}.log" failed_log="${LOGDIR}/failed.${tag}.log" chroot_log="${LOGDIR}/via-chroot.${tag}.log"
     if [[ ${fresh} -eq 1 ]]; then
         local stamp f; stamp=$(date +%Y%m%d-%H%M%S)
         for f in "${done_log}" "${failed_log}" "${chroot_log}"; do
@@ -1011,7 +1039,7 @@ cmd_binhost() {
     echo "  priority = 10"
     echo
     echo "Then: emerge --getbinpkg --usepkg <pkg>    (Ctrl-C here to stop serving)"
-    exec python3 -m http.server --directory "${pkgdir}" "${port}"
+    exec python3 -m http.server --bind "${ip}" --directory "${pkgdir}" "${port}"
 }
 
 # ---------------------------------------------------------------------------
@@ -1061,7 +1089,10 @@ cmd_distcc() {
         local hostv targetv
         hostv=$("${TARGET}-gcc" -dumpversion | cut -d. -f1)
         targetv=$(chroot "${root}" /usr/bin/gcc -dumpversion 2>/dev/null | cut -d. -f1 || true)
-        [[ -z ${targetv} || ${hostv} == "${targetv}" ]] ||
+        # empty used to PASS the guard (no gcc in the chroot, or binfmt not
+        # registered) — the one case the parity check exists for
+        [[ -n ${targetv} ]] || die "cannot read the chroot's gcc version (${root}/usr/bin/gcc missing, or qemu binfmt not registered) — refusing to set up distcc blind"
+        [[ ${hostv} == "${targetv}" ]] ||
             die "gcc major mismatch: cross ${hostv} vs chroot ${targetv}"
         # masquerade fix: plain cc/gcc/g++/c++ must travel as ${TARGET}-* names,
         # or the host distccd would run its native x86_64 gcc (wrong objects)

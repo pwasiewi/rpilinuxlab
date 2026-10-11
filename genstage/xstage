@@ -534,7 +534,23 @@ ALL_TARGETS=(amd64 tiny arm64)
 die()     { echo "❌  $*" >&2; exit 1; }
 info()    { echo ">>>  $*"; }
 warn()    { echo "⚠️   $*" >&2; }
-confirm() { read -r -p "$1 [yes/NO]: " ans; [[ "$ans" == "yes" ]] || die "Aborted."; }
+confirm() { read -r -p "$1 [yes/NO]: " ans || die "Aborted (no answer on stdin)."; [[ "$ans" == "yes" ]] || die "Aborted."; }
+# binrepos.conf must carry 'verify-signature = true' per section; asserted in
+# conf and AGAIN after the overlay rsync, which may bring its own portage files
+live_assert_binrepos_sig() {
+    local brc
+    for brc in "${LIVE_ROOT}"/etc/portage/binrepos.conf/*.conf \
+               "${LIVE_ROOT}"/etc/portage/binrepos.conf; do
+        [[ -f ${brc} ]] || continue
+        # 'if !' and not 'grep -q ... && continue': under set -e the
+        # short-circuited AND-list is itself the statement's exit status,
+        # so a file that legitimately lacks the line would abort 'conf'
+        if ! grep -q '^[[:space:]]*verify-signature' "${brc}"; then
+            info "binrepos.conf: asserting 'verify-signature = true' in ${brc#"${LIVE_ROOT}"}"
+            printf 'verify-signature = true\n' >> "${brc}"
+        fi
+    done
+}
 # Refuse to rm -rf a tree that still has mounts under it. live_chroot rbinds
 # /dev and /sys and bind-mounts the host's distfiles, binpkgs, builddir and
 # ccache READ-WRITE into the rootfs; after a SIGKILL or a crash those stay,
@@ -669,14 +685,17 @@ cmd_seed() {
         fi
         info "Verifying releng GPG signature"
         local gtmp; gtmp=$(mktemp -d)
-        GNUPGHOME="${gtmp}" gpg -q --import "${keyring}" 2>/dev/null
+        GNUPGHOME="${gtmp}" gpg -q --import "${keyring}" 2>/dev/null ||
+            { command rm -rf "${gtmp}"; die "could not import ${keyring} — gpg broken?"; }
         GNUPGHOME="${gtmp}" gpg -q --trust-model always \
             --verify "${DL_DIR}/${tarball}.asc" "${DL_DIR}/${tarball}" 2>/dev/null ||
             { command rm -rf "${gtmp}"; die "GPG verification FAILED on ${tarball}"; }
         command rm -rf "${gtmp}"
         info "GPG signature good (Gentoo Release Engineering)"
+    elif [[ ${XSTAGE_ALLOW_UNVERIFIED:-} == 1 ]]; then
+        warn "No ${keyring} — stage3 origin NOT verified (XSTAGE_ALLOW_UNVERIFIED=1)"
     else
-        warn "No ${keyring} — stage3 origin NOT verified: emerge -av sec-keys/openpgp-keys-gentoo-release"
+        die "No ${keyring} — the stage3's origin cannot be verified (the .sha256 rides the same mirror). Fix: emerge -av sec-keys/openpgp-keys-gentoo-release; or XSTAGE_ALLOW_UNVERIFIED=1 to accept the mirror's sha256 alone"
     fi
 
     # without the catalyst dirs the seed still serves 'arm64 unpack' from dl/
@@ -1103,7 +1122,8 @@ live_distfiles_seed() {
         [[ -f ${f} ]] || continue
         case "${f}" in *.md|*.txt) continue ;; esac
         [[ -e ${LIVE_DISTFILES_DIR}/${f##*/} ]] && continue
-        cp -n "${f}" "${LIVE_DISTFILES_DIR}/" && n=$((n + 1))
+        cp -n "${f}" "${LIVE_DISTFILES_DIR}/" || die "seed copy failed: ${f} -> ${LIVE_DISTFILES_DIR} (disk full? permissions?)"
+        n=$((n + 1))
     done
     [[ ${n} -eq 0 ]] || info "Seeded ${n} fetch-restricted distfile(s) from ${store}"
 }
@@ -1199,7 +1219,13 @@ live_chroot() {  # live_chroot <label>  (script on stdin)
     local rc=0
     # LC_ALL=C.UTF-8: the host's pl_PL.utf8 is not generated inside a stage3,
     # and every step otherwise opens with two setlocale warnings
-    LC_ALL=C.UTF-8 chroot "${LIVE_ROOT}" /bin/bash -s <<-EOF || rc=$?
+    # env -i: the caller's exported ROOT/USE/MAKEOPTS/EMERGE_DEFAULT_OPTS must
+    # not leak into the image build; proxies are passed through on purpose
+    chroot "${LIVE_ROOT}" /usr/bin/env -i HOME=/root TERM="${TERM:-dumb}" LC_ALL=C.UTF-8 \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        ${http_proxy:+http_proxy="${http_proxy}"} ${https_proxy:+https_proxy="${https_proxy}"} \
+        ${ftp_proxy:+ftp_proxy="${ftp_proxy}"} ${no_proxy:+no_proxy="${no_proxy}"} \
+        /bin/bash -s <<-EOF || rc=$?
 	set -eo pipefail
 	source /etc/profile >/dev/null 2>&1 || true
 	$(cat)
@@ -1449,18 +1475,7 @@ cmd_live_conf() {
         # from a remote binhost unverified and says nothing about it. Appended
         # at the end of the file, which is the last (and by convention only)
         # section it declares.
-        local brc
-        for brc in "${LIVE_ROOT}"/etc/portage/binrepos.conf/*.conf \
-                   "${LIVE_ROOT}"/etc/portage/binrepos.conf; do
-            [[ -f ${brc} ]] || continue
-            # 'if !' and not 'grep -q ... && continue': under set -e the
-            # short-circuited AND-list is itself the statement's exit status,
-            # so a file that legitimately lacks the line would abort 'conf'
-            if ! grep -q '^[[:space:]]*verify-signature' "${brc}"; then
-                info "binrepos.conf: asserting 'verify-signature = true' in ${brc#"${LIVE_ROOT}"}"
-                printf 'verify-signature = true\n' >> "${brc}"
-            fi
-        done
+        live_assert_binrepos_sig
     fi
 
     if [[ -n ${LIVE_PORTAGE_PROFILE} ]]; then
@@ -1504,6 +1519,9 @@ cmd_live_conf() {
                 warn "PROF_LIVE_OVERLAY_DIR names '${ovdir}' but ${ov} does not exist"
             fi
         done
+        # an overlay may carry its own binrepos.conf — re-assert what conf
+        # pinned above (ordering finding, audit 2026-10-11)
+        if [[ " ${LIVE_FEATURES} " == *getbinpkg* ]]; then live_assert_binrepos_sig; fi
     fi
     # FEATURES=ccache does nothing without the masquerade symlinks in
     # /usr/lib/ccache/bin, and those come from dev-util/ccache being installed
@@ -2255,8 +2273,16 @@ cmd_live_configure() {
     if [[ -n ${LIVE_USER} ]]; then
         info "Live user '${LIVE_USER}' (password '${ZERO_PASS}', autologin)"
         live_chroot live-user <<-EOF
-	id -u ${LIVE_USER} >/dev/null 2>&1 ||
+	if id -u ${LIVE_USER} >/dev/null 2>&1; then
+	    # a re-run: useradd -m is what copies /etc/skel, so files the layers
+	    # added since (conf -> configure again) never reached the home.
+	    # cp -n adds what is missing and leaves the account's own files alone.
+	    echo "live user ${LIVE_USER} exists — adding missing /etc/skel files" >&2
+	    cp -an /etc/skel/. /home/${LIVE_USER}/
+	    chown -R ${LIVE_USER}:${LIVE_USER} /home/${LIVE_USER}
+	else
 	    useradd -m -c "Live user" -s /bin/bash -p '${hash}' ${LIVE_USER}
+	fi
 	# Every group the image defines, not a hand-picked list (user rule
 	# 2026-08-06): a live medium is expected to reach all hardware and every
 	# service group without a reinstall, and the set differs per profile.
@@ -2265,7 +2291,7 @@ cmd_live_configure() {
 	# means nothing.
 	for g in \$(cut -d: -f1 /etc/group); do
 	    case \${g} in root|nogroup|nobody|${LIVE_USER}) continue ;; esac
-	    gpasswd -a ${LIVE_USER} \${g} >/dev/null || true
+	    gpasswd -a ${LIVE_USER} \${g} >/dev/null || echo "gpasswd -a ${LIVE_USER} \${g} failed" >&2
 	done
 	EOF
         if [[ -n ${XSTAGE_LIVE_XSESSION:-} ]]; then
@@ -2396,8 +2422,14 @@ cmd_live_configure() {
         [[ -e ${LIVE_ROOT}/usr/lib/systemd/system/logrotate.timer ]] &&
             units+=(logrotate.timer)
         live_chroot enable-units <<-EOF
-		systemctl enable ${units[*]} || true
-		systemctl set-default graphical.target 2>/dev/null || true
+		# one at a time and FATAL: 'enable a b c || true' shipped an image
+		# with no display manager and said nothing (audit 2026-10-11)
+		fail=0
+		for u in ${units[*]}; do
+		    systemctl enable "\$u" || { echo "systemctl enable \$u FAILED" >&2; fail=1; }
+		done
+		systemctl set-default graphical.target || { echo "set-default graphical.target FAILED" >&2; fail=1; }
+		[ "\$fail" = 0 ] || exit 1
 		EOF
         live_sound_units
     else
@@ -2442,6 +2474,10 @@ cmd_live_kernel() {
 	[ -f /usr/src/linux/.config ] || { echo "no /usr/src/linux/.config" >&2; exit 1; }
 
 	sed -i 's/CDROOT="0"/CDROOT="1"/' /usr/share/genkernel/defaults/initrd.defaults
+	grep -q 'CDROOT="1"' /usr/share/genkernel/defaults/initrd.defaults ||
+	    { echo "initrd.defaults: CDROOT not switched to 1 (format changed?)" >&2; exit 1; }
+	# restore CDROOT=0 even if genkernel dies: the next run must start clean
+	trap 'sed -i "s/CDROOT=\\"1\\"/CDROOT=\\"0\\"/" /usr/share/genkernel/defaults/initrd.defaults' EXIT
 	# LLVM=1 (env, which kbuild imports) builds the whole kernel with clang.
 	# It is what makes CONFIG_DEBUG_INFO_BTF possible at all: BTF 'depends on
 	# !GCC_PLUGIN_RANDSTRUCT', and the hardened images set RANDSTRUCT_FULL, so
@@ -2495,6 +2531,10 @@ cmd_live_kernel() {
     info "Building the stub kernel (integrated initramfs) for direct UEFI boot"
     live_chroot kernel-stub <<-EOF
 	sed -i 's/CDROOT="0"/CDROOT="1"/' /usr/share/genkernel/defaults/initrd.defaults
+	grep -q 'CDROOT="1"' /usr/share/genkernel/defaults/initrd.defaults ||
+	    { echo "initrd.defaults: CDROOT not switched to 1 (format changed?)" >&2; exit 1; }
+	# restore CDROOT=0 even if genkernel dies: the next run must start clean
+	trap 'sed -i "s/CDROOT=\\"1\\"/CDROOT=\\"0\\"/" /usr/share/genkernel/defaults/initrd.defaults' EXIT
 	# same toolchain as pass 1 — a gcc relink here would produce a stub whose
 	# modules the pass-1 kernel cannot load (different vermagic/RANDSTRUCT hash)
 	LLVM=1 genkernel --makeopts=-j${JOBS} --kernel-config=/usr/src/linux/.config \\
@@ -2552,7 +2592,9 @@ cmd_live_kernel() {
         kmods+="$(echo "${kc}" | sed -E 's/-[0-9][0-9a-zA-Z._]*(-r[0-9]+)?$//') "
     done < <(grep -ls '^obj /lib/modules/' "${LIVE_ROOT}"/var/db/pkg/*/*/CONTENTS 2>/dev/null |
              sed 's|.*/var/db/pkg/||; s|/CONTENTS$||')
-    if [[ -n ${kmods} ]]; then
+    if [[ -z ${kmods} ]]; then
+        info "No vdb package owns files under /lib/modules — nothing to rebuild (expected only on a tree without out-of-tree modules)"
+    else
         info "Rebuilding kernel-module packages against the fresh tree: ${kmods}"
         live_chroot kmod-rebuild <<-EOF
 	emerge --ignore-default-opts --verbose --keep-going --oneshot --quiet-build=y \\
@@ -2700,6 +2742,9 @@ cmd_live_rmkernel() {
     [[ -n ${ver} ]] ||
         die "Usage: $0 ${TGT} rmkernel <upstream version>   (e.g. rmkernel 7.1.5 — not the /lib/modules name 7.1.5-zen1-x86_64)"
     [[ -d ${LIVE_ROOT} ]] || die "No live tree at ${LIVE_ROOT}"
+    # the version is interpolated into globs that feed rm -rf — a wildcard or
+    # a path component here would widen the victim list
+    [[ ${ver} =~ ^[0-9]+(\.[0-9]+){1,3}(-r[0-9]+)?$ ]] || die "rmkernel: '${ver}' is not a plain upstream version (e.g. 7.1.5)"
 
     # Refuse the SELECTED kernel, whichever it is. Not "select a newer one":
     # rolling BACK — point the symlink at the old kernel and drop the new one —
@@ -2909,6 +2954,9 @@ ${stale}"
     # into thousands of log lines.
     local sqprogress=()
     [[ -t 1 ]] || sqprogress=(-no-progress)
+    # -no-xattrs is deliberate (decision 2026-10-11): file capabilities and
+    # IMA/SELinux labels are NOT shipped in the live image; the live kernel
+    # does not need SQUASHFS_XATTR, and ping & co. are setuid-free anyway.
     mksquashfs "${LIVE_ROOT}" "${LIVE_ISO_DIR}/livecd.squashfs" \
         -comp "${LIVE_COMP}" -noappend "${sqprogress[@]}" -b 1048576 -no-xattrs \
         -e "${excl[@]}" || die "mksquashfs failed"
@@ -3032,8 +3080,8 @@ cmd_live_usb() {
     [[ -x ${USB_TOOLS}/build-usb ]] || die "No ${USB_TOOLS}/build-usb"
     [[ -x ${USB_TOOLS}/build-initrd-uuid-next ]] || die "No ${USB_TOOLS}/build-initrd-uuid-next"
     local name="${dev#/dev/}"
-    lsblk -no MOUNTPOINTS "${dev}" | grep -qx / &&
-        die "${dev} holds the root filesystem — refusing"
+    local mps; mps=$(lsblk -no MOUNTPOINTS "${dev}")
+    grep -qx / <<<"${mps}" && die "${dev} holds the root filesystem — refusing"
     local removable idbus
     removable=$(cat "/sys/block/${name}/removable" 2>/dev/null || echo 0)
     idbus=$(udevadm info --query=property --name="${dev}" | { grep '^ID_BUS=' || true; } | cut -d= -f2)
@@ -3054,11 +3102,13 @@ ${still}"
         partprobe "${dev}" 2>/dev/null || true; sleep 1
     else
         info "Reusing existing ESP+LIVE layout on ${dev} (--wipe repartitions, wiping DATA too)"
+        confirm "Write the new kernel/initrd/squashfs onto ${dev} (${p1}, ${p2})?"
     fi
     [[ -b ${p1} && -b ${p2} ]] || die "Missing ${p1}/${p2} after layout step"
 
     local uuid
-    uuid=$(lsblk -no UUID "${p2}" | head -n1)
+    udevadm settle 2>/dev/null || true
+    uuid=$(blkid -p -o value -s UUID "${p2}")   # -p: probe, not the udev cache (a stale UUID bakes into the initrd)
     [[ -n ${uuid} ]] || die "No filesystem UUID on ${p2}"
     info "LIVE partition ${p2}: UUID=${uuid}"
     # The initrd is rebuilt per stick (UUID is baked in). Its busybox must
@@ -3083,11 +3133,15 @@ ${still}"
         warn "no genkernel-built busybox in the image — host-compiled fallback (host glibc ISA leaks into static binaries)"
     fi
     mkdir -p "${DL_DIR}/uuid-initrd"
+    # the previous stick's initrd (its UUID baked in) must not survive a
+    # build that exits 0 without writing a new one
+    command rm -f "${DL_DIR}/uuid-initrd/initrd.uuid.cpio.gz"
     ( cd "${DL_DIR}/uuid-initrd" &&
       "${USB_TOOLS}/build-initrd-uuid-next" --uuid "${uuid}" \
           --init "${LIVE_INIT}" --tmpfs-mb 8192 \
           ${bb_dir:+--busybox-bin "${bb_dir}/bin/busybox"} ) ||
         die "build-initrd-uuid-next failed"
+    [[ -s ${DL_DIR}/uuid-initrd/initrd.uuid.cpio.gz ]] || die "build-initrd-uuid-next exited 0 but wrote no initrd.uuid.cpio.gz"
     [[ -n ${bb_dir} ]] && command rm -rf "${bb_dir}"
 
     local mnt
@@ -3119,6 +3173,8 @@ ${still}"
     # (the commented debug lines start with '#' and don't match the anchor)
     sed -i "s|^\( *\)initrd .*|\1initrd ${uc_files}/initrd.uuid.cpio.gz|" \
         "${mnt}/boot/grub/grub.cfg" || die "grub.cfg initrd-line rewrite failed"
+    grep -q "initrd ${uc_files}/initrd.uuid.cpio.gz" "${mnt}/boot/grub/grub.cfg" ||
+        die "grub.cfg has no initrd line to rewrite — the stick would boot the old initrd"
     # stub kernel with builtin initramfs: bootable straight from the firmware
     # menu / efibootmgr without GRUB (kernel EFI stub, no cmdline needed)
     if [[ -f ${LIVE_BLD}/bzImage-stub ]]; then
@@ -3131,6 +3187,8 @@ ${still}"
     info "LIVE ${p2}: livecd.squashfs ($(du -h "${LIVE_ISO_DIR}/livecd.squashfs" | cut -f1))"
     command cp -f "${LIVE_ISO_DIR}/livecd.squashfs" "${mnt}/livecd.squashfs"
     sync
+    cmp -s "${LIVE_ISO_DIR}/livecd.squashfs" "${mnt}/livecd.squashfs" ||
+        die "livecd.squashfs on ${p2} differs from the source after copy — bad stick or short write"
     umount "${mnt}"
     trap - EXIT
     rmdir "${mnt}"
@@ -3292,7 +3350,10 @@ cmd_live_enter() {
     # PS1 so a root shell inside the image is never mistaken for the host's.
     # Start in /root, not /: chroot always lands on the new root, and that is
     # both a worse place to work and easy to mistake for the host's /.
-    LC_ALL=C.UTF-8 chroot "${LIVE_ROOT}" /bin/bash -c \
+    chroot "${LIVE_ROOT}" /usr/bin/env -i HOME=/root TERM="${TERM:-dumb}" LC_ALL=C.UTF-8 \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+        ${http_proxy:+http_proxy="${http_proxy}"} ${https_proxy:+https_proxy="${https_proxy}"} \
+        ${no_proxy:+no_proxy="${no_proxy}"} /bin/bash -c \
         'source /etc/profile >/dev/null 2>&1 || true
          cd /root 2>/dev/null || cd /
          export HOME=/root
@@ -3839,6 +3900,8 @@ tiny_make_image() {  # tiny_make_image <rpi400|rpi3|zero2w>
         mkpart primary ext4 "$((BOOT_MB + 1))MiB" 100%
     local loop
     loop=$(losetup -Pf --show "${TINY_IMG}")
+    udevadm settle 2>/dev/null || true
+    [[ -b ${loop}p1 && -b ${loop}p2 ]] || die "partition nodes ${loop}p1/p2 did not appear"
     # shellcheck disable=SC2064 — expand ${loop} now, it's gone at trap time
     trap "tiny_img_umount; losetup -d ${loop} 2>/dev/null || true" EXIT
     trap "tiny_img_umount; losetup -d ${loop} 2>/dev/null || true; exit 130" INT
@@ -3848,7 +3911,7 @@ tiny_make_image() {  # tiny_make_image <rpi400|rpi3|zero2w>
     # MBR disk id -> root=PARTUUID=<id>-02: survives dd, so the identical
     # cmdline works in qemu and on the physical card regardless of mmcblk N
     local ptuuid
-    ptuuid=$(blkid -o value -s PTUUID "${loop}")
+    ptuuid=$(blkid -p -o value -s PTUUID "${loop}")   # -p: probe the device, not the udev cache
     [[ -n ${ptuuid} ]] || die "No PTUUID on ${loop}"
     echo "${ptuuid}" > "${TINY_BLD}/ptuuid"
 
@@ -3995,8 +4058,8 @@ cmd_tiny_sd() {
     [[ -b ${dev} ]] || die "Block device not found: ${dev}"
     local name="${dev#/dev/}"
     # never a disk that holds a mounted / (covers LUKS/LVM via the child tree)
-    lsblk -no MOUNTPOINTS "${dev}" | grep -qx / &&
-        die "${dev} holds the root filesystem — refusing"
+    local mps; mps=$(lsblk -no MOUNTPOINTS "${dev}")
+    grep -qx / <<<"${mps}" && die "${dev} holds the root filesystem — refusing"
     local removable idbus tran model size
     removable=$(cat "/sys/block/${name}/removable" 2>/dev/null || echo 0)
     idbus=$(udevadm info --query=property --name="${dev}" | { grep '^ID_BUS=' || true; } | cut -d= -f2)

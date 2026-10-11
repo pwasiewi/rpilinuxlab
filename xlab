@@ -266,21 +266,27 @@ fetch() {  # fetch <filename> <url> [md5]
 }
 
 unpack_kernel() {
-    if [[ ! -f ${KERNEL_SRC}/Makefile ]]; then
+    # stamp, not "Makefile exists": tar writes the top-level Makefile early,
+    # so an interrupted unpack passed the guard forever
+    if [[ ! -f ${KERNEL_SRC}/.xlab-unpacked ]]; then
         fetch "${KERNEL_TAR}" "${KERNEL_URL}" "${KERNEL_MD5}"
         info "Unpacking ${KERNEL_TAR}"
         mkdir -p "${SRC_DIR}"
-        tar xf "${DL_DIR}/${KERNEL_TAR}" -C "${SRC_DIR}"
+        command rm -rf "${KERNEL_SRC}"
+        tar xf "${DL_DIR}/${KERNEL_TAR}" -C "${SRC_DIR}" || die "unpack of ${KERNEL_TAR} failed"
+        touch "${KERNEL_SRC}/.xlab-unpacked"
     fi
 }
 
 unpack_busybox() {
     local sb="${SRC_DIR}/busybox-${BUSYBOX_VER}"
-    if [[ ! -f ${sb}/Makefile ]]; then
+    if [[ ! -f ${sb}/.xlab-unpacked ]]; then
         fetch "${BUSYBOX_TAR}" "${BUSYBOX_URL}" "${BUSYBOX_MD5}"
         info "Unpacking ${BUSYBOX_TAR}"
         mkdir -p "${SRC_DIR}"
-        tar xjf "${DL_DIR}/${BUSYBOX_TAR}" -C "${SRC_DIR}"
+        command rm -rf "${sb}"
+        tar xjf "${DL_DIR}/${BUSYBOX_TAR}" -C "${SRC_DIR}" || die "unpack of ${BUSYBOX_TAR} failed"
+        touch "${sb}/.xlab-unpacked"
     fi
 }
 
@@ -305,6 +311,14 @@ cmd_kernel() {
                 -e RTC_CLASS -e RTC_DRV_PL031 \
                 -e EXT4_FS -e TMPFS -e CGROUPS
             kmake olddefconfig
+            # olddefconfig silently drops a symbol whose dependency is unmet,
+            # and the kernel then panics at boot — assert the boot-critical ones
+            local sym
+            for sym in DEVTMPFS DEVTMPFS_MOUNT PCI PCI_HOST_GENERIC VIRTIO_PCI VIRTIO_BLK VIRTIO_NET \
+                       SERIAL_AMBA_PL011 SERIAL_AMBA_PL011_CONSOLE EXT4_FS TMPFS; do
+                grep -q "^CONFIG_${sym}=y" "${BIN_KERNEL}/.config" ||
+                    die "kernel config: CONFIG_${sym} is not =y after olddefconfig (dependency unmet?) — the -M virt boot would panic"
+            done
         fi
     fi
     info "Building kernel ${TGT}: ${KMAKE_TARGETS[*]} (-j${JOBS})"
@@ -441,13 +455,17 @@ img_mount() {
 }
 
 img_umount() {
-    # two layers: the loop mount and the private bind under it
-    if mountpoint -q "${MNT_DIR}"; then
-        umount "${MNT_DIR}" || warn "umount ${MNT_DIR} failed (still busy?)"
-    fi
-    if mountpoint -q "${MNT_DIR}"; then
-        umount "${MNT_DIR}" || warn "bind umount ${MNT_DIR} failed"
-    fi
+    # two layers: the loop mount and the private bind under it. Fatal when
+    # the mount will not go: a warning used to be followed by "Image ready"
+    # (or "Unmounted") with the loop still live (audit 2026-10-11)
+    sync
+    local i
+    for i in 1 2 3 4; do
+        mountpoint -q "${MNT_DIR}" || return 0
+        umount "${MNT_DIR}" 2>/dev/null || sleep 1
+    done
+    mountpoint -q "${MNT_DIR}" || return 0
+    die "umount ${MNT_DIR} failed (still busy?) — the image is not safe to boot or re-mount until it is unmounted"
 }
 
 no_stale_loop() {
@@ -457,7 +475,7 @@ no_stale_loop() {
     local l
     # '|| true': grep exits 1 when only '(deleted)' entries exist — that is
     # the good case, don't let pipefail+set -e kill the script silently
-    l=$(losetup -j "${IMG}" 2>/dev/null | { grep -v '(deleted)' || true; } | cut -d: -f1 | head -1)
+    l=$({ losetup -j "${IMG}" 2>/dev/null || true; } | { grep -v '(deleted)' || true; } | cut -d: -f1 | head -1)
     [[ -z ${l} ]] || die "Stale loop ${l} still attached to ${IMG} — find the holder (grep -l ${l##*/} /proc/*/mountinfo; nsenter -t PID -m umount -l ${l}) or reboot"
 }
 
@@ -466,6 +484,12 @@ cmd_image() {
     local size="${1:-${IMG_SIZE}}"
     local tarball; tarball=$(stage3_tarball)
     [[ -n ${tarball} ]] || die "No stage3 in ${DL_DIR} — run: $0 gentoo stage3"
+    # newest-by-mtime may be a partial download; re-check it against its
+    # .sha256 when 'stage3' left one next to it
+    if [[ -f ${tarball}.sha256 ]]; then
+        ( cd "${DL_DIR}" && sha256sum -c --ignore-missing --quiet "$(basename "${tarball}").sha256" ) ||
+            die "$(basename "${tarball}") does not match its .sha256 — partial download? re-run: $0 gentoo stage3"
+    fi
     [[ -f ${VMLINUZ} ]] || warn "No kernel yet — modules will not be installed (run '$0 gentoo kernel' first for a complete image)"
     mkdir -p "${EMUL_DIR}" "${MNT_DIR}"
     if [[ -f ${IMG} ]]; then
@@ -604,14 +628,23 @@ cmd_chroot() {
     else
         warn "No xarm sysroot binpkgs at ${binpkgs} — build some first: sudo xarm emerge <pkg>"
     fi
+    # cleanup on every exit path, not just the normal one: Ctrl-C used to
+    # leave the loop mount + the binpkgs bind up (and cmd_clean's rm -rf
+    # would then walk into the host's sysroot binpkgs through the bind)
+    chroot_cleanup() {
+        if [[ ${bound_pkgs} -eq 1 ]]; then
+            umount "${MNT_DIR}/var/cache/binpkgs" || warn "umount binpkgs bind failed"
+            bound_pkgs=0
+        fi
+        if [[ ${mounted_here} -eq 1 ]]; then img_umount; mounted_here=0; fi
+    }
+    trap chroot_cleanup EXIT
+    trap 'chroot_cleanup; exit 130' INT
+    trap 'chroot_cleanup; exit 143' TERM
     local rc=0
     XARM_CHROOT_ROOT="${MNT_DIR}" xarm chroot "$@" || rc=$?
-    if [[ ${bound_pkgs} -eq 1 ]]; then
-        umount "${MNT_DIR}/var/cache/binpkgs" || warn "umount binpkgs bind failed"
-    fi
-    if [[ ${mounted_here} -eq 1 ]]; then
-        img_umount
-    fi
+    chroot_cleanup
+    trap - EXIT INT TERM
     return "${rc}"
 }
 
@@ -680,7 +713,12 @@ cmd_clean() {
         die "${MNT_DIR} is mounted — run: sudo $0 gentoo umount"
     fi
     confirm "Remove ${BLD} (shared dl/ and src/ are kept)?"
-    command rm -rf "${BLD}"
+    # --one-file-system + an explicit mount check: a leftover bind under BLD
+    # (binpkgs from the host sysroot) must never be deleted through
+    local m; m=$(findmnt -rn -o TARGET | awk -v d="${BLD%/}/" 'index($0, d) == 1')
+    [[ -z ${m} ]] || die "mounts still active under ${BLD} — umount first:
+${m}"
+    command rm -rf --one-file-system "${BLD}"
     info "Cleaned ${TGT}."
 }
 

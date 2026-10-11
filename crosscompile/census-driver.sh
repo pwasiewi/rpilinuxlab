@@ -10,14 +10,14 @@ set -uo pipefail
 
 LOGS=/home/pwas/Claude/rpilinuxlab/crosscompile/logs
 STAGE3=/mnt/db1/rpilinuxlab/arm64-chroot
-XARM=/usr/local/bin/xarm
+XARM=$(command -v xarm) || { echo "no xarm in PATH" >&2; exit 1; }   # not a hard-coded mirror path
 
 phase() { echo ">>> [$(date '+%F %T')] $*"; }
 
 phase "A: stage3 update"
 XARM_CHROOT_ROOT=$STAGE3 $XARM chroot "emerge -uvDN --keep-going=y @world" \
     > "$LOGS/22-stage3-update.log" 2>&1
-phase "A done rc=$?"
+rc=$?; phase "A done rc=$rc"; [ "$rc" -eq 0 ] || { phase "A failed — not running B/C on a half-updated stage3"; exit "$rc"; }
 
 phase "B: ccache benchmark (nano cold/warm)"
 {
@@ -30,7 +30,7 @@ phase "B: ccache benchmark (nano cold/warm)"
     echo "--- ccache stats (inside stage3) ---"
     XARM_CHROOT_ROOT=$STAGE3 $XARM chroot "ccache -s"
 } > "$LOGS/23-ccache-bench.log" 2>&1
-phase "B done rc=$?"
+rc=$?; phase "B done rc=$rc"; [ "$rc" -eq 0 ] || { phase "B failed — not running the 1by1 census"; exit "$rc"; }
 
 phase "C: 1by1 census (-e @world + dev-lang/perl)"
 XARM_STAGE3=$STAGE3 $XARM 1by1 --fresh -e @world dev-lang/perl \

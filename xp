@@ -195,6 +195,22 @@ else
 fi
 VERB="$1"; shift
 
+# the verbs the header marks [root]: fail here with the right command instead
+# of inside portage or a child's "Root required: sudo xarm …" (which omits
+# the profile and the XPROFILE= the child then lacks)
+case "${VERB}" in
+    setup|seed|stage1|stage2|stage3|all|verify|crossstage|build|unpack|rootgcc|sysroot-prep|pkgs|update|conf|rpi|image|sd|lock|unlock|configure|livekernel|rmkernel|squash|isolinux|iso|usb|enter|emerge|1by1|cycle)
+        [[ $EUID -eq 0 ]] || die "Root required: sudo xp ${PROF} ${VERB}" ;;
+esac
+# global.conf takes XARM_*/XSTAGE_* from the environment first (sudo -E, a
+# root shell): say so when one is inherited, it silently beats the profile
+_inh=""
+for _v in XARM_PROFILE XARM_CPU XARM_PORTAGE_CONFDIR XARM_TARGET XARM_USE_EXTRA XSTAGE_LIVE_OVERLAY_DIR XSTAGE_BOARD_OVERLAY_DIR; do
+    [[ -n ${!_v:-} ]] && _inh+=" ${_v}=${!_v}"
+done
+[[ -z ${_inh} ]] || warn "inherited from the environment, overriding profile ${PROF}:${_inh}"
+unset _inh _v
+
 # --- apply the profile ------------------------------------------------------
 source "${PROFDIR}/global.conf"
 source "${PROFDIR}/${PROF}.conf"
@@ -248,8 +264,26 @@ rootgcc_guard() {
 # ignored and match/best_version answer from the HOST's vardb (found
 # 2026-10-08: the host's qtwebengine showed up as a sysroot Qt module).
 sysroot_portageq() {
-    PORTAGE_CONFIGROOT="/usr/${PROF_TUPLE}" \
-        portageq "$1" "/usr/${PROF_TUPLE}/" "${@:2}" 2>/dev/null
+    # rc 1 with nothing on stderr = no match (the callers' empty-list case);
+    # anything portage itself complains about is an error, never "nothing
+    # visible" — that silence produced the half-upgraded sysroot of 2026-10-08
+    local err rc=0 out
+    err=$(mktemp)
+    out=$(PORTAGE_CONFIGROOT="/usr/${PROF_TUPLE}" portageq "$1" "/usr/${PROF_TUPLE}/" "${@:2}" 2>"${err}") || rc=$?
+    if [[ ${rc} -ne 0 && -s ${err} ]]; then
+        cat "${err}" >&2; command rm -f "${err}"
+        die "portageq $1 failed in the sysroot (rc=${rc}) — not treating it as 'no match'"
+    fi
+    command rm -f "${err}"
+    [[ -z ${out} ]] || printf '%s\n' "${out}"
+    return "${rc}"
+}
+# stale_consumers runs python inside $(...): a traceback there can only be
+# reported through a marker file, which stale_check turns into a die
+STALE_FAIL="/var/tmp/xp.stale_consumers.failed.$$"
+stale_check() {
+    [[ ! -e ${STALE_FAIL} ]] ||
+        { command rm -f "${STALE_FAIL}"; die "stale_consumers failed (traceback above) — refusing to read that as 'nothing stale'"; }
 }
 
 # stale_consumers ROOT — "cat/pn<TAB>dep-cat/pn" for every package installed
@@ -261,7 +295,8 @@ sysroot_portageq() {
 # vs shadow 0/6, 20 Qt/KDE packages vs qtbase 6.11.1, 2026-10-08). Naming
 # them as atoms is what makes the resolver rebuild them.
 stale_consumers() {
-    python3 - "$1" <<'PYEOF'
+    command rm -f "${STALE_FAIL}"
+    python3 - "$1" <<'PYEOF' || { touch "${STALE_FAIL}"; echo "stale_consumers: python failed for $1" >&2; }
 import glob, os, re, sys
 db = sys.argv[1].rstrip("/") + "/var/db/pkg"
 def pn(pf):
@@ -317,6 +352,7 @@ drop_held() {
 stale_rebuild() {
     local root="$1" holds="$2" atoms rootarg=()
     atoms=$(drop_held "$(stale_consumers "${root}" | cut -f1 | sort -u | tr '\n' ' ')" "${holds}")
+    stale_check
     if [[ -z ${atoms// } ]]; then
         info "${root}: no stale :=-consumers left"
         return 0
@@ -343,6 +379,7 @@ perl_align() {
     [[ -n ${best} ]] && ! PORTAGE_CONFIGROOT="${root}" portageq has_version "${root}/" "=${best}" 2>/dev/null &&
         perl_atom="=${best}"
     atoms=$(stale_consumers "${root}" | awk -F'\t' '$2=="dev-lang/perl"{print $1}' | sort -u | tr '\n' ' ')
+    stale_check
     if [[ -z ${perl_atom} && -z ${atoms// } ]]; then
         info "perl in ${root}: current, nothing bound to an old subslot"
         return 0
@@ -394,7 +431,9 @@ sysroot_perl_prune() {
         info "sysroot: no perl modules installed — nothing to prune"
         return 0
     fi
-    if [[ -z $(stale_consumers "${sr}" | awk -F'\t' '$2=="dev-lang/perl"') ]]; then
+    local perlstale; perlstale=$(stale_consumers "${sr}" | awk -F'\t' '$2=="dev-lang/perl"')
+    stale_check
+    if [[ -z ${perlstale} ]]; then
         info "sysroot: perl modules match the installed perl — kept"
         return 0
     fi
@@ -405,6 +444,9 @@ sysroot_perl_prune() {
     [[ -z ${users// } && -z ${inworld// } ]] ||
         die "sysroot perl modules are bound to the old perl but still needed (users: ${users:-none}; world: ${inworld:-none}) — rebuild them natively, they cannot cross-build"
     info "sysroot: unmerging $(wc -w <<<"${atoms}") stale perl modules (unused there; cross builds run the host's perl)"
+    mkdir -p /var/tmp/xarm
+    printf '%s\n' ${atoms} > "/var/tmp/xarm/perl-prune.$(date +%F_%H%M%S).log"
+    info "removed list logged to /var/tmp/xarm/perl-prune.<timestamp>.log"
     # shellcheck disable=SC2086 — word splitting of the atom list is intended
     "${PROF_TUPLE}-emerge" --unmerge ${atoms}
 }
@@ -632,6 +674,7 @@ update)
         sysroot_perl_prune ||
             die "sysroot perl prune failed — fix it, then rerun: sudo xp ${PROF} update"
         stale=$(drop_held "$(stale_consumers "/usr/${PROF_TUPLE}" | cut -f1 | sort -u | tr '\n' ' ')" "${xa}")
+        stale_check
         # shellcheck disable=SC2086 — word splitting of the atom list is intended
         "${PROF_TUPLE}-emerge" "${a_args[@]}" ${stale} &&
             stale_rebuild "/usr/${PROF_TUPLE}" "${xa}" ||
@@ -646,6 +689,7 @@ update)
         perl_align "${root}" ||
             die "rootfs perl alignment failed — fix it, then rerun: sudo xp ${PROF} update"
         stale=$(drop_held "$(stale_consumers "${root}" | cut -f1 | sort -u | tr '\n' ' ')" "${xb}")
+        stale_check
         # shellcheck disable=SC2086 — word splitting of the atom list is intended
         "${PROF_TUPLE}-emerge" "${b_args[@]}" ${stale} &&
             stale_rebuild "${root}" "${xb}"
