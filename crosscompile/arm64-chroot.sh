@@ -56,7 +56,9 @@ do_mount() {
 GENTOO_REPO=$(portageq get_repo_path / gentoo)
 HOST_DISTDIR=$(portageq distdir)
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 do_mount proc  /proc
 do_mount rbind /dev /dev
 do_mount rbind /sys /sys

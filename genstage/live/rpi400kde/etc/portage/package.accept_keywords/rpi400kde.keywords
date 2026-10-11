@@ -161,3 +161,8 @@ dev-libs/kirigami-addons ~arm64
 # media-plugins/zam-plugins (Maximizer only) is KEYWORDS="amd64" — left out.
 media-plugins/calf ~arm64
 media-plugins/mda-lv2 ~arm64
+
+# app-misc/glow (::pwr, imported from ::guru) is KEYWORDS="~amd64" only; pure Go
+# (go-module), builds for arm64 — same glow.yml (width 120) is shipped in
+# /etc/skel and /root of this layer. 2026-10-11
+app-misc/glow **

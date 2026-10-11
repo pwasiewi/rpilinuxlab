@@ -87,7 +87,14 @@ need_tools() {
 need_ib() { [[ -f ${IB_DIR}/Makefile ]] || die "No ImageBuilder in ${IB_DIR} — run: $0 fetch"; }
 
 newest_sysupgrade() {
-    ls -1t "${BIN_DIR}"/*"${PROFILE}"*sysupgrade* 2>/dev/null | head -1 || true
+    # exact profile match: the old *${PROFILE}*sysupgrade* glob also matched
+    # the "-ubootmod-" variant (different bootloader layout — flashing it to
+    # a stock router bricks it), and "newest by mtime" picked whichever was
+    # built last (audit 2026-10-11)
+    local -a m=( "${BIN_DIR}"/openwrt-*-"${PROFILE}"-squashfs-sysupgrade.* )
+    [[ -e ${m[0]} ]] || return 0
+    (( ${#m[@]} == 1 )) || die "More than one sysupgrade image for ${PROFILE} in ${BIN_DIR} — pass the path: ${m[*]}"
+    echo "${m[0]}"
 }
 
 # ---------------------------------------------------------------------------
@@ -169,7 +176,11 @@ cmd_flash() {
     confirm "Flash this sysupgrade image to ${ROUTER}?"
     scp "${img}" "${ROUTER}:/tmp/sysupgrade.bin"
     # sysupgrade reboots the router mid-command — ssh exiting non-zero is expected
-    ssh "${ROUTER}" "sysupgrade -v ${sysupgrade_opts} /tmp/sysupgrade.bin" || true
+    local rc=0
+    ssh "${ROUTER}" "sysupgrade -v ${sysupgrade_opts} /tmp/sysupgrade.bin" || rc=$?
+    # 255 = ssh lost the connection (the router rebooted mid-command) — fine;
+    # anything else is sysupgrade itself refusing ("Image check failed", …)
+    [[ ${rc} -eq 0 || ${rc} -eq 255 ]] || die "sysupgrade failed on the router (rc=${rc}) — nothing was flashed"
     info "Router is flashing + rebooting — give it ~3 min, then: ssh ${ROUTER}"
 }
 

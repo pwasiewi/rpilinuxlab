@@ -478,7 +478,11 @@ cmd_image() {
     truncate -s "${size}" "${IMG}"
     mkfs.ext4 -q -L gentoo "${IMG}"
 
-    trap img_umount EXIT INT TERM
+    # INT/TERM must exit: a handler that only unmounts lets the script walk on
+    # and write the rest of the image into the plain mount dir on /home
+    trap img_umount EXIT
+    trap 'img_umount; exit 130' INT
+    trap 'img_umount; exit 143' TERM
     img_mount
 
     info "Unpacking $(basename "${tarball}")"

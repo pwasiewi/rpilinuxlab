@@ -516,7 +516,10 @@ sysroot-prep)
     else
         info "Pre-seeding sysroot: ${PROF_SYSROOT_PKGS}"
         # shellcheck disable=SC2086 — word splitting of the package list is intended
-        timed "$(xarm_bin)" emerge --oneshot -q ${PROF_SYSROOT_PKGS}
+        # not 'timed': timed ends in exit, which skipped the qca-fix below for
+        # every profile that sets PROF_SYSROOT_PKGS (found 2026-10-11)
+        time "$(xarm_bin)" emerge --oneshot -q ${PROF_SYSROOT_PKGS} ||
+            die "sysroot pre-seed failed — fix it, then rerun: sudo xp ${PROF} sysroot-prep"
     fi
     # Idempotent and safe even if qca wasn't in PROF_SYSROOT_PKGS or isn't
     # installed yet — re-run once qca lands (e.g. after the real 'pkgs').

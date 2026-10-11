@@ -118,7 +118,22 @@ warn()    { echo "⚠️   $*" >&2; }
 confirm() { read -r -p "$1 [yes/NO]: " ans; [[ "$ans" == "yes" ]] || die "Aborted."; }
 help()   { sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \?//'; }
 
-need_root() { [[ $EUID -eq 0 ]] || die "Root required: sudo $0 $CMD"; }
+need_root() {
+    # the variable goes AFTER sudo: "XPROFILE=x sudo xarm" sets it for sudo
+    # only and env_reset drops it (2026-10-11: a bare tune then wiped all 26
+    # xprofile-* fragments)
+    [[ $EUID -eq 0 ]] || die "Root required: sudo${XPROFILE:+ XPROFILE=${XPROFILE}} $0 $CMD"
+}
+
+# tune/setup rewrite the sysroot for the ACTIVE profile and delete the previous
+# profile's xprofile-* fragments + savedconfig. Without XPROFILE that "active
+# profile" is the bare arm64/23.0 default — a silent downgrade of a desktop
+# sysroot, usually because sudo's env_reset ate the variable. Refuse unless
+# the caller says the bare profile is what they want.
+need_xprofile() {
+    [[ -n ${XPROFILE:-}${XPROFILE_FILE:-}${XARM_BARE:-} ]] ||
+        die "No XPROFILE — this would retune the sysroot to the bare ${PROFILE} and delete every xprofile-* fragment. Run: sudo XPROFILE=<prof> $0 $CMD   (XARM_BARE=1 forces the bare profile)"
+}
 
 need_toolchain() {
     command -v "${TARGET}-gcc" >/dev/null 2>&1 ||
@@ -344,6 +359,7 @@ sysroot_sync_portage_confdir() {
 
 cmd_tune() {
     need_root
+    need_xprofile
     # Like the fragment sync below, this follows the CURRENT XPROFILE (or the
     # default) — a bare 'tune' flips a desktop-flavoured sysroot back to plain
     # arm64/23.0. Without this, switching boards kept the previous board's
@@ -377,6 +393,7 @@ sysroot_ldconfig() {
 # ---------------------------------------------------------------------------
 cmd_setup() {
     need_root
+    need_xprofile
     command -v crossdev >/dev/null || die "Install first: emerge sys-devel/crossdev"
     [[ -x ${QEMU_BIN} ]] || die "No static ${QEMU_BIN} — emerge qemu with USE=static-user QEMU_USER_TARGETS=aarch64"
     file "${QEMU_BIN}" | grep -q "statically linked" ||
@@ -494,18 +511,20 @@ cmd_setup() {
         if grep -q " ${SYSROOT}/" /proc/mounts; then
             die "Mounts active under ${SYSROOT} — umount before usr-merge"
         fi
+        # every step chained with && on purpose: inside "( set -e; … ) || die"
+        # bash IGNORES -e (it is off for any command of an AND-OR list except
+        # the last), so a failed cp -a (ENOSPC) would be followed by the rm -rf
+        # of the real toolchain dirs
         (
-            set -e; cd "${SYSROOT}"
-            cp -a bin/.  usr/bin/;  rm -rf bin;  ln -s usr/bin  bin
-            cp -a sbin/. usr/bin/;  rm -rf sbin; ln -s usr/bin  sbin
-            cp -a lib/.  usr/lib/;  rm -rf lib;  ln -s usr/lib  lib
-            if [[ -d lib64 && ! -L lib64 ]]; then
-                cp -a lib64/. usr/lib64/; rm -rf lib64; ln -s usr/lib64 lib64
-            fi
-            if [[ -d usr/sbin && ! -L usr/sbin ]]; then
-                cp -a usr/sbin/. usr/bin/; rm -rf usr/sbin; ln -s bin usr/sbin
-            fi
-        ) || die "sysroot usr-merge failed"
+            cd "${SYSROOT}" &&
+            cp -a bin/.  usr/bin/ && rm -rf bin  && ln -s usr/bin bin  &&
+            cp -a sbin/. usr/bin/ && rm -rf sbin && ln -s usr/bin sbin &&
+            cp -a lib/.  usr/lib/ && rm -rf lib  && ln -s usr/lib lib  &&
+            { [[ ! -d lib64 || -L lib64 ]] ||
+              { cp -a lib64/. usr/lib64/ && rm -rf lib64 && ln -s usr/lib64 lib64; }; } &&
+            { [[ ! -d usr/sbin || -L usr/sbin ]] ||
+              { cp -a usr/sbin/. usr/bin/ && rm -rf usr/sbin && ln -s bin usr/sbin; }; }
+        ) || die "sysroot usr-merge failed — check ${SYSROOT}/{bin,sbin,lib,lib64} by hand before retrying"
     fi
     # The guard above only fires when the split dirs EXIST — a fresh crossdev
     # sysroot has no /bin at all, and the first package that installs into it
@@ -514,13 +533,13 @@ cmd_setup() {
     # right after bzip2 seeded /bin). Pre-create the merged layout so that
     # can never happen.
     (
-        set -e; cd "${SYSROOT}"
-        mkdir -p usr/bin usr/lib usr/lib64
-        [[ -e bin   ]] || ln -s usr/bin   bin
-        [[ -e sbin  ]] || ln -s usr/bin   sbin
-        [[ -e lib   ]] || ln -s usr/lib   lib
-        [[ -e lib64 ]] || ln -s usr/lib64 lib64
-        [[ -e usr/sbin ]] || ln -s bin usr/sbin
+        cd "${SYSROOT}" &&
+        mkdir -p usr/bin usr/lib usr/lib64 &&
+        { [[ -e bin   ]] || ln -s usr/bin   bin;   } &&
+        { [[ -e sbin  ]] || ln -s usr/bin   sbin;  } &&
+        { [[ -e lib   ]] || ln -s usr/lib   lib;   } &&
+        { [[ -e lib64 ]] || ln -s usr/lib64 lib64; } &&
+        { [[ -e usr/sbin ]] || ln -s bin usr/sbin; }
     ) || die "sysroot merged-usr symlink seed failed"
 
     # 2b-3. rust std for the target — dev-lang/rust-bin ships only the HOST
@@ -536,12 +555,17 @@ cmd_setup() {
         if [[ -n ${rust_ver} && -d ${rustlib} && ! -d ${rustlib}/${TARGET} ]]; then
             info "Installing rust-std ${rust_ver} for ${TARGET} (static.rust-lang.org)"
             rtmp=$(mktemp -d)
-            ( set -e; cd "${rtmp}"
-              curl -fsSO "https://static.rust-lang.org/dist/rust-std-${rust_ver}-${TARGET}.tar.xz"
-              tar xf "rust-std-${rust_ver}-${TARGET}.tar.xz"
+            # && chain + copy-then-rename: a truncated cp -a would leave
+            # ${rustlib}/${TARGET} half-filled and the "! -d" guard above
+            # would never retry
+            ( cd "${rtmp}" &&
+              curl -fsSO "https://static.rust-lang.org/dist/rust-std-${rust_ver}-${TARGET}.tar.xz" &&
+              tar xf "rust-std-${rust_ver}-${TARGET}.tar.xz" &&
               cp -a "rust-std-${rust_ver}-${TARGET}/rust-std-${TARGET}/lib/rustlib/${TARGET}" \
-                    "${rustlib}/"
-            ) || warn "rust-std install failed — cargo packages will NOT cross-build"
+                    "${rustlib}/.${TARGET}.partial" &&
+              mv "${rustlib}/.${TARGET}.partial" "${rustlib}/${TARGET}"
+            ) || { rm -rf "${rustlib}/.${TARGET}.partial"
+                   warn "rust-std install failed — cargo packages will NOT cross-build"; }
             rm -rf "${rtmp}"
         fi
     fi
@@ -693,7 +717,10 @@ cmd_rootgcc() {
     want=$("${TARGET}-gcc" -dumpversion | cut -d. -f1)
     # the SELECTED compiler, not merely an installed one: gcc-config's choice is
     # what writes ld.so.conf.d, hence what the board actually loads
-    have=$(ROOT="${root}/" gcc-config -c "${TARGET}" 2>/dev/null |
+    # gcc-config -c exits 1 when nothing is selected in that ROOT — under
+    # pipefail that would kill the script here instead of reaching the
+    # "selecting nothing" branch below
+    have=$({ ROOT="${root}/" gcc-config -c "${TARGET}" 2>/dev/null || true; } |
            sed -n "s|^${TARGET}-\([0-9]\+\).*|\1|p")
 
     if [[ -z ${have} ]]; then
@@ -891,6 +918,13 @@ cmd_chroot() {
     fi
     chroot_umount
     trap - EXIT INT TERM
+    # the static x86 qemu is only needed while binfmt resolves it INSIDE the
+    # chroot; left behind it ships on the SD card (7 MB, found in the
+    # rpi400kde rootfs 2026-10-11). Only our own copy is removed.
+    if [[ -f ${CHROOT_BASE}/usr/bin/$(basename "${QEMU_BIN}") ]] &&
+       cmp -s "${QEMU_BIN}" "${CHROOT_BASE}/usr/bin/$(basename "${QEMU_BIN}")"; then
+        command rm -f "${CHROOT_BASE}/usr/bin/$(basename "${QEMU_BIN}")"
+    fi
     return "${rc}"
 }
 

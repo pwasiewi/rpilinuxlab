@@ -535,6 +535,19 @@ die()     { echo "❌  $*" >&2; exit 1; }
 info()    { echo ">>>  $*"; }
 warn()    { echo "⚠️   $*" >&2; }
 confirm() { read -r -p "$1 [yes/NO]: " ans; [[ "$ans" == "yes" ]] || die "Aborted."; }
+# Refuse to rm -rf a tree that still has mounts under it. live_chroot rbinds
+# /dev and /sys and bind-mounts the host's distfiles, binpkgs, builddir and
+# ccache READ-WRITE into the rootfs; after a SIGKILL or a crash those stay,
+# and GNU rm -rf (no --one-file-system) would delete straight through them
+# into the host (audit 2026-10-11). Every destructive clean goes through here.
+no_mounts_under() {
+    local d="${1%/}" m
+    [[ -n ${d} && ${d} != / ]] || die "no_mounts_under: refusing '${1}'"
+    [[ -d ${d} ]] || return 0
+    m=$(findmnt -rn -o TARGET | awk -v d="${d}/" 'index($0, d) == 1 || $0 == substr(d, 1, length(d) - 1)')
+    [[ -z ${m} ]] || die "mounts still active under ${d} — umount them first (findmnt -R ${d}):
+${m}"
+}
 help()    { sed -n '2,/^set /p' "$0" | grep '^#' | sed 's/^# \?//'; }
 
 need_root()     { [[ $EUID -eq 0 ]] || die "Root required: sudo $0 ${TGT:-} ${CMD:-}"; }
@@ -968,6 +981,7 @@ cmd_verify() {
     [[ -n ${tarball} ]] || die "No built stage3 in builds/${REL_TYPE} — run: sudo $0 ${TGT:-amd64} all"
     local vdir="${STOREDIR}/tmp/verify"
     info "Unpacking $(basename "${tarball}") into ${vdir}"
+    no_mounts_under "${vdir}"
     command rm -rf "${vdir}"
     mkdir -p "${vdir}"
     tar xpf "${tarball}" -C "${vdir}" --xattrs-include='*.*' --numeric-owner
@@ -1019,10 +1033,12 @@ cmd_clean_amd64() {
     local all="${1:-}"
     if [[ ${all} == all ]]; then
         confirm "Remove catalyst tmp/, built stages, snapshots and state (seeds + git repos kept)?"
+        no_mounts_under "${STOREDIR}/tmp"
         command rm -rf "${STOREDIR}/tmp" "${STOREDIR}/builds/${REL_TYPE}" \
                        "${STOREDIR}/snapshots" "${STATE}" "${SPECDIR}"
     else
         confirm "Remove catalyst tmp/ (scratch chroots)?"
+        no_mounts_under "${STOREDIR}/tmp"
         command rm -rf "${STOREDIR}/tmp"
     fi
     info "Cleaned."
@@ -1160,6 +1176,18 @@ live_ccache_mount() {
 live_chroot() {  # live_chroot <label>  (script on stdin)
     local label="$1"
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
+    # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
+    # INT/TERM must EXIT, not merely unmount. Bash defers a trap until the
+    # foreground command returns, so a Ctrl-C during a long step first killed
+    # the running emerge and then ran a handler that only unmounted and let
+    # the script walk on to the next step - indistinguishable, from the
+    # terminal, from "Ctrl-C does nothing". live_chroot_umount is idempotent,
+    # so the EXIT trap firing again after these is harmless. Armed BEFORE the
+    # first mount: a failing bind below (set -e) must still unwind the ones
+    # that already succeeded.
+    trap "live_chroot_umount '${LIVE_ROOT}'" EXIT
+    trap "live_chroot_umount '${LIVE_ROOT}'; exit 130" INT
+    trap "live_chroot_umount '${LIVE_ROOT}'; exit 143" TERM
     command cp -f /etc/resolv.conf "${LIVE_ROOT}/etc/resolv.conf"
     mount -t proc  none "${LIVE_ROOT}/proc"
     mount --rbind /sys  "${LIVE_ROOT}/sys";  mount --make-rslave "${LIVE_ROOT}/sys"
@@ -1168,16 +1196,6 @@ live_chroot() {  # live_chroot <label>  (script on stdin)
     live_distfiles_mount
     live_builddir_mount
     live_binpkgs_mount
-    # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
-    # INT/TERM must EXIT, not merely unmount. Bash defers a trap until the
-    # foreground command returns, so a Ctrl-C during a long step first killed
-    # the running emerge and then ran a handler that only unmounted and let
-    # the script walk on to the next step - indistinguishable, from the
-    # terminal, from "Ctrl-C does nothing". live_chroot_umount is idempotent,
-    # so the EXIT trap firing again after these is harmless.
-    trap "live_chroot_umount '${LIVE_ROOT}'" EXIT
-    trap "live_chroot_umount '${LIVE_ROOT}'; exit 130" INT
-    trap "live_chroot_umount '${LIVE_ROOT}'; exit 143" TERM
     local rc=0
     # LC_ALL=C.UTF-8: the host's pl_PL.utf8 is not generated inside a stage3,
     # and every step otherwise opens with two setlocale warnings
@@ -1224,6 +1242,7 @@ cmd_live_unpack() {
     fi
     if [[ -d ${LIVE_ROOT} && -n $(ls -A "${LIVE_ROOT}" 2>/dev/null) ]]; then
         confirm "Remove existing ${LIVE_ROOT} and re-unpack?"
+        no_mounts_under "${LIVE_ROOT}"
         command rm -rf "${LIVE_ROOT}"
     fi
     mkdir -p "${LIVE_ROOT}"
@@ -1607,7 +1626,9 @@ live_prep_kconfig() {
     command rm -f "${LIVE_ROOT}/tmp/xstage-kconfig/"*
     local i=0
     for f in "${frags[@]}"; do
-        command cp -f "${f}" "${LIVE_ROOT}/tmp/xstage-kconfig/$((i++))-$(basename "${f}")"
+        # two digits: the merge glob below is [0-9][0-9]-*; a single-digit
+        # glob silently dropped fragment #11 onward (audit 2026-10-11)
+        command cp -f "${f}" "${LIVE_ROOT}/tmp/xstage-kconfig/$(printf '%02d' "$((i++))")-$(basename "${f}")"
     done
     if [[ ${base} != defconfig && ${base} != host ]]; then
         [[ -f ${base} ]] || die "XSTAGE_LIVE_KCONFIG_BASE='${base}' is neither 'defconfig', 'host', nor a file"
@@ -1684,7 +1705,7 @@ live_prep_kconfig() {
 	# 2. merge the fragments. -m keeps the merge in .config without running
 	#    a config target yet; olddefconfig then answers every new symbol with
 	#    its default instead of prompting (a chroot has no one to prompt).
-	./scripts/kconfig/merge_config.sh -m .config /tmp/xstage-kconfig/[0-9]-*
+	./scripts/kconfig/merge_config.sh -m .config /tmp/xstage-kconfig/[0-9][0-9]-*
 	# LLVM=1 here too, not just in cmd_live_kernel: olddefconfig RESOLVES the
 	# symbols, and the answer depends on the compiler. Under gcc,
 	# CC_HAS_RANDSTRUCT is n, so RANDSTRUCT_FULL falls back to
@@ -3018,6 +3039,9 @@ cmd_live_usb() {
     local p1="${dev}1" p2="${dev}2"
     # desktop automount grabs the stick on plug-in; DATA partitions stay put
     umount "${p1}" "${p2}" 2>/dev/null || true
+    local still; still=$(lsblk -nro NAME,MOUNTPOINTS "${dev}" | awk 'NF > 1')
+    [[ -z ${still} ]] || die "${dev} still has mounted partitions (busy?):
+${still}"
     if [[ ${wipe} == 1 || $(lsblk -no FSTYPE "${p1}" 2>/dev/null) != vfat \
           || $(lsblk -no FSTYPE "${p2}" 2>/dev/null) != ext4 ]]; then
         # build-usb shows the device, asks its own 'yes', partitions, formats
@@ -3123,6 +3147,7 @@ live_status() {
 
 cmd_live_clean() {
     confirm "Remove ${LIVE_BLD}?"
+    no_mounts_under "${LIVE_BLD}"
     command rm -rf "${LIVE_BLD}"
     info "Cleaned live tree."
 }
@@ -3245,6 +3270,11 @@ cmd_live_clean_world() {
 cmd_live_enter() {
     need_root
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
+    # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
+    # (armed before the first mount, INT/TERM exit — same reasons as live_chroot)
+    trap "live_chroot_umount '${LIVE_ROOT}'" EXIT
+    trap "live_chroot_umount '${LIVE_ROOT}'; exit 130" INT
+    trap "live_chroot_umount '${LIVE_ROOT}'; exit 143" TERM
     command cp -f /etc/resolv.conf "${LIVE_ROOT}/etc/resolv.conf"
     mount -t proc  none "${LIVE_ROOT}/proc"
     mount --rbind /sys  "${LIVE_ROOT}/sys";  mount --make-rslave "${LIVE_ROOT}/sys"
@@ -3253,8 +3283,6 @@ cmd_live_enter() {
     live_distfiles_mount
     live_builddir_mount
     live_binpkgs_mount
-    # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
-    trap "live_chroot_umount '${LIVE_ROOT}'" EXIT INT TERM
     info "Entering ${LIVE_ROOT} — 'exit' to leave (mounts are undone on the way out)"
     local rc=0
     # PS1 so a root shell inside the image is never mistaken for the host's.
@@ -3524,9 +3552,18 @@ tiny_img_mount() {  # $1 = partition device
 }
 
 tiny_img_umount() {
-    # two layers: the partition mount and the private bind under it
-    if mountpoint -q "${TINY_MNT}"; then umount "${TINY_MNT}" || warn "umount ${TINY_MNT} failed"; fi
-    if mountpoint -q "${TINY_MNT}"; then umount "${TINY_MNT}" || warn "bind umount ${TINY_MNT} failed"; fi
+    # two layers: the partition mount and the private bind under it. A failed
+    # umount used to be a warning, after which losetup -d detached lazily and
+    # "sd.img ready" was printed over an unflushed, still-mounted filesystem
+    # (audit 2026-10-11) — now it is fatal.
+    sync
+    local i
+    for i in 1 2 3 4; do
+        mountpoint -q "${TINY_MNT}" || return 0
+        umount "${TINY_MNT}" 2>/dev/null || sleep 1
+    done
+    mountpoint -q "${TINY_MNT}" || return 0
+    die "umount ${TINY_MNT} failed (busy?) — the image is NOT finished; umount by hand and rerun"
 }
 
 cmd_tiny_image() {
@@ -3797,7 +3834,9 @@ tiny_make_image() {  # tiny_make_image <rpi400|rpi3|zero2w>
     local loop
     loop=$(losetup -Pf --show "${TINY_IMG}")
     # shellcheck disable=SC2064 — expand ${loop} now, it's gone at trap time
-    trap "tiny_img_umount; losetup -d ${loop} 2>/dev/null || true" EXIT INT TERM
+    trap "tiny_img_umount; losetup -d ${loop} 2>/dev/null || true" EXIT
+    trap "tiny_img_umount; losetup -d ${loop} 2>/dev/null || true; exit 130" INT
+    trap "tiny_img_umount; losetup -d ${loop} 2>/dev/null || true; exit 143" TERM
     mkfs.vfat -F32 -n RPIBOOT "${loop}p1" >/dev/null
     mkfs.ext4 -q -L "${ROOT_LABEL}" "${loop}p2"
     # MBR disk id -> root=PARTUUID=<id>-02: survives dd, so the identical
@@ -3830,6 +3869,7 @@ tiny_make_image() {  # tiny_make_image <rpi400|rpi3|zero2w>
     tiny_img_umount
 
     losetup -d "${loop}"
+    [[ -z $(losetup -j "${TINY_IMG}") ]] || die "${TINY_IMG} is still attached to a loop device after losetup -d"
     trap - EXIT INT TERM
     echo "${board}" > "${TINY_BOARD_F}"
     if [[ -n ${SUDO_UID:-} ]]; then
@@ -3967,6 +4007,10 @@ cmd_tiny_sd() {
     for p in "${dev}"?*; do
         [[ -b ${p} ]] && umount "${p}" 2>/dev/null || true
     done
+    # a partition that would not umount (busy) must not be dd'd over
+    local still; still=$(lsblk -nro NAME,MOUNTPOINTS "${dev}" | awk 'NF > 1')
+    [[ -z ${still} ]] || die "${dev} still has mounted partitions:
+${still}"
     dd if="${TINY_IMG}" of="${dev}" bs=8M conv=fsync status=progress
     sync; partprobe "${dev}" 2>/dev/null || true
     lsblk -o NAME,SIZE,FSTYPE,LABEL "${dev}"
@@ -4025,6 +4069,7 @@ tiny_status() {
 
 cmd_tiny_clean() {
     confirm "Remove ${TINY_BLD}?"
+    no_mounts_under "${TINY_BLD}"
     command rm -rf "${TINY_BLD}"
     info "Cleaned tiny."
 }
@@ -4540,6 +4585,7 @@ arm64_status() {
 
 cmd_arm64_clean() {
     confirm "Remove ${TINY_BLD}?"
+    no_mounts_under "${TINY_BLD}"
     command rm -rf "${TINY_BLD}"
     info "Cleaned arm64."
 }
@@ -4559,6 +4605,8 @@ cmd_clean_all() {
     # (PROF_BUILD_SUBDIR=arm64sd-<name>)
     local blddir; blddir="$(dirname "${TINY_BLD}")"
     confirm "Clean ALL tracks (catalyst tmp + ${TINY_BLD} + ${blddir}/arm64sd*)?"
+    local t
+    for t in "${STOREDIR}/tmp" "${TINY_BLD}" "${blddir}"/arm64sd*; do no_mounts_under "${t}"; done
     command rm -rf "${STOREDIR}/tmp" "${TINY_BLD}" "${blddir}"/arm64sd*
     info "Cleaned all."
 }
