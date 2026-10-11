@@ -472,6 +472,9 @@ enter)
         /*)      root="$1"; shift ;;
     esac
     if [[ ! -d ${root} ]]; then
+        # an interactive shell may fall back to the sysroot; a COMMAND must
+        # not — "xp <prof> enter 'emerge -C foo'" would hit the shared sysroot
+        [[ $# -eq 0 ]] || die "No ${root} — refusing to run '$*' in the shared sysroot instead; pass 'sysroot' explicitly"
         warn "No ${root} yet — falling back to the sysroot /usr/${PROF_TUPLE}"
         root="/usr/${PROF_TUPLE}"
     fi
@@ -532,7 +535,9 @@ pkgs)
     if ! is_board; then timed "${XSTAGE}" "${T}" pkgs; fi
     [[ -n ${PROF_PKGS:-} ]] || die "Profile ${PROF} sets no PROF_PKGS"
     root="$(prof_build_dir)/rootfs"
-    [[ -d ${root} ]] || die "No ${root} — run: sudo xp ${PROF} build"
+    # a portage ROOT, not merely a directory: an empty rootfs/ would get a
+    # whole system cross-emerged into it
+    [[ -d ${root}/var/db/pkg ]] || die "No portage ROOT at ${root} (no var/db/pkg) — run: sudo xp ${PROF} build"
     rootgcc_guard "${root}"
     info "Installing into ${root}: ${PROF_PKGS}"
     # shellcheck disable=SC2086 — word splitting of the package list is intended

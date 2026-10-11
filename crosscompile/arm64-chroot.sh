@@ -63,8 +63,11 @@ do_mount proc  /proc
 do_mount rbind /dev /dev
 do_mount rbind /sys /sys
 do_mount bind  /tmp /tmp
-do_mount bind  /var/db/repos/gentoo "${GENTOO_REPO}"
-do_mount bind  /var/cache/distfiles "${HOST_DISTDIR}"
+# sources = the host's REAL paths (resolved above), not the stock defaults:
+# with /var/cache/distfiles hard-coded the chroot never saw the host's
+# /var/tmp/distfiles pool (audit 2026-10-11)
+do_mount bind  "${GENTOO_REPO}"  "${GENTOO_REPO}"
+do_mount bind  "${HOST_DISTDIR}" "${HOST_DISTDIR}"
 
 rc=0
 if [[ $# -eq 0 ]]; then

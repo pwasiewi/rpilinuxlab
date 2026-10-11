@@ -526,8 +526,13 @@ cmd_image() {
     # enables the GPG trust path if ANY binrepo requests it — which then
     # rejects the unsigned xarm binpkgs ('GnuPG verification failed'); the
     # warning it prints misleadingly blames FEATURES=binpkg-request-signature
-    sed -i 's/^verify-signature = true/verify-signature = false/' \
-        "${MNT_DIR}/etc/portage/binrepos.conf/"*.conf
+    # mkdir FIRST: a stage3 without any *.conf here left the glob literal and
+    # sed died under set -e mid-image (audit 2026-10-11)
+    mkdir -p "${MNT_DIR}/etc/portage/binrepos.conf"
+    if compgen -G "${MNT_DIR}/etc/portage/binrepos.conf/*.conf" >/dev/null; then
+        sed -i 's/^verify-signature = true/verify-signature = false/' \
+            "${MNT_DIR}/etc/portage/binrepos.conf/"*.conf
+    fi
     # xarm binhost: 10.0.2.2 is the host as seen from qemu user-mode net;
     # start 'sudo xarm binhost' on the host, then in the guest:
     # emerge --getbinpkg --usepkg <pkg>
