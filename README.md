@@ -413,6 +413,6 @@ Free Software Foundation, either **version 2 of the License, or (at your
 option) any later version** (GPL-2.0-or-later). See [LICENSE](LICENSE)
 for the full text of version 2.
 
-The scripts under `genstage/live/tools/` are mirrored from the
+The scripts under `genstage/live/tools/` and `genstage/live/tools-amd64/` are mirrored from the
 [gentools](https://github.com/pwasiewi/gentools) repository and carry the
 same GPL-2.0-or-later license.
