@@ -1,0 +1,144 @@
+Serialize every FFTW planner user with one global mutex (backport).
+
+FFTW's planner (fftw_plan_*, fftw_destroy_plan) is not thread-safe; only
+fftw_execute is. A preset with two convolvers (a surround impulse plus a
+headphone correction) loads both kernels at the same instant, each on its
+own worker thread, and the two ConvolverKernelFFT::compute_fft_magnitude
+calls race inside the planner: SIGSEGV in fftw_execute,
+fftw_plan_destroy_internal or fftw_mkplan_d within ~10 ms of
+"Calculating the impulse fft..." (8 of 8 runs under gdb, easyeffects
+8.0.5, 2026-10-12). Quitting or switching presets while a kernel loads
+hits the same race.
+
+Backport of upstream wwmm/easyeffects 95842279ab "Adding a global fftw
+mutex" (2025-12-13; util::fftw_lock() held in the kernel FFT, in
+ConvolverZita::init/process and in FirFilterBase) plus 3245d903d1 (the
+complex_output buffer sized to the spectrum, not the signal). Adapted to
+the 8.0.5 compute_fft_magnitude signature; std::scoped_lock as in eff2fea3e1.
+
+diff -ruN src/easyeffects-8.0.5/src/convolver_kernel_fft.cpp src.p/src/convolver_kernel_fft.cpp
+--- a/src/convolver_kernel_fft.cpp	2025-11-25 03:25:40.000000000 +0100
++++ b/src/convolver_kernel_fft.cpp	2026-10-12 12:53:00.903427771 +0200
+@@ -25,6 +25,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <format>
++#include <mutex>
+ #include <numbers>
+ #include <vector>
+ #include "util.hpp"
+@@ -113,6 +114,8 @@
+ }
+ 
+ auto ConvolverKernelFFT::compute_fft_magnitude(const std::vector<float>& real_input) -> std::vector<double> {
++  std::scoped_lock<std::mutex> lock(util::fftw_lock());
++
+   if (real_input.empty()) {
+     return {};
+   }
+@@ -125,7 +128,7 @@
+ 
+   std::vector<double> spectrum((signal_copy.size() / 2U) + 1U);
+ 
+-  auto* complex_output = fftw_alloc_complex(signal_copy.size());
++  auto* complex_output = fftw_alloc_complex(spectrum.size());
+ 
+   auto* plan =
+       fftw_plan_dft_r2c_1d(static_cast<int>(signal_copy.size()), signal_copy.data(), complex_output, FFTW_ESTIMATE);
+diff -ruN src/easyeffects-8.0.5/src/convolver_zita.cpp src.p/src/convolver_zita.cpp
+--- a/src/convolver_zita.cpp	2025-11-25 03:25:40.000000000 +0100
++++ b/src/convolver_zita.cpp	2026-10-12 12:53:00.903492633 +0200
+@@ -25,6 +25,7 @@
+ #include <chrono>
+ #include <cmath>
+ #include <format>
++#include <mutex>
+ #include <span>
+ #include <thread>
+ #include "convolver_kernel_manager.hpp"
+@@ -63,6 +64,8 @@
+                          uint bufferSize,
+                          const int& ir_width,
+                          const bool& apply_autogain) -> bool {
++  std::scoped_lock<std::mutex> lock(util::fftw_lock());
++
+   ready = false;
+ 
+   if (conv != nullptr) {
+@@ -155,6 +158,8 @@
+   std::ranges::copy(left, convLeftIn.begin());
+   std::ranges::copy(right, convRightIn.begin());
+ 
++  std::scoped_lock<std::mutex> lock(util::fftw_lock());
++
+   if (auto ret = conv->process(true); ret != 0) {
+     util::warning(std::format("Zita: process failed: {}", ret));
+ 
+diff -ruN src/easyeffects-8.0.5/src/fir_filter_base.cpp src.p/src/fir_filter_base.cpp
+--- a/src/fir_filter_base.cpp	2025-11-25 03:25:40.000000000 +0100
++++ b/src/fir_filter_base.cpp	2026-10-12 12:53:00.903547897 +0200
+@@ -26,6 +26,7 @@
+ #include <cmath>
+ #include <cstddef>
+ #include <format>
++#include <mutex>
+ #include <numbers>
+ #include <string>
+ #include <thread>
+@@ -146,6 +147,8 @@
+ }
+ 
+ void FirFilterBase::setup_zita() {
++  std::scoped_lock<std::mutex> lock(util::fftw_lock());
++
+   zita_ready = false;
+ 
+   if (n_samples == 0U || kernel.empty()) {
+diff -ruN src/easyeffects-8.0.5/src/fir_filter_base.hpp src.p/src/fir_filter_base.hpp
+--- a/src/fir_filter_base.hpp	2025-11-25 03:25:40.000000000 +0100
++++ b/src/fir_filter_base.hpp	2026-10-12 12:53:00.903597190 +0200
+@@ -23,6 +23,7 @@
+ #include <zita-convolver.h>
+ #include <algorithm>
+ #include <format>
++#include <mutex>
+ #include <span>
+ #include <string>
+ #include <vector>
+@@ -65,6 +66,8 @@
+     std::copy(data_right.begin(), data_right.end(), conv_right_in.begin());
+ 
+     if (zita_ready) {
++      std::scoped_lock<std::mutex> lock(util::fftw_lock());
++
+       const int& ret = conv->process(true);  // thread sync mode set to true
+ 
+       if (ret != 0) {
+diff -ruN src/easyeffects-8.0.5/src/util.hpp src.p/src/util.hpp
+--- a/src/util.hpp	2025-11-25 03:25:40.000000000 +0100
++++ b/src/util.hpp	2026-10-12 12:53:00.903350756 +0200
+@@ -30,6 +30,7 @@
+ #include <filesystem>
+ #include <limits>
+ #include <memory>
++#include <mutex>
+ #include <source_location>
+ #include <span>
+ #include <string>
+@@ -84,6 +85,16 @@
+                  const std::vector<double>& y_source,
+                  const std::vector<double>& x_new) -> std::vector<double>;
+ 
++/**
++ * The FFTW planner (fftw_plan_*, fftw_destroy_plan, and zita-convolver's
++ * Convproc setup/cleanup built on it) is not thread-safe. Every user of it
++ * holds this mutex (backport of upstream 95842279ab, 2025-12-13).
++ */
++inline std::mutex& fftw_lock() {
++  static std::mutex fftw_mutex;
++  return fftw_mutex;
++}
++
+ template <typename T>
+ void print_type(T v) {
+   warning(typeid(v).name());

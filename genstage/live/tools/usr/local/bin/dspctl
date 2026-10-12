@@ -12,9 +12,15 @@
 #   apps -> camilladsp_sink (null sink) -> camilladsp-capture -> DSP -> camilladsp-playback -> hardware
 #
 # Modes
-#   ee                 EasyEffects path (its last preset); default sink = hardware, EasyEffects relinks streams
-#   camilla [NAME]     CamillaDSP user service with ~/.config/camilladsp/NAME.yml
-#                      (default: whatever active.yml points at); default sink = camilladsp_sink
+#   ee [PRESET]        EasyEffects path; default sink = hardware, EasyEffects relinks streams.
+#                      PRESET = an output preset: exact name, its number from `presets`, or an
+#                      abbreviation = words that must all occur, case-insensitive, any order
+#                      ("dolby hd580 pu", "bass hd580"); default: the last one EasyEffects used
+#   preset [PRESET]    load an EasyEffects output preset (no mode change); no arg = show the active one
+#   presets            list EasyEffects output presets, active one marked
+#   bypass on|off      EasyEffects global bypass (A/B the whole chain without quitting it)
+#   camilla [NAME]     CamillaDSP user service with ~/.config/camilladsp/NAME.yml, NAME exact or
+#                      abbreviated the same way ("loud" = hd580-loudness); default: active.yml
 #   chain [NAME]       EXPERIMENTAL: both, EasyEffects output fed into CamillaDSP; use an
 #                      EasyEffects preset without convolver/equalizer or the correction doubles
 #   off                neither; default sink = the hardware sink
@@ -150,10 +156,64 @@ ee_quit() {
 	systemctl --user stop 'app-com.github.wwmm.easyeffects@*.service' 2>/dev/null || true
 	wait_node_gone "${EE_SINK}" || die "${EE_SINK} is still present after quitting EasyEffects"
 }
+EE_PRESET_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/easyeffects/output"
+ee_presets() { ls "${EE_PRESET_DIR}"/*.json 2>/dev/null | sed 's|.*/||; s|\.json$||'; }
+# `-a output` reads the SAVED config (db/easyeffectsrc), which the running instance
+# flushes lazily — right after a load it still shows the previous preset. Treat it as
+# "last saved", never as proof that a load took.
+ee_active() { ee_running && timeout 5 easyeffects -a output 2>/dev/null || true; }
+abbrev_match() {
+	# $1 = what the user typed, stdin = candidate names; prints the unique candidate
+	# containing every whitespace-separated word of $1 (case-insensitive, any order)
+	local want=$1 kind=$2 hits w
+	hits=$(cat)
+	for w in ${want}; do
+		hits=$(printf '%s\n' "${hits}" | grep -i -F -- "${w}" || true)
+	done
+	case $(printf '%s\n' "${hits}" | grep -c .) in
+		0) die "no ${kind} matches '${want}'" ;;
+		1) printf '%s\n' "${hits}" ;;
+		*) printf '%s\n' "${hits}" >&2; die "'${want}' matches several ${kind}s, add a word" ;;
+	esac
+}
+ee_resolve() {
+	# exact name, else number from `presets`, else abbreviation (all words must occur)
+	local want=$1 hit
+	[[ -f ${EE_PRESET_DIR}/${want}.json ]] && { printf '%s\n' "${want}"; return 0; }
+	if [[ ${want} =~ ^[0-9]+$ ]]; then
+		hit=$(ee_presets | sed -n "${want}p")
+		[[ -n ${hit} ]] || die "no preset number ${want} (dspctl presets)"
+		printf '%s\n' "${hit}"; return 0
+	fi
+	ee_presets | abbrev_match "${want}" "EasyEffects output preset"
+}
+ee_load() {
+	local name; name=$(ee_resolve "$1")
+	ee_running || die "EasyEffects is not running (dspctl ee)"
+	ee_socket >/dev/null || die "EasyEffects' command socket is missing: it is not accepting commands"
+	# exit 1 = "Specified preset does not exist"; the load itself is fire-and-forget over
+	# the local socket (verified 2026-10-12 by the ee_soe_* plugin nodes changing)
+	timeout 10 easyeffects -l "${name}" >/dev/null 2>&1 || die "easyeffects -l '${name}' failed"
+	msg "EasyEffects output preset loaded: ${name}"
+}
+# EasyEffects' command socket: /tmp/EasyEffectsServer up to 8.0.8, the user runtime
+# dir (QStandardPaths::RuntimeLocation) from 8.0.9 on
+ee_socket() {
+	local c
+	for c in "${XDG_RUNTIME_DIR:-/run/user/${UID}}/EasyEffectsServer" /tmp/EasyEffectsServer; do
+		[[ -S ${c} ]] && { printf '%s\n' "${c}"; return 0; }
+	done
+	return 1
+}
 ee_start() {
+	local i
 	ee_running || setsid -f easyeffects --service-mode -w >/dev/null 2>&1 \
 		|| die "could not start easyeffects"
 	wait_node "${EE_SINK}" || die "${EE_SINK} never appeared (is EasyEffects installed and did it start?)"
+	# a second `easyeffects` run before the primary holds its lock becomes a SECOND
+	# primary instance (seen 2026-10-12): wait for the local socket before any -l/-b/-q
+	for i in $(seq 1 50); do ee_socket >/dev/null && return 0; sleep 0.1; done
+	die "EasyEffects' command socket never appeared; it is up but not accepting commands"
 }
 
 # ---- CamillaDSP -------------------------------------------------------------------
@@ -169,10 +229,11 @@ cd_stop() {
 	wait_node_gone "${CD_CAP}" || die "${CD_CAP} still present after stopping ${CD_UNIT}"
 	cd_sink_destroy
 }
+cd_configs() { ls "${CFG_DIR}"/*.yml 2>/dev/null | while read -r f; do [[ -L ${f} ]] || basename "${f}" .yml; done; }
 cd_config_select() {
 	local name=$1
 	[[ -n ${name} ]] || { [[ -L ${CFG_DIR}/active.yml ]] || die "no active.yml in ${CFG_DIR}; give a NAME"; return 0; }
-	[[ -f ${CFG_DIR}/${name}.yml ]] || die "no such config: ${CFG_DIR}/${name}.yml (dspctl list)"
+	[[ -f ${CFG_DIR}/${name}.yml ]] || name=$(cd_configs | abbrev_match "${name}" "CamillaDSP config")
 	ln -sfn "${name}.yml" "${CFG_DIR}/active.yml"
 }
 cd_start() {
@@ -214,7 +275,8 @@ PY
 
 # ---- commands ---------------------------------------------------------------------
 cmd_ee() {
-	local hw
+	local hw preset=${1:-}
+	[[ -z ${preset} ]] || ee_resolve "${preset}" >/dev/null   # fail before touching anything
 	remember_hw
 	hw=$(hw_sink); [[ -n ${hw} ]] || die "no hardware sink found"
 	cd_stop "${hw}"
@@ -223,7 +285,60 @@ cmd_ee() {
 	# hardware sink, so the default stays on the hardware (as EasyEffects expects)
 	set_default "${hw}"
 	move_streams "${EE_SINK}"
-	msg "EasyEffects path active (${EE_SINK} -> ${hw})"
+	if [[ -n ${preset} ]]; then ee_load "${preset}"; else msg "EasyEffects path active (${EE_SINK} -> ${hw}), last saved preset: $(ee_active)"; fi
+}
+cmd_preset() {
+	if [[ -z ${1:-} ]]; then
+		ee_running || die "EasyEffects is not running (dspctl ee)"
+		printf '%s   (last saved; a load made since may not be flushed yet)\n' "$(ee_active)"
+	else
+		ee_load "$1"
+	fi
+}
+abbrevs() {
+	# args = names; prints "<shortest unique word set>\t<name>" — the same matching
+	# rule as abbrev_match (every word must occur, case-insensitive, any order).
+	# Names travel as arguments: the heredoc IS python's stdin.
+	python3 -I - "$@" <<'PY'
+import sys, re, itertools
+names = [a for a in sys.argv[1:] if a.strip()]
+low = [n.lower() for n in names]
+def words(n):
+    # tokens as a user would type them: letters/digits with inner - + ., a signed number
+    # keeps its sign ("-9"); punctuation like ( ) , is dropped
+    return [w for w in re.findall(r"-?\d[\w.+-]*|[a-z][\w.+-]*", n.lower()) if w not in ("+",)]
+def matches(ws): return [i for i, l in enumerate(low) if all(w in l for w in ws)]
+for i, n in enumerate(names):
+    best = None
+    ws = sorted(set(words(n)), key=len)
+    for k in (1, 2, 3):
+        cands = [c for c in itertools.combinations(ws, k) if matches(c) == [i]]
+        if cands:
+            best = min(cands, key=lambda c: (sum(len(w) for w in c), c)); break
+    # a name contained in longer names has no unique word set: use its number or the exact name
+    print(("'" + " ".join(best) + "'" if best else "#%d or exact name" % (i + 1)) + "\t" + n)
+PY
+}
+cmd_presets() {
+	local active n=0 a p
+	active=$(ee_active)
+	printf '%3s   %-26s %s\n' "#" "abbreviation" "output preset"
+	while IFS=$'\t' read -r a p; do
+		n=$((n + 1))
+		if [[ ${p} == "${active}" ]]; then printf '%3d * %-26s %s\n' "${n}" "${a}" "${p}"; else printf '%3d   %-26s %s\n' "${n}" "${a}" "${p}"; fi
+	done < <(mapfile -t _n < <(ee_presets); abbrevs "${_n[@]}")
+	[[ -n ${active} ]] && printf '  * = last saved preset (a load made since may not be flushed yet)\n'
+	printf '  load with: dspctl preset <#|abbreviation|name>   (any words that occur only in that name work)\n'
+	[[ ${n} -gt 0 ]] || die "no output presets in ${EE_PRESET_DIR}"
+}
+cmd_bypass() {
+	ee_running || die "EasyEffects is not running (dspctl ee)"
+	ee_socket >/dev/null || die "EasyEffects' command socket is missing: it is not accepting commands"
+	case ${1:-} in
+		on)  timeout 5 easyeffects -b 1 >/dev/null 2>&1 || die "easyeffects -b 1 failed"; msg "EasyEffects bypassed (chain off, still routing)" ;;
+		off) timeout 5 easyeffects -b 2 >/dev/null 2>&1 || die "easyeffects -b 2 failed"; msg "EasyEffects bypass off" ;;
+		*) die "bypass on|off" ;;
+	esac
 }
 cmd_camilla() {
 	local name=${1:-} hw
@@ -270,7 +385,9 @@ cmd_status() {
 	fi
 	printf 'mode:          %s\n' "${mode}"
 	printf 'default sink:  %s\n' "${d:-?}"
-	printf 'easyeffects:   %s\n' "$(ee_running && echo running || echo stopped)"
+	printf 'easyeffects:   %s' "$(ee_running && echo running || echo stopped)"
+	ee_running && printf '  (last saved preset: %s)' "$(ee_active)"
+	printf '\n'
 	printf 'camilladsp:    %s' "$(cd_running && echo running || echo stopped)"
 	if [[ -L ${CFG_DIR}/active.yml ]]; then printf '  (active.yml -> %s)' "$(readlink "${CFG_DIR}/active.yml")"; fi
 	printf '\n'
@@ -281,11 +398,10 @@ cmd_status() {
 	app_streams | while read -r id app; do printf '  %s %s\n' "${id}" "${app}"; done
 }
 cmd_list() {
-	local f
-	for f in "${CFG_DIR}"/*.yml; do
-		[[ -f ${f} && ! -L ${f} ]] || continue
-		printf '%-22s %s\n' "$(basename "${f}" .yml)" "$(grep -m1 -E '^\s*filename:' "${f}" | sed 's/^\s*filename:\s*//' || true)"
-	done
+	local a f
+	while IFS=$'\t' read -r a f; do
+		printf '%-18s %-14s %s\n' "${f}" "${a}" "$(grep -m1 -E '^\s*filename:' "${CFG_DIR}/${f}.yml" | sed 's/^\s*filename:\s*//' || true)"
+	done < <(mapfile -t _n < <(cd_configs); abbrevs "${_n[@]}")
 	[[ -L ${CFG_DIR}/active.yml ]] && printf 'active -> %s\n' "$(readlink "${CFG_DIR}/active.yml")"
 	return 0
 }
@@ -313,6 +429,9 @@ cmd_vol() {
 cmd=$1; shift
 case ${cmd} in
 	ee) cmd_ee "$@" ;;
+	preset) cmd_preset "$@" ;;
+	presets) cmd_presets ;;
+	bypass) cmd_bypass "$@" ;;
 	camilla) cmd_camilla "$@" ;;
 	chain) cmd_chain "$@" ;;
 	off) cmd_off "$@" ;;
