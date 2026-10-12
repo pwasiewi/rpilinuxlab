@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""dimicc - software dimming below the backlight minimum on KDE Plasma (Wayland).
+
+KWin has no wlr-gamma-control, so gammastep/wlsunset cannot touch the screen.
+What KWin DOES honour is the 'vcgt' tag of an ICC display profile: it is loaded
+as a 1D LUT into the DRM colour pipeline (kwin/src/backends/drm/drm_output.cpp,
+"iccProfile->vcgt()") - on amdgpu that is the hardware gamma LUT.
+
+This tool writes a display profile that is deliberately neutral for KWin
+(sRGB primaries, pure gamma-2.2 transfer function, Bradford D65->D50 'chad',
+exactly what KWin assumes for an SDR panel) so the only visible effect is the
+vcgt: a straight line scaled to K, i.e. uniform dimming, no contrast change.
+A profile with the real sRGB piecewise curve (e.g. sRGB2014.icc) crushes the
+shadows instead, because KWin re-encodes gamma 2.2 content into that curve.
+
+Luminance scales as K**gamma: "-l 50" (half the light) means K = 0.5**(1/2.2).
+
+Usage:
+  dimicc -l PCT [-g GAMMA] [-o FILE] [-a OUTPUT]
+  dimicc -k FACTOR [-o FILE] [-a OUTPUT]
+  dimicc -a OUTPUT -r            # back to the EDID profile (no ICC)
+
+  -l PCT      target luminance in percent of the backlight's current level
+  -k FACTOR   raw encoded scale 0..1 (overrides -l)
+  -g GAMMA    transfer function gamma of the profile (default 2.2)
+  -o FILE     output .icc (default ~/.local/share/dimicc/dim-<PCT>.icc)
+  -a [OUTPUT] apply with kscreen-doctor on this output (eDP-1, DP-1, ...);
+              without a name the internal panel (eDP*/DSI*/LVDS*) is used, or
+              the only enabled output
+  -r          with -a: reset colorProfileSource to EDID instead of applying
+  -L          list KWin's output names (kscreen-doctor -o) and exit
+
+Examples:
+  dimicc -l 40 -a                # 40 % of the light on the laptop panel
+  dimicc -l 40 -a DP-1           # a named output
+  dimicc -a -r                   # undo
+"""
+import argparse
+import os
+import re
+import struct
+import subprocess
+import sys
+import time
+
+D50 = (0.9642, 1.0, 0.8249)
+# sRGB primaries adapted to D50 with Bradford (ICC v4 / sRGB2014 values)
+RXYZ = (0.43607, 0.22249, 0.01392)
+GXYZ = (0.38508, 0.71687, 0.09708)
+BXYZ = (0.14307, 0.06061, 0.71410)
+# Bradford D65 -> D50
+CHAD = (1.04790, 0.02293, -0.05020,
+        0.02962, 0.99046, -0.01707,
+        -0.00922, 0.01505, 0.75179)
+VCGT_ENTRIES = 1024
+
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def outputs():
+    """[(name, enabled)] as KWin names them (kscreen-doctor -o, colours stripped)."""
+    try:
+        txt = subprocess.run(["kscreen-doctor", "-o"], capture_output=True, text=True,
+                             timeout=10).stdout
+    except (OSError, subprocess.TimeoutExpired) as e:
+        sys.exit(f"dimicc: kscreen-doctor -o failed: {e}")
+    found = []
+    for line in ANSI.sub("", txt).splitlines():
+        m = re.match(r"Output:\s+\d+\s+(\S+)", line)
+        if m:
+            found.append([m.group(1), False])
+        elif found and line.strip() == "enabled":
+            found[-1][1] = True
+    return [tuple(f) for f in found]
+
+
+def pick_output(name):
+    """Resolve -a: a given name must exist; empty = internal panel or the only enabled one."""
+    outs = outputs()
+    if not outs:
+        sys.exit("dimicc: kscreen-doctor -o lists no outputs (not a Plasma Wayland session?)")
+    names = [n for n, _ in outs]
+    if name:
+        if name in names:
+            return name
+        sys.exit(f"dimicc: output {name!r} not found; KWin has: {', '.join(names)}")
+    internal = [n for n, on in outs if on and re.match(r"(eDP|DSI|LVDS)", n)]
+    if internal:
+        return internal[0]
+    enabled = [n for n, on in outs if on]
+    if len(enabled) == 1:
+        return enabled[0]
+    sys.exit(f"dimicc: no internal panel found, give -a NAME; enabled: {', '.join(enabled)}")
+
+
+def s15f16(x):
+    return struct.pack(">i", round(x * 65536))
+
+
+def xyz_tag(x, y, z):
+    return b"XYZ " + b"\0" * 4 + s15f16(x) + s15f16(y) + s15f16(z)
+
+
+def desc_tag(text):
+    b = text.encode("ascii") + b"\0"
+    # textDescriptionType (v2): ascii count+string, no unicode, no scriptcode
+    return b"desc" + b"\0" * 4 + struct.pack(">I", len(b)) + b + \
+        struct.pack(">I", 0) + struct.pack(">I", 0) + struct.pack(">H", 0) + b"\0" + b"\0" * 67
+
+
+def text_tag(text):
+    return b"text" + b"\0" * 4 + text.encode("ascii") + b"\0"
+
+
+def para_gamma_tag(gamma):
+    # parametricCurveType, function type 0: Y = X**g
+    return b"para" + b"\0" * 4 + struct.pack(">HH", 0, 0) + s15f16(gamma)
+
+
+def sf32_tag(values):
+    return b"sf32" + b"\0" * 4 + b"".join(s15f16(v) for v in values)
+
+
+def vcgt_tag(k):
+    # vcgt table type (0): 3 channels, N entries, 2 bytes each; identical
+    # straight line scaled by k for R, G, B -> uniform dimming
+    hdr = b"vcgt" + b"\0" * 4 + struct.pack(">I", 0) + \
+        struct.pack(">HHH", 3, VCGT_ENTRIES, 2)
+    line = b"".join(struct.pack(">H", round(65535 * k * i / (VCGT_ENTRIES - 1)))
+                    for i in range(VCGT_ENTRIES))
+    return hdr + line * 3
+
+
+def build_icc(k, gamma, label):
+    tags = [
+        (b"desc", desc_tag(label)),
+        (b"cprt", text_tag("dimicc, public domain")),
+        (b"wtpt", xyz_tag(*D50)),
+        (b"chad", sf32_tag(CHAD)),
+        (b"rXYZ", xyz_tag(*RXYZ)),
+        (b"gXYZ", xyz_tag(*GXYZ)),
+        (b"bXYZ", xyz_tag(*BXYZ)),
+        (b"rTRC", para_gamma_tag(gamma)),
+        (b"gTRC", para_gamma_tag(gamma)),
+        (b"bTRC", para_gamma_tag(gamma)),
+        (b"vcgt", vcgt_tag(k)),
+    ]
+    # share one data block for the three identical TRCs
+    body = b""
+    table = b""
+    offset = 128 + 4 + 12 * len(tags)
+    placed = {}
+    for sig, data in tags:
+        key = data if sig in (b"rTRC", b"gTRC", b"bTRC") else sig
+        if key in placed:
+            off, size = placed[key]
+        else:
+            pad = (-len(body)) % 4
+            body += b"\0" * pad
+            off, size = offset + len(body), len(data)
+            body += data
+            placed[key] = (off, size)
+        table += sig + struct.pack(">II", off, size)
+    body += b"\0" * ((-len(body)) % 4)
+    total = offset + len(body)
+    t = time.gmtime()
+    header = struct.pack(">I", total) + b"\0" * 4 + struct.pack(">I", 0x02400000)
+    header += b"mntr" + b"RGB " + b"XYZ "
+    header += struct.pack(">HHHHHH", t.tm_year, t.tm_mon, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec)
+    header += b"acsp" + b"\0" * 4 + struct.pack(">I", 0)        # platform, flags
+    header += b"\0" * 8 + struct.pack(">Q", 0)                   # manufacturer, model, attributes
+    header += struct.pack(">I", 0)                               # rendering intent
+    header += s15f16(D50[0]) + s15f16(D50[1]) + s15f16(D50[2])   # illuminant
+    header += b"\0" * 4                                          # creator
+    header += b"\0" * 16                                         # profile id
+    header += b"\0" * 28                                         # reserved
+    assert len(header) == 128
+    return header + struct.pack(">I", len(tags)) + table + body
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("-l", type=float, dest="pct")
+    ap.add_argument("-k", type=float, dest="factor")
+    ap.add_argument("-g", type=float, dest="gamma", default=2.2)
+    ap.add_argument("-o", dest="out")
+    ap.add_argument("-a", dest="output", nargs="?", const="")
+    ap.add_argument("-r", dest="reset", action="store_true")
+    ap.add_argument("-L", dest="list", action="store_true")
+    ap.add_argument("-h", "--help", action="store_true")
+    a = ap.parse_args()
+    if a.list:
+        for name, enabled in outputs():
+            print(name, "enabled" if enabled else "disabled")
+        sys.exit(0)
+    if a.help or len(sys.argv) == 1 or (a.pct is None and a.factor is None and not a.reset):
+        print(__doc__.strip())
+        sys.exit(0 if a.help else 2)
+    if a.output is not None:
+        a.output = pick_output(a.output)
+
+    if a.reset:
+        if a.output is None:
+            sys.exit("dimicc: -r needs -a [OUTPUT]")
+        cmd = ["kscreen-doctor", f"output.{a.output}.colorProfileSource.EDID"]
+        print("+", " ".join(cmd))
+        sys.exit(subprocess.call(cmd))
+
+    if a.factor is not None:
+        k = a.factor
+        pct = 100 * k ** a.gamma
+    else:
+        pct = a.pct
+        k = (pct / 100) ** (1 / a.gamma)
+    if not 0 < k <= 1:
+        sys.exit("dimicc: scale must be in (0, 1]")
+
+    out = a.out or os.path.expanduser(f"~/.local/share/dimicc/dim-{pct:g}.icc")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    label = f"dimicc {pct:g}% (vcgt x{k:.4f}, gamma {a.gamma:g})"
+    data = build_icc(k, a.gamma, label)
+    with open(out, "wb") as f:
+        f.write(data)
+    print(f"{out}: {len(data)} bytes, luminance {pct:g} %, encoded scale {k:.4f}")
+
+    if a.output is not None:
+        cmd = ["kscreen-doctor",
+               f'output.{a.output}.iccprofile.{out}',
+               f"output.{a.output}.colorProfileSource.ICC"]
+        print("+", " ".join(cmd))
+        sys.exit(subprocess.call(cmd))
+    print(f"apply: kscreen-doctor output.eDP-1.iccprofile.{out} output.eDP-1.colorProfileSource.ICC")
+
+
+if __name__ == "__main__":
+    main()

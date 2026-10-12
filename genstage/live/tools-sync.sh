@@ -40,6 +40,10 @@ SCRIPTS=(
     # EasyEffects <-> CamillaDSP switch (user-level, PipeWire); the profiles that
     # ship both DSPs need it, nothing personal inside (added 2026-10-12)
     dspctl
+    # software dimming below the Plasma slider minimum (ICC vcgt into KWin's
+    # DRM gamma LUT — KWin has no wlr-gamma-control); needs only python3 +
+    # kscreen-doctor from plasma-meta, no config (added 2026-10-12)
+    dimicc
 )
 SPECS_SRC="${HOME}/Claude/vbox/specs"
 SPECS_DST=$(dirname "${HERE}")/share/vboxctl/specs
