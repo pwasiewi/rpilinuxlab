@@ -2473,11 +2473,14 @@ cmd_live_kernel() {
 	    emerge --ignore-default-opts --verbose --oneshot sys-kernel/genkernel
 	[ -f /usr/src/linux/.config ] || { echo "no /usr/src/linux/.config" >&2; exit 1; }
 
-	sed -i 's/CDROOT="0"/CDROOT="1"/' /usr/share/genkernel/defaults/initrd.defaults
-	grep -q 'CDROOT="1"' /usr/share/genkernel/defaults/initrd.defaults ||
+	# genkernel 4.3.17-r4 writes CDROOT='0' (single quotes; older builds used
+	# double quotes) — match either and keep the file's own quote style
+	sed -i -E "s/^CDROOT=(['\"])0\1/CDROOT=\11\1/" /usr/share/genkernel/defaults/initrd.defaults
+	grep -qE "^CDROOT=['\"]1['\"]" /usr/share/genkernel/defaults/initrd.defaults ||
 	    { echo "initrd.defaults: CDROOT not switched to 1 (format changed?)" >&2; exit 1; }
 	# restore CDROOT=0 even if genkernel dies: the next run must start clean
-	trap 'sed -i "s/CDROOT=\\"1\\"/CDROOT=\\"0\\"/" /usr/share/genkernel/defaults/initrd.defaults' EXIT
+	cdroot_off() { sed -i -E "s/^CDROOT=(['\"])1\1/CDROOT=\10\1/" /usr/share/genkernel/defaults/initrd.defaults; }
+	trap cdroot_off EXIT
 	# LLVM=1 (env, which kbuild imports) builds the whole kernel with clang.
 	# It is what makes CONFIG_DEBUG_INFO_BTF possible at all: BTF 'depends on
 	# !GCC_PLUGIN_RANDSTRUCT', and the hardened images set RANDSTRUCT_FULL, so
@@ -2505,7 +2508,7 @@ cmd_live_kernel() {
 	    --kernel-strip=llvm-strip --kernel-as=clang \\
 	    --strip=modules --no-module-rebuild \\
 	    --luks --lvm --btrfs --busybox --no-clean all
-	sed -i 's/CDROOT="1"/CDROOT="0"/' /usr/share/genkernel/defaults/initrd.defaults
+	cdroot_off
 	EOF
     # keep the exact config next to the artifacts: without it a built ISO
     # cannot be reproduced or bisected later
@@ -2530,11 +2533,14 @@ cmd_live_kernel() {
     # pass 1 stays the GRUB/isolinux payload.
     info "Building the stub kernel (integrated initramfs) for direct UEFI boot"
     live_chroot kernel-stub <<-EOF
-	sed -i 's/CDROOT="0"/CDROOT="1"/' /usr/share/genkernel/defaults/initrd.defaults
-	grep -q 'CDROOT="1"' /usr/share/genkernel/defaults/initrd.defaults ||
+	# genkernel 4.3.17-r4 writes CDROOT='0' (single quotes; older builds used
+	# double quotes) — match either and keep the file's own quote style
+	sed -i -E "s/^CDROOT=(['\"])0\1/CDROOT=\11\1/" /usr/share/genkernel/defaults/initrd.defaults
+	grep -qE "^CDROOT=['\"]1['\"]" /usr/share/genkernel/defaults/initrd.defaults ||
 	    { echo "initrd.defaults: CDROOT not switched to 1 (format changed?)" >&2; exit 1; }
 	# restore CDROOT=0 even if genkernel dies: the next run must start clean
-	trap 'sed -i "s/CDROOT=\\"1\\"/CDROOT=\\"0\\"/" /usr/share/genkernel/defaults/initrd.defaults' EXIT
+	cdroot_off() { sed -i -E "s/^CDROOT=(['\"])1\1/CDROOT=\10\1/" /usr/share/genkernel/defaults/initrd.defaults; }
+	trap cdroot_off EXIT
 	# same toolchain as pass 1 — a gcc relink here would produce a stub whose
 	# modules the pass-1 kernel cannot load (different vermagic/RANDSTRUCT hash)
 	LLVM=1 genkernel --makeopts=-j${JOBS} --kernel-config=/usr/src/linux/.config \\
@@ -2544,7 +2550,7 @@ cmd_live_kernel() {
 	    --kernel-strip=llvm-strip --kernel-as=clang \\
 	    --strip=modules --no-module-rebuild \\
 	    --luks --lvm --btrfs --busybox --no-clean --integrated-initramfs all
-	sed -i 's/CDROOT="1"/CDROOT="0"/' /usr/share/genkernel/defaults/initrd.defaults
+	cdroot_off
 	EOF
     k=$(ls -1t "${LIVE_ROOT}/boot/"{vmlinuz,kernel}-* 2>/dev/null | head -1 || true)
     [[ -n ${k} ]] || die "stub pass produced no kernel in ${LIVE_ROOT}/boot"
