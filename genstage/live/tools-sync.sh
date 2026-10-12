@@ -37,6 +37,9 @@ SCRIPTS=(
     # *.vm image specs → VM / Packer HCL / Vagrantfile); example specs ride
     # along in tools/usr/local/share/vboxctl/specs (added 2026-09-05)
     vboxctl
+    # EasyEffects <-> CamillaDSP switch (user-level, PipeWire); the profiles that
+    # ship both DSPs need it, nothing personal inside (added 2026-10-12)
+    dspctl
 )
 SPECS_SRC="${HOME}/Claude/vbox/specs"
 SPECS_DST=$(dirname "${HERE}")/share/vboxctl/specs

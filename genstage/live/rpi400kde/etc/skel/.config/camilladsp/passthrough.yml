@@ -1,0 +1,18 @@
+# Unity chain: capture -> playback, no filters. For A/B against a correction and for
+# measuring the hardware sink through the same nodes.
+devices:
+  samplerate: 48000
+  chunksize: 1024
+  capture:
+    type: PipeWire
+    channels: 2
+    node_name: camilladsp-capture
+    node_description: "CamillaDSP Capture"
+  playback:
+    type: PipeWire
+    channels: 2
+    node_name: camilladsp-playback
+    node_description: "CamillaDSP Playback"
+filters: {}
+mixers: {}
+pipeline: []

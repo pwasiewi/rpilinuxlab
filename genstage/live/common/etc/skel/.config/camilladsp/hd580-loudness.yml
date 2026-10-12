@@ -1,0 +1,43 @@
+# HD 580 + volume-tracking loudness: the oratory1990 AutoEq minimum-phase IR (the same .irs file
+# EasyEffects loads; coeffs/ is a symlink to ~/.local/share/easyeffects/irs). The preamp
+# equals the AutoEq Preamp line. The Loudness filter follows the CamillaDSP Main fader
+# (dspctl vol): flat at or above reference_level, full boost 20 dB below it, linear between.
+# Use `dspctl vol` for volume in this mode and leave the hardware sink fixed.
+devices:
+  samplerate: 48000
+  chunksize: 1024
+  capture:
+    type: PipeWire
+    channels: 2
+    node_name: camilladsp-capture
+    node_description: "CamillaDSP Capture"
+  playback:
+    type: PipeWire
+    channels: 2
+    node_name: camilladsp-playback
+    node_description: "CamillaDSP Playback"
+filters:
+  preamp:
+    type: Gain
+    parameters:
+      gain: -6.1
+      inverted: false
+  loudness:
+    type: Loudness
+    parameters:
+      fader: Main
+      reference_level: -10.0
+      high_boost: 6.0
+      low_boost: 8.0
+      attenuate_mid: false
+  hd580_ir:
+    type: Conv
+    parameters:
+      type: Wav
+      filename: coeffs/Sennheiser HD 580 precision AutoEq minimum phase 48000Hz.irs
+      channel: 0
+mixers: {}
+pipeline:
+  - type: Filter
+    channels: [0, 1]
+    names: [preamp, hd580_ir, loudness]

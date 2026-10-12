@@ -203,6 +203,8 @@ app-misc/keyd
 # :0/:1 slots other consumers use stay on stable keywords.
 media-sound/easyeffects
 media-libs/webrtc-audio-processing:2
+# CamillaDSP upstream binary (::pwr, 2026-10-12), ~amd64 ~arm64 only
+media-sound/camilladsp-bin
 
 # dev-python/opentelemetry-exporter-http-transport (::stuff, new package): the
 # opentelemetry 1.45.0 wave splits it out of exporter-otlp-proto-http, which now

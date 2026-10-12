@@ -1,0 +1,324 @@
+#!/bin/bash
+# dspctl — switch the PipeWire output DSP between EasyEffects and CamillaDSP.
+#
+# The two must never run together: EasyEffects 8 relinks every playback stream into
+# easyeffects_sink while it runs, so CamillaDSP would lose its input within a second,
+# and a chain of both applies a headphone correction twice. This script quits one,
+# starts the other, makes its sink the default and moves the live streams.
+#
+# CamillaDSP's PipeWire nodes are plain streams (camilladsp-capture = Stream/Input,
+# camilladsp-playback = Stream/Output) and never auto-connect, so the script owns a
+# virtual sink in front of them and the links:
+#   apps -> camilladsp_sink (null sink) -> camilladsp-capture -> DSP -> camilladsp-playback -> hardware
+#
+# Modes
+#   ee                 EasyEffects path (its last preset); default sink = hardware, EasyEffects relinks streams
+#   camilla [NAME]     CamillaDSP user service with ~/.config/camilladsp/NAME.yml
+#                      (default: whatever active.yml points at); default sink = camilladsp_sink
+#   chain [NAME]       EXPERIMENTAL: both, EasyEffects output fed into CamillaDSP; use an
+#                      EasyEffects preset without convolver/equalizer or the correction doubles
+#   off                neither; default sink = the hardware sink
+#   status             which path is live, config, CamillaDSP state and volume
+#   list               configs in ~/.config/camilladsp and the IR each one loads
+#   reload             CamillaDSP re-reads active.yml (SIGHUP)
+#   vol [up|down [N] | set DB | mute | unmute]   CamillaDSP Main fader (drives the Loudness filter)
+#
+# Runs as the desktop user, never root. Websocket control on 127.0.0.1:1234 (the unit's -p).
+set -euo pipefail
+
+CFG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/camilladsp"
+WS_URL="ws://127.0.0.1:1234"
+EE_SINK="easyeffects_sink"
+CD_SINK="camilladsp_sink"          # the virtual sink apps play into (created here)
+CD_CAP="camilladsp-capture"        # CamillaDSP's input stream (from the config's node_name)
+CD_OUT="camilladsp-playback"       # CamillaDSP's output stream
+CD_UNIT="camilladsp.service"
+HW_FILE="${CFG_DIR}/.hw_sink"
+
+help() {
+	sed -n '2,/^set -euo/{/^set -euo/d;s/^# \{0,1\}//p}' "$0"
+	exit 0
+}
+die() { printf 'dspctl: %s\n' "$*" >&2; exit 1; }
+msg() { printf 'dspctl: %s\n' "$*"; }
+need() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
+
+[[ $# -gt 0 ]] || help
+case $1 in -h|--help) help ;; esac
+[[ ${EUID} -ne 0 ]] || die "run as the desktop user, not root (PipeWire is a user session)"
+for c in pw-cli pw-link pactl wpctl systemctl; do need "$c"; done
+
+# ---- PipeWire helpers --------------------------------------------------------------
+# No grep -q / awk exit / head on a pipe anywhere below: an early reader exit sends
+# SIGPIPE to the producer and, under pipefail, turns a found node into exit 141.
+node_present() { pw-cli ls Node 2>/dev/null | grep -F "node.name = \"$1\"" >/dev/null; }
+wait_node() {
+	local n=$1 i
+	for i in $(seq 1 80); do node_present "$n" && return 0; sleep 0.1; done
+	return 1
+}
+wait_node_gone() {
+	local n=$1 i
+	for i in $(seq 1 80); do node_present "$n" || return 0; sleep 0.1; done
+	return 1
+}
+sink_id() { pactl list short sinks | awk -v n="$1" '$2 == n && !f { print $1; f = 1 }'; }
+node_id() {
+	# PipeWire object id of a node by node.name (pactl ids are not PipeWire ids)
+	pw-cli ls Node 2>/dev/null | awk -v n="node.name = \"$1\"" '
+		/^\tid [0-9]+,/ { id = $2; sub(/,/, "", id) }
+		index($0, n) && !f { print id; f = 1 }'
+}
+default_sink() { pactl get-default-sink 2>/dev/null || true; }
+hw_sink() {
+	# the first ALSA output sink (never a virtual one); the saved one wins if it still exists
+	local s
+	if [[ -r ${HW_FILE} ]]; then
+		s=$(<"${HW_FILE}")
+		[[ -n ${s} && -n $(sink_id "${s}") ]] && { printf '%s\n' "${s}"; return 0; }
+	fi
+	pactl list short sinks | awk '$2 ~ /^alsa_output\./ && !f { print $2; f = 1 }'
+}
+remember_hw() {
+	local d; d=$(default_sink)
+	[[ ${d} == alsa_output.* ]] && printf '%s\n' "${d}" > "${HW_FILE}"
+	return 0
+}
+set_default() {
+	local id; id=$(node_id "$1")
+	[[ -n ${id} ]] || die "sink '$1' not found (pw-cli ls Node)"
+	wpctl set-default "${id}" || die "wpctl set-default ${id} failed"
+}
+app_streams() {
+	# "<id> <application.name>" per playback stream, CamillaDSP's own output stream excluded
+	pactl list sink-inputs | awk '
+		/^Sink Input #/ { id = substr($3, 2); app = "?" }
+		/application.name = / { app = $0; sub(/.*application.name = "/, "", app); sub(/".*/, "", app) }
+		/^$/ && id != "" { if (app != "CamillaDSP") print id, app; id = "" }
+		END { if (id != "" && app != "CamillaDSP") print id, app }'
+}
+move_streams() {
+	# every live playback stream onto $1; a stream that vanished mid-loop is not an error
+	local id app
+	while read -r id app; do
+		[[ -n ${id} ]] || continue
+		pactl move-sink-input "${id}" "$1" 2>/dev/null || true
+	done < <(app_streams)
+}
+link_nodes() {
+	# link $1's output ports to $2's input ports in port order (FL/FR, AUX0/AUX1 — whatever
+	# the hardware calls them); prints the number of links that exist afterwards
+	local src=$1 dst=$2 outs ins n i
+	mapfile -t outs < <(pw-link -o | grep "^${src}:")
+	mapfile -t ins < <(pw-link -i | grep "^${dst}:")
+	[[ ${#outs[@]} -gt 0 ]] || die "no output ports on ${src} (pw-link -o)"
+	[[ ${#ins[@]} -gt 0 ]] || die "no input ports on ${dst} (pw-link -i)"
+	n=${#outs[@]}; [[ ${#ins[@]} -lt ${n} ]] && n=${#ins[@]}
+	for ((i = 0; i < n; i++)); do
+		pw-link "${outs[i]}" "${ins[i]}" >/dev/null 2>&1 || true   # "File exists" = already linked
+	done
+	pw-link -l | awk -v s="${src}:" -v d="${dst}:" '
+		index($0, s) == 1 { cur = 1; next }
+		/^[^ ]/ { cur = 0 }
+		cur && index($0, "|-> " d) { c++ }
+		END { print c + 0 }'
+}
+cd_sink_create() {
+	node_present "${CD_SINK}" && return 0
+	pw-cli create-node adapter "{ factory.name=support.null-audio-sink node.name=${CD_SINK} \
+		node.description=\"CamillaDSP Sink\" media.class=Audio/Sink audio.position=[FL FR] \
+		monitor.channel-volumes=true object.linger=true }" >/dev/null 2>&1 \
+		|| die "could not create the ${CD_SINK} null sink (pw-cli create-node)"
+	wait_node "${CD_SINK}" || die "${CD_SINK} never appeared"
+}
+cd_sink_destroy() {
+	local id; id=$(node_id "${CD_SINK}")
+	[[ -n ${id} ]] || return 0
+	pw-cli destroy "${id}" >/dev/null 2>&1 || true
+	wait_node_gone "${CD_SINK}" || die "${CD_SINK} still present after destroy"
+}
+
+# ---- EasyEffects ------------------------------------------------------------------
+ee_running() { pgrep -x easyeffects >/dev/null 2>&1; }
+ee_quit() {
+	local i
+	if ee_running; then
+		easyeffects -q >/dev/null 2>&1 || true
+		for i in $(seq 1 50); do ee_running || break; sleep 0.1; done
+		ee_running && die "EasyEffects did not quit (easyeffects -q); stop it by hand"
+	fi
+	systemctl --user stop 'app-com.github.wwmm.easyeffects@*.service' 2>/dev/null || true
+	wait_node_gone "${EE_SINK}" || die "${EE_SINK} is still present after quitting EasyEffects"
+}
+ee_start() {
+	ee_running || setsid -f easyeffects --service-mode -w >/dev/null 2>&1 \
+		|| die "could not start easyeffects"
+	wait_node "${EE_SINK}" || die "${EE_SINK} never appeared (is EasyEffects installed and did it start?)"
+}
+
+# ---- CamillaDSP -------------------------------------------------------------------
+cd_running() { systemctl --user is-active --quiet "${CD_UNIT}"; }
+cd_stop() {
+	# $1 = sink the orphaned streams go to before the virtual sink disappears
+	local to=$1
+	if node_present "${CD_SINK}"; then
+		set_default "${to}"
+		move_streams "${to}"
+	fi
+	systemctl --user stop "${CD_UNIT}" 2>/dev/null || true
+	wait_node_gone "${CD_CAP}" || die "${CD_CAP} still present after stopping ${CD_UNIT}"
+	cd_sink_destroy
+}
+cd_config_select() {
+	local name=$1
+	[[ -n ${name} ]] || { [[ -L ${CFG_DIR}/active.yml ]] || die "no active.yml in ${CFG_DIR}; give a NAME"; return 0; }
+	[[ -f ${CFG_DIR}/${name}.yml ]] || die "no such config: ${CFG_DIR}/${name}.yml (dspctl list)"
+	ln -sfn "${name}.yml" "${CFG_DIR}/active.yml"
+}
+cd_start() {
+	# $1 = hardware sink for the output links
+	local hw=$1 n
+	need camilladsp
+	camilladsp -c "${CFG_DIR}/active.yml" >/dev/null 2>&1 || die "config check failed: camilladsp -c ${CFG_DIR}/active.yml"
+	cd_sink_create
+	systemctl --user restart "${CD_UNIT}" || die "systemctl --user restart ${CD_UNIT} failed"
+	wait_node "${CD_CAP}" || die "${CD_CAP} never appeared (journalctl --user -u ${CD_UNIT})"
+	wait_node "${CD_OUT}" || die "${CD_OUT} never appeared (journalctl --user -u ${CD_UNIT})"
+	sleep 0.2   # ports register a moment after the node
+	n=$(link_nodes "${CD_SINK}" "${CD_CAP}")
+	[[ ${n} -ge 2 ]] || die "only ${n} link(s) ${CD_SINK} -> ${CD_CAP} (pw-link -l)"
+	n=$(link_nodes "${CD_OUT}" "${hw}")
+	[[ ${n} -ge 2 ]] || die "only ${n} link(s) ${CD_OUT} -> ${hw} (pw-link -l)"
+}
+ws() {
+	# one or more websocket commands; prints the JSON replies one per line
+	need python3
+	python3 -I - "${WS_URL}" "$@" <<'PY'
+import asyncio, sys
+try:
+    import websockets
+except ImportError:
+    sys.exit("dspctl: python websockets module missing (dev-python/websockets)")
+async def main(url, cmds):
+    async with websockets.connect(url, open_timeout=3) as w:
+        for c in cmds:
+            # bare command names are JSON strings on the wire: "GetState"
+            await w.send(c if c.startswith("{") else f'"{c}"')
+            print(await w.recv())
+try:
+    asyncio.run(main(sys.argv[1], sys.argv[2:]))
+except OSError as e:
+    sys.exit(f"dspctl: cannot reach {sys.argv[1]}: {e} (is camilladsp running?)")
+PY
+}
+
+# ---- commands ---------------------------------------------------------------------
+cmd_ee() {
+	local hw
+	remember_hw
+	hw=$(hw_sink); [[ -n ${hw} ]] || die "no hardware sink found"
+	cd_stop "${hw}"
+	ee_start
+	# EasyEffects relinks every stream into its sink itself and plays to the default
+	# hardware sink, so the default stays on the hardware (as EasyEffects expects)
+	set_default "${hw}"
+	move_streams "${EE_SINK}"
+	msg "EasyEffects path active (${EE_SINK} -> ${hw})"
+}
+cmd_camilla() {
+	local name=${1:-} hw
+	remember_hw
+	cd_config_select "${name}"
+	ee_quit
+	hw=$(hw_sink); [[ -n ${hw} ]] || die "no hardware sink found"
+	cd_start "${hw}"
+	set_default "${CD_SINK}"
+	move_streams "${CD_SINK}"
+	msg "CamillaDSP path active: $(readlink "${CFG_DIR}/active.yml") -> ${hw}"
+}
+cmd_chain() {
+	local name=${1:-} hw id app
+	remember_hw
+	cd_config_select "${name}"
+	hw=$(hw_sink); [[ -n ${hw} ]] || die "no hardware sink found"
+	cd_start "${hw}"
+	ee_start
+	set_default "${hw}"
+	# EasyEffects' own output stream goes into CamillaDSP; everything else into EasyEffects
+	move_streams "${EE_SINK}"
+	while read -r id app; do
+		[[ ${app} == easyeffects* ]] && { pactl move-sink-input "${id}" "${CD_SINK}" || true; }
+	done < <(app_streams)
+	msg "chain active (EXPERIMENTAL): apps -> ${EE_SINK} -> ${CD_SINK} -> ${hw}; use a taste-only EasyEffects preset"
+}
+cmd_off() {
+	local hw
+	remember_hw
+	hw=$(hw_sink); [[ -n ${hw} ]] || die "no hardware sink found"
+	ee_quit
+	cd_stop "${hw}"
+	set_default "${hw}"
+	move_streams "${hw}"
+	msg "no DSP: default sink ${hw}"
+}
+cmd_status() {
+	local d mode="off"
+	d=$(default_sink)
+	node_present "${EE_SINK}" && mode="ee"
+	if node_present "${CD_CAP}"; then
+		if [[ ${mode} == ee ]]; then mode="chain"; else mode="camilla"; fi
+	fi
+	printf 'mode:          %s\n' "${mode}"
+	printf 'default sink:  %s\n' "${d:-?}"
+	printf 'easyeffects:   %s\n' "$(ee_running && echo running || echo stopped)"
+	printf 'camilladsp:    %s' "$(cd_running && echo running || echo stopped)"
+	if [[ -L ${CFG_DIR}/active.yml ]]; then printf '  (active.yml -> %s)' "$(readlink "${CFG_DIR}/active.yml")"; fi
+	printf '\n'
+	if cd_running; then
+		ws GetState GetVolume GetMute 2>/dev/null | sed 's/^/  /' || true
+	fi
+	printf 'streams:\n'
+	app_streams | while read -r id app; do printf '  %s %s\n' "${id}" "${app}"; done
+}
+cmd_list() {
+	local f
+	for f in "${CFG_DIR}"/*.yml; do
+		[[ -f ${f} && ! -L ${f} ]] || continue
+		printf '%-22s %s\n' "$(basename "${f}" .yml)" "$(grep -m1 -E '^\s*filename:' "${f}" | sed 's/^\s*filename:\s*//' || true)"
+	done
+	[[ -L ${CFG_DIR}/active.yml ]] && printf 'active -> %s\n' "$(readlink "${CFG_DIR}/active.yml")"
+	return 0
+}
+cmd_reload() {
+	cd_running || die "${CD_UNIT} is not running"
+	camilladsp -c "${CFG_DIR}/active.yml" >/dev/null 2>&1 || die "config check failed, not reloading"
+	systemctl --user reload "${CD_UNIT}" || die "reload failed"
+	msg "reloaded $(readlink "${CFG_DIR}/active.yml")"
+}
+cmd_vol() {
+	cd_running || die "${CD_UNIT} is not running (dspctl camilla)"
+	local sub=${1:-} n=${2:-3}
+	case ${sub} in
+		"") ws GetVolume GetMute ;;
+		up)   ws "{\"AdjustVolume\": [${n}, -60.0, 0.0]}" GetVolume ;;
+		down) ws "{\"AdjustVolume\": [-${n}, -60.0, 0.0]}" GetVolume ;;
+		set)  [[ ${2:-} =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || die "vol set needs a dB value (e.g. -20)"
+		      ws "{\"SetVolume\": $2}" GetVolume ;;
+		mute) ws '{"SetMute": true}' ;;
+		unmute) ws '{"SetMute": false}' ;;
+		*) die "vol: up [N] | down [N] | set DB | mute | unmute" ;;
+	esac
+}
+
+cmd=$1; shift
+case ${cmd} in
+	ee) cmd_ee "$@" ;;
+	camilla) cmd_camilla "$@" ;;
+	chain) cmd_chain "$@" ;;
+	off) cmd_off "$@" ;;
+	status) cmd_status ;;
+	list) cmd_list ;;
+	reload) cmd_reload ;;
+	vol) cmd_vol "$@" ;;
+	*) die "unknown command '${cmd}' (dspctl -h)" ;;
+esac

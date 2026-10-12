@@ -1,0 +1,33 @@
+# Sennheiser Monoprice M1060: the oratory1990 AutoEq minimum-phase IR (the same .irs file
+# EasyEffects loads; coeffs/ is a symlink to ~/.local/share/easyeffects/irs). The preamp
+# equals the AutoEq Preamp line (-6.0 dB) so the convolver cannot clip at 0 dBFS input.
+devices:
+  samplerate: 48000
+  chunksize: 1024
+  capture:
+    type: PipeWire
+    channels: 2
+    node_name: camilladsp-capture
+    node_description: "CamillaDSP Capture"
+  playback:
+    type: PipeWire
+    channels: 2
+    node_name: camilladsp-playback
+    node_description: "CamillaDSP Playback"
+filters:
+  preamp:
+    type: Gain
+    parameters:
+      gain: -6.1
+      inverted: false
+  m1060_ir:
+    type: Conv
+    parameters:
+      type: Wav
+      filename: coeffs/Monoprice M1060 AutoEq minimum phase 48000Hz.irs
+      channel: 0
+mixers: {}
+pipeline:
+  - type: Filter
+    channels: [0, 1]
+    names: [preamp, m1060_ir]
