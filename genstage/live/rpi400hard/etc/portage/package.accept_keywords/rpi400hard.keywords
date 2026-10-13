@@ -24,3 +24,5 @@ app-forensics/lynis **
 dev-util/glslang
 dev-util/spirv-tools
 dev-util/spirv-headers
+# lftp: stable on amd64, ~arm64 only (added to the profile 2026-10-13)
+net-ftp/lftp ~arm64
