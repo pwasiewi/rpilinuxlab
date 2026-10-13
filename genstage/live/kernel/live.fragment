@@ -466,6 +466,16 @@ CONFIG_IMA=y
 CONFIG_IMA_DEFAULT_HASH_SHA256=y
 CONFIG_IMA_DEFAULT_HASH="sha256"
 CONFIG_IMA_APPRAISE=y
+# Read back the active policy (cat /sys/kernel/security/ima/policy, root
+# only) so a check can prove WHICH policy is live, not just that a load
+# happened. WRITE_POLICY stays off: the policy is locked after systemd PID 1
+# loads /etc/ima/ima-policy at early boot. Side effect: with READ_POLICY the
+# kernel keeps the policy node (read-only) instead of deleting it, so a
+# second loader such as ima-policy.service sees it, writes, and fails with
+# EACCES at every boot — that unit must not be enabled (systemd already does
+# its job). Was dropped from the host recipe 2026-08-14 for exactly that
+# failure; re-added 2026-10-13 together with retiring the unit.
+CONFIG_IMA_READ_POLICY=y
 CONFIG_EVM=y
 CONFIG_TCG_TPM=y
 CONFIG_TCG_TIS=y

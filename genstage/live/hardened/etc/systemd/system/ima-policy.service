@@ -1,14 +1,24 @@
-[Unit]                                                                    
-Description=Load IMA measurement policy                                   
-DefaultDependencies=no                                                    
-After=systemd-remount-fs.service                                          
-Before=sysinit.target                                                     
-ConditionPathExists=/sys/kernel/security/ima/policy                       
-                                                                      
-[Service]                                                                 
-Type=oneshot                                                              
-ExecStart=/bin/sh -c 'cat /etc/ima/ima-policy > /sys/kernel/security/ima/policy'                                            
-RemainAfterExit=yes                                                       
-                                                                   
-[Install]                                                                 
-WantedBy=sysinit.target   
+# Fallback loader for /etc/ima/ima-policy. systemd PID 1 (built with +IMA)
+# normally loads that file itself at early boot, before this unit runs, so on
+# such a system this unit always skips — that is the expected state.
+#
+# Kernel behaviour after a successful load (security/integrity/ima/ima_fs.c):
+#   no IMA_READ_POLICY: the policy node is removed      -> ConditionPathExists skips
+#   IMA_READ_POLICY=y:  the node stays, write bit dropped (0600 -> 0400)
+#                       -> ExecCondition skips; writing again would fail
+#                          with EACCES/EBUSY and mark the unit failed at every boot
+[Unit]
+Description=Load IMA measurement policy (fallback if systemd did not)
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=sysinit.target
+ConditionPathExists=/sys/kernel/security/ima/policy
+
+[Service]
+Type=oneshot
+ExecCondition=/bin/sh -c '[ "$(stat -c %%a /sys/kernel/security/ima/policy)" = 600 ]'
+ExecStart=/bin/sh -c 'cat /etc/ima/ima-policy > /sys/kernel/security/ima/policy'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target

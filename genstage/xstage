@@ -68,7 +68,7 @@
 #                    -g plan file for review, -a apply it     [root for -i/-a]
 #   configure        hostname, root password, live user + autologin, sshd,
 #                    default runlevel, motd  [root]
-#   kernel           genkernel with CDROOT=1 inside the chroot; the .config is
+#   kernel           genkernel inside the chroot (CDROOT=0); the .config is
 #                    built by merging live/kernel/*.fragment onto a base
 #                    (XSTAGE_LIVE_KCONFIG_BASE: defconfig | host | PATH),
 #                    re-merged here even if 'pkgs' already staged it        [root]
@@ -369,8 +369,9 @@ LIVE_RC="${XSTAGE_LIVE_RC:-openrc}"
 INIT_PATH="${LIVE_INIT}"
 RC_SYSTEM="${LIVE_RC}"
 LIVE_FLAVOR_NAME="${XSTAGE_STAGE3_FLAVOR:-${FLAVOR}}"
-# genkernel's CDROOT initrd finds the media by the /livecd marker, then
-# loop-mounts /livecd.squashfs as the real root — hence no root=<device> here.
+# 'cdroot' switches genkernel's initrd into CD mode: it finds the media by the
+# /livecd marker, then loop-mounts /livecd.squashfs as the real root —
+# hence no root=<device> here.
 # real_init is what the initrd execs after the switch: /sbin/init on OpenRC,
 # /usr/lib/systemd/systemd on a systemd flavour.
 LIVE_APPEND="${XSTAGE_LIVE_APPEND:-root=/dev/ram0 init=/linuxrc real_init=${LIVE_INIT} dokeymap looptype=squashfs loop=/livecd.squashfs cdroot}"
@@ -2458,14 +2459,14 @@ cmd_live_configure() {
     info "Configured."
 }
 
-# genkernel with CDROOT=1: exactly what bin/v does, and the reason the ISO
-# needs no root= — the initrd hunts for the /livecd marker itself
+# genkernel builds the kernel + initramfs; the ISO needs no root= because
+# 'cdroot' (LIVE_APPEND) makes the initrd hunt for the /livecd marker
 cmd_live_kernel() {
     need_root
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
     live_prep_kconfig
 
-    info "Building the live kernel with genkernel (CDROOT=1) — this takes a while"
+    info "Building the live kernel with genkernel — this takes a while"
     live_chroot kernel <<-EOF
 	# --ignore-default-opts for the same reason as the kconfig step: the
 	# image's EMERGE_DEFAULT_OPTS would drag the stage3 transition graph in
@@ -2473,14 +2474,12 @@ cmd_live_kernel() {
 	    emerge --ignore-default-opts --verbose --oneshot sys-kernel/genkernel
 	[ -f /usr/src/linux/.config ] || { echo "no /usr/src/linux/.config" >&2; exit 1; }
 
-	# genkernel 4.3.17-r4 writes CDROOT='0' (single quotes; older builds used
-	# double quotes) — match either and keep the file's own quote style
-	sed -i -E "s/^CDROOT=(['\"])0\1/CDROOT=\11\1/" /usr/share/genkernel/defaults/initrd.defaults
-	grep -qE "^CDROOT=['\"]1['\"]" /usr/share/genkernel/defaults/initrd.defaults ||
-	    { echo "initrd.defaults: CDROOT not switched to 1 (format changed?)" >&2; exit 1; }
-	# restore CDROOT=0 even if genkernel dies: the next run must start clean
-	cdroot_off() { sed -i -E "s/^CDROOT=(['\"])1\1/CDROOT=\10\1/" /usr/share/genkernel/defaults/initrd.defaults; }
-	trap cdroot_off EXIT
+	# genkernel's default CDROOT=0, never baked to 1: live boots get CD mode
+	# from the 'cdroot' parameter (LIVE_APPEND), and installed hosts boot this
+	# same kernel with root=… (a baked 1 dropped kdehard to 'Could not find CD
+	# to boot', 2026-10-13)
+	grep -qE "^CDROOT=['\"]0['\"]" /usr/share/genkernel/defaults/initrd.defaults ||
+	    { echo "initrd.defaults: CDROOT is not 0" >&2; exit 1; }
 	# LLVM=1 (env, which kbuild imports) builds the whole kernel with clang.
 	# It is what makes CONFIG_DEBUG_INFO_BTF possible at all: BTF 'depends on
 	# !GCC_PLUGIN_RANDSTRUCT', and the hardened images set RANDSTRUCT_FULL, so
@@ -2508,7 +2507,6 @@ cmd_live_kernel() {
 	    --kernel-strip=llvm-strip --kernel-as=clang \\
 	    --strip=modules --no-module-rebuild \\
 	    --luks --lvm --btrfs --busybox --no-clean all
-	cdroot_off
 	EOF
     # keep the exact config next to the artifacts: without it a built ISO
     # cannot be reproduced or bisected later
@@ -2528,19 +2526,16 @@ cmd_live_kernel() {
 
     # Pass 2: same kernel relinked with the initramfs built in
     # (CONFIG_INITRAMFS_SOURCE). A UEFI firmware boot entry can exec this one
-    # PE binary directly — no bootloader, no separate initrd, no cmdline (the
-    # CDROOT logic hunts for the /livecd marker itself). The split pair from
-    # pass 1 stays the GRUB/isolinux payload.
+    # PE binary directly — no bootloader, no separate initrd. It is the kernel
+    # kxplant puts on installed hosts (root=… on the EFI entry); for a live
+    # boot from the stick's firmware entry it needs 'cdroot' plus the
+    # LIVE_APPEND loop= options on the command line, since CDROOT stays 0.
+    # The split pair from pass 1 stays the GRUB/isolinux payload.
     info "Building the stub kernel (integrated initramfs) for direct UEFI boot"
     live_chroot kernel-stub <<-EOF
-	# genkernel 4.3.17-r4 writes CDROOT='0' (single quotes; older builds used
-	# double quotes) — match either and keep the file's own quote style
-	sed -i -E "s/^CDROOT=(['\"])0\1/CDROOT=\11\1/" /usr/share/genkernel/defaults/initrd.defaults
-	grep -qE "^CDROOT=['\"]1['\"]" /usr/share/genkernel/defaults/initrd.defaults ||
-	    { echo "initrd.defaults: CDROOT not switched to 1 (format changed?)" >&2; exit 1; }
-	# restore CDROOT=0 even if genkernel dies: the next run must start clean
-	cdroot_off() { sed -i -E "s/^CDROOT=(['\"])1\1/CDROOT=\10\1/" /usr/share/genkernel/defaults/initrd.defaults; }
-	trap cdroot_off EXIT
+	# CDROOT must stay 0 — see the kernel step
+	grep -qE "^CDROOT=['\"]0['\"]" /usr/share/genkernel/defaults/initrd.defaults ||
+	    { echo "initrd.defaults: CDROOT is not 0" >&2; exit 1; }
 	# same toolchain as pass 1 — a gcc relink here would produce a stub whose
 	# modules the pass-1 kernel cannot load (different vermagic/RANDSTRUCT hash)
 	LLVM=1 genkernel --makeopts=-j${JOBS} --kernel-config=/usr/src/linux/.config \\
@@ -2550,7 +2545,6 @@ cmd_live_kernel() {
 	    --kernel-strip=llvm-strip --kernel-as=clang \\
 	    --strip=modules --no-module-rebuild \\
 	    --luks --lvm --btrfs --busybox --no-clean --integrated-initramfs all
-	cdroot_off
 	EOF
     k=$(ls -1t "${LIVE_ROOT}/boot/"{vmlinuz,kernel}-* 2>/dev/null | head -1 || true)
     [[ -n ${k} ]] || die "stub pass produced no kernel in ${LIVE_ROOT}/boot"
@@ -3181,8 +3175,9 @@ ${still}"
         "${mnt}/boot/grub/grub.cfg" || die "grub.cfg initrd-line rewrite failed"
     grep -q "initrd ${uc_files}/initrd.uuid.cpio.gz" "${mnt}/boot/grub/grub.cfg" ||
         die "grub.cfg has no initrd line to rewrite — the stick would boot the old initrd"
-    # stub kernel with builtin initramfs: bootable straight from the firmware
-    # menu / efibootmgr without GRUB (kernel EFI stub, no cmdline needed)
+    # stub kernel with builtin initramfs: bootable without GRUB, but a live
+    # boot needs a command line with 'cdroot' + the loop= options (CDROOT=0
+    # is baked in, see the kernel step); installed hosts pass root=… instead
     if [[ -f ${LIVE_BLD}/bzImage-stub ]]; then
         mkdir -p "${mnt}/EFI/Gentoo"
         command cp -f "${LIVE_BLD}/bzImage-stub" "${mnt}/EFI/Gentoo/gentoo-stub.efi"

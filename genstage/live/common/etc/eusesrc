@@ -1,0 +1,3 @@
+# euses reads PORTDIR from make.conf/make.globals, which current Portage no
+# longer sets (repos.conf replaced it); this is the file euses checks for it.
+PORTDIR=/var/db/repos/gentoo
