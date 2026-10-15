@@ -342,6 +342,15 @@ LIVE_MAKECONF_EXTRA="${XSTAGE_LIVE_MAKECONF_EXTRA:-}"
 LIVE_UPDATE_FIRST="${XSTAGE_LIVE_UPDATE_FIRST:-yes}"
 LIVE_PYTHON_SINGLE_TARGET="${XSTAGE_LIVE_PYTHON_SINGLE_TARGET:-}"
 LIVE_PORTAGE_PROFILE="${XSTAGE_LIVE_PORTAGE_PROFILE:-}"
+# Groups whose membership alone equals root, or a root password, so a HARDENED
+# image keeps its default user out of them (2026-10-15): disk = raw block
+# devices, kmem/mem = kernel and physical memory (lockdown ships 'none'),
+# shadow = the password hashes, sys and tty, and SystemTap's three groups,
+# which compile and load kernel modules. Non-hardened images keep the
+# "every group" rule of 2026-08-06. NOT in the list on purpose, user decision
+# pending: docker (also root, but the AI stack calls it as the user) and input
+# (reads every keyboard, but Steam/uinput and hidraw tools may need it).
+XSTAGE_ROOT_EQUIV_GROUPS="${XSTAGE_ROOT_EQUIV_GROUPS-disk kmem mem sys shadow tty stapdev stapsys stapusr}"
 # the kernel sources /usr/src/linux/.config is built against; a profile whose
 # package list ships another sources package (zen-sources, say) should name it
 # here too, or the image ends up carrying both trees
@@ -1633,6 +1642,13 @@ live_prep_kconfig() {
         frags+=("${kf}")
         info "Profile kernel fragment: $(basename "${kf}")"
     done
+    # profile fragments that must not lose a symbol silently: =y names join
+    # kcheck, =m names go to kcheck_m (checked in the same chroot step)
+    local kcheck_m=""
+    if [[ " ${LIVE_KFRAGS} " == *" nftables.fragment "* ]]; then
+        kcheck+=" CONFIG_NF_TABLES_INET CONFIG_NF_TABLES_IPV4 CONFIG_NF_TABLES_IPV6"
+        kcheck_m+=" CONFIG_NFT_CT"
+    fi
     local f
     for f in "${frags[@]}"; do
         [[ -f ${f} ]] || die "Missing Kconfig fragment: ${f}"
@@ -1739,6 +1755,12 @@ live_prep_kconfig() {
 	           CONFIG_BLK_DEV_INITRD CONFIG_OVERLAY_FS ${kcheck}; do
 	    grep -q "^\${sym}=y" .config ||
 	        { echo "FATAL: \${sym} is not =y after merge — the ISO would not boot" >&2; exit 1; }
+	done
+	# 3b. profile-fragment modules (kcheck_m): a dropped =m symbol is a
+	#     feature that silently never loads
+	for sym in ${kcheck_m}; do
+	    grep -q "^\${sym}=m" .config ||
+	        { echo "FATAL: \${sym} is not =m after merge — a profile fragment lost it" >&2; exit 1; }
 	done
 	# 4. the same for audio.fragment's load-bearing modules: a vendor codec
 	#    or the SOF PCI driver silently dropped by olddefconfig (unmet gate)
@@ -2226,6 +2248,36 @@ cmd_live_restrict_run() {
     info "Restricted packages installed"
 }
 
+# Hardened images: sudo always asks for the password (2026-10-15). Installs
+# two files from live/sudoers.d/ and removes the password-less 95-* files an
+# earlier configure run left behind:
+#   50-<user>         install-time grant for the default user (a stage3
+#                     /etc/sudoers grants only root); firstrun.txt deletes it
+#                     after installation
+#   60-hardened-sudo  persistent: %wheel with a password, the 15-minute
+#                     timestamp window, the password-free read-only list
+# Validated with the HOST visudo, which reads a foreign-arch file as well as a
+# native one.
+install_hardened_sudoers() {  # install_hardened_sudoers <root> <user>
+    local root="$1" user="$2" src dst f
+    command -v visudo >/dev/null || die "visudo not on the host — cannot validate sudoers"
+    install -d -m 0755 "${root}/etc/sudoers.d"
+    for f in 50-guest 60-hardened-sudo; do
+        src="${LIVE_TPL}/sudoers.d/${f}"
+        [[ -f ${src} ]] || die "missing ${src}"
+        dst="${root}/etc/sudoers.d/${f/#50-guest/50-${user}}"
+        # only the rule lines name the user; comments may keep saying guest
+        sed -e "s/^guest ALL=/${user} ALL=/" -e "s/^Defaults:guest /Defaults:${user} /" "${src}" |
+            install -o root -g root -m 0440 /dev/stdin "${dst}"
+        if ! visudo -cf "${dst}" >/dev/null; then
+            rm -f "${dst}"
+            die "sudoers syntax error in ${dst} — it would lock sudo out on the image"
+        fi
+    done
+    rm -f "${root}/etc/sudoers.d/95-xstage-live" "${root}/etc/sudoers.d/95-xstage-desktop"
+    info "sudo for ${user}: password required (50-${user} + 60-hardened-sudo), password-less 95-* removed"
+}
+
 cmd_live_configure() {
     need_root
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
@@ -2273,6 +2325,12 @@ cmd_live_configure() {
     # salt survives the unquoted heredoc.
     if [[ -n ${LIVE_USER} ]]; then
         info "Live user '${LIVE_USER}' (password '${ZERO_PASS}', autologin)"
+        local lu_skip="root nogroup nobody ${LIVE_USER}" lu_drop=""
+        if [[ ${LIVE_PORTAGE_PROFILE} == *hardened* ]]; then
+            lu_skip+=" ${XSTAGE_ROOT_EQUIV_GROUPS}"
+            lu_drop="${XSTAGE_ROOT_EQUIV_GROUPS}"
+            info "Hardened profile — live user kept out of: ${XSTAGE_ROOT_EQUIV_GROUPS}"
+        fi
         live_chroot live-user <<-EOF
 	if id -u ${LIVE_USER} >/dev/null 2>&1; then
 	    # a re-run: useradd -m is what copies /etc/skel, so files the layers
@@ -2289,10 +2347,22 @@ cmd_live_configure() {
 	# service group without a reinstall, and the set differs per profile.
 	# Skipped: root, so root-group-owned files stay out of reach of a plain
 	# guest process, and the two "no privileges" groups, where membership
-	# means nothing.
+	# means nothing. A hardened profile also skips XSTAGE_ROOT_EQUIV_GROUPS.
 	for g in \$(cut -d: -f1 /etc/group); do
-	    case \${g} in root|nogroup|nobody|${LIVE_USER}) continue ;; esac
+	    case " ${lu_skip} " in *" \${g} "*) continue ;; esac
 	    gpasswd -a ${LIVE_USER} \${g} >/dev/null || echo "gpasswd -a ${LIVE_USER} \${g} failed" >&2
+	done
+	# A re-run never takes a group away by itself, so a rootfs built before
+	# the hardened exclusion would keep them: drop them explicitly.
+	# No 'id | grep -q' pipe: under the chroot's pipefail an early grep exit
+	# can SIGPIPE the writer and turn a match into "not a member". A failed
+	# removal is fatal (the step dies), unlike a failed add: a hardened image
+	# must not ship with the user still in a root-equivalent group.
+	for g in ${lu_drop}; do
+	    case " \$(id -nG ${LIVE_USER}) " in
+	        *" \${g} "*) gpasswd -d ${LIVE_USER} "\${g}" >/dev/null ||
+	                     { echo "gpasswd -d ${LIVE_USER} \${g} failed" >&2; exit 1; } ;;
+	    esac
 	done
 	EOF
         if [[ -n ${XSTAGE_LIVE_XSESSION:-} ]]; then
@@ -2353,7 +2423,10 @@ cmd_live_configure() {
         # so it never fired and every image so far gave the live user no sudo
         # at all. Create it; only a missing sudo binary is a real reason to
         # skip, and that gets a warning rather than silence.
-        if [[ -x ${LIVE_ROOT}/usr/bin/sudo ]]; then
+        if [[ -x ${LIVE_ROOT}/usr/bin/sudo && ${LIVE_PORTAGE_PROFILE} == *hardened* ]]; then
+            # hardened: no password-less sudo, not even on the live medium
+            install_hardened_sudoers "${LIVE_ROOT}" "${LIVE_USER}"
+        elif [[ -x ${LIVE_ROOT}/usr/bin/sudo ]]; then
             install -d -m 0755 "${LIVE_ROOT}/etc/sudoers.d"
             # The explicit user line is not redundant with %wheel: it keeps
             # sudo working if the account is ever created outside wheel, and
@@ -4420,15 +4493,33 @@ arm64_configure_desktop() {  # arm64_configure_desktop <password-hash>
         fi
         # Every group the image defines, not a hand-picked list (user rule
         # 2026-08-06) — same policy as the live images: root and the two
-        # no-privilege groups are skipped.
-        local g glist=""
+        # no-privilege groups are skipped, and a hardened profile also skips
+        # XSTAGE_ROOT_EQUIV_GROUPS.
+        local g glist="" skip=" root nogroup nobody ${user} "
+        if [[ ${PROFILE} == *hardened* ]]; then
+            skip+="${XSTAGE_ROOT_EQUIV_GROUPS} "
+            info "Hardened profile — ${user} kept out of: ${XSTAGE_ROOT_EQUIV_GROUPS}"
+        fi
         while IFS=: read -r g _; do
-            case ${g} in root|nogroup|nobody|"${user}") continue ;; esac
+            case ${skip} in *" ${g} "*) continue ;; esac
             glist+="${g},"
         done < "${TINY_ROOT}/etc/group"
         [[ -z ${glist} ]] ||
             usermod --prefix "${TINY_ROOT}" -aG "${glist%,}" "${user}" ||
             die "usermod -aG failed for ${user}"
+        # -aG only adds: a rootfs configured before the hardened exclusion
+        # keeps those groups unless they are removed explicitly
+        if [[ ${PROFILE} == *hardened* ]]; then
+            local dlist=""
+            for g in ${XSTAGE_ROOT_EQUIV_GROUPS}; do
+                if grep -qE "^${g}:[^:]*:[^:]*:(.*,)?${user}(,|\$)" "${TINY_ROOT}/etc/group"; then
+                    dlist+="${g},"
+                fi
+            done
+            [[ -z ${dlist} ]] ||
+                usermod --prefix "${TINY_ROOT}" -rG "${dlist%,}" "${user}" ||
+                die "usermod -rG failed for ${user}"
+        fi
 
         # sddm needs BOTH keys (User= alone is silently ignored); Session is a
         # .desktop NAME resolved from the session command, Wayland first.
@@ -4466,7 +4557,9 @@ arm64_configure_desktop() {  # arm64_configure_desktop <password-hash>
         # same policy and same rationale as the live images (user decision
         # 2026-08-06). visudo validates on the host: a syntax error here locks
         # sudo out and would only surface on the booted card.
-        if [[ -x ${TINY_ROOT}/usr/bin/sudo ]]; then
+        if [[ -x ${TINY_ROOT}/usr/bin/sudo && ${PROFILE} == *hardened* ]]; then
+            install_hardened_sudoers "${TINY_ROOT}" "${user}"
+        elif [[ -x ${TINY_ROOT}/usr/bin/sudo ]]; then
             install -d -m 0755 "${TINY_ROOT}/etc/sudoers.d"
             cat > "${TINY_ROOT}/etc/sudoers.d/95-xstage-desktop" <<-EOF
 	%wheel ALL=(ALL:ALL) NOPASSWD: ALL

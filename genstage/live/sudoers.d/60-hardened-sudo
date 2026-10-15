@@ -1,0 +1,29 @@
+# /etc/sudoers.d/60-hardened-sudo — hardened images AND the installed host
+# (2026-10-15). Persistent: it stays after installation, when 50-guest goes.
+#
+# wheel gets sudo, always with a password. No kit ships an /etc/sudoers, so
+# without this line a fresh install would lose user sudo the moment 50-guest
+# is deleted. On a host whose /etc/sudoers already has a wheel rule it is a
+# harmless duplicate.
+%wheel ALL=(ALL:ALL) ALL
+
+# The window: one successful password prompt opens root for 15 minutes to
+# EVERY process of guest, including Claude Code's tool shell, which has no tty
+# and so could never answer a prompt itself. Open it in a terminal with
+#   sudo -v
+# and close it early with
+#   sudo -k
+# Inside the window anything running as guest is root, so keep it short.
+Defaults:guest timestamp_type=global, timestamp_timeout=15
+
+# Read-only diagnostics that never need the window. Arguments are fixed:
+# a sudoers command WITHOUT arguments would allow ANY arguments, and "" means
+# "no arguments at all". Deliberately absent: emerge, emaint, xp, quickpkg —
+# each runs ebuild code (or syncs it) as root, and guest can write ::pwr, so
+# a password-less rule for any of them equals a password-less root.
+# This file sorts after 50-guest and its rule comes after the wheel line:
+# sudoers takes the last match, so these stay password-free.
+Cmnd_Alias GUEST_RO = /usr/bin/iptables -S, /usr/bin/ip6tables -S, \
+                      /usr/bin/iptables -L -n -v, /usr/bin/nft list ruleset, \
+                      /usr/bin/ss -ltnp, /usr/bin/ss -lunp, /usr/bin/dmesg ""
+guest ALL=(root) NOPASSWD: GUEST_RO

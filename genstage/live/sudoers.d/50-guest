@@ -1,0 +1,9 @@
+# /etc/sudoers.d/50-guest — hardened IMAGES only (2026-10-15), install-time.
+#
+# A stage3's /etc/sudoers grants only root, so on the live medium and on a
+# fresh install this line is what gives the default user sudo — with a
+# password. Delete it after installation (firstrun.txt, next to the
+# 95-xstage-live removal): the persistent grant is %wheel in 60-hardened-sudo.
+# xstage installs it root:root 0440 and rewrites the user name when the
+# image's default user is not 'guest'.
+guest ALL=(ALL:ALL) ALL
