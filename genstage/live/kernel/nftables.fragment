@@ -1,7 +1,9 @@
 # Kconfig fragment: nftables address families + conntrack match (2026-10-15).
 #
-# PROFILE-SCOPED — listed only in nvidiahard's PROF_LIVE_KFRAGS, to test h5i's
-# 'supervised' sandbox tier on the installed nvhard host. h5i enforces a box's
+# Listed in amdkdehard's PROF_LIVE_KFRAGS (2026-10-16; first nvidiahard-only
+# on 10-15), so every hard profile derived from it carries it — not in the
+# shared live.fragment, so the desktop images stay without the attack surface
+# described below. For h5i's 'supervised' sandbox tier. h5i enforces a box's
 # egress allowlist with an nft ruleset inside the box's own network namespace:
 #   table inet h5i_egress { chain output { ... policy drop;
 #     ct state established,related accept; ip daddr <api ip> tcp dport 443 accept } }
@@ -14,7 +16,8 @@
 # NF_TABLES=m); they are named anyway so the post-merge check can see them.
 # NFT_CT is the 'ct' expression, depends on NF_CONNTRACK (=m in live.fragment).
 #
-# What it costs (why it is NOT in the shared live.fragment):
+# What it costs (why it is NOT in the shared live.fragment; verified working
+# on nvhard 2026-10-16 — supervised box reaches only its allowlist):
 #   * Attack surface. Any unprivileged user can create a user + network
 #     namespace and load nft rules into it. Without a family that path stops
 #     at table creation; with one, the nf_tables set/verdict code becomes

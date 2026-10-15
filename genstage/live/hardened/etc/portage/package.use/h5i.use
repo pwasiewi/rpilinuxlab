@@ -1,12 +1,12 @@
-# dev-util/h5i (::pwr) — not in any package list on purpose (tested by hand:
-# 'xp amdkdehard emerge dev-util/h5i'), but the flags are seeded here so a
-# test merge comes out right on the first try.
+# dev-util/h5i (::pwr 0.5.0) — in amdkdehard's package list since 2026-10-16
+# (every derived hard profile inherits it; keyword in ../package.accept_keywords/h5i.keywords).
 #
 # containers: OFF by default in the ebuild; without it the 'container'
 #   confinement tier (rootless podman) is compiled out and h5i fails closed
-#   at runtime. The profile ships podman+passt+nftables for exactly this.
-# -web is worth considering for a hardened box: USE=web bakes an npm-built
-#   UI (vite + the whole node graph at build time) into a confinement tool.
-#   Left at upstream default (+web) for now — flip it here if the supply
-#   chain bothers you more than the 'h5i ui' console helps.
+#   at runtime. The profile ships podman+passt+slirp4netns+nftables for this.
+# browser / web (0.5.0 ebuild, both OFF by default): upstream turned 0.5 into
+#   a web red-team workbench; 'browser' links the rendering engine and its
+#   MITM proxy, 'web' bakes an npm-built UI (vite + the node graph at build
+#   time) into a confinement tool. Neither is needed for 'h5i box' — leave
+#   them off on a hardened image.
 dev-util/h5i containers
