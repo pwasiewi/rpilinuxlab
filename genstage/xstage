@@ -1663,8 +1663,19 @@ live_prep_kconfig() {
     for f in "${frags[@]}"; do
         # two digits: the merge glob below is [0-9][0-9]-*; a single-digit
         # glob silently dropped fragment #11 onward (audit 2026-10-11)
-        command cp -f "${f}" "${LIVE_ROOT}/tmp/xstage-kconfig/$(printf '%02d' "$((i++))")-$(basename "${f}")"
+        # printf -v, not $(printf ... $((i++))): inside $( ) the increment
+        # runs in a subshell and is lost, so every fragment was staged as 00-*
+        # and the merge fell back to alphabetical order (10-11 .. 10-16:
+        # live/systemd overrode hardened -> CONFIG_LSM without bpf, DEVMEM=y)
+        local n
+        printf -v n '%02d' "${i}"; i=$((i + 1))
+        command cp -f "${f}" "${LIVE_ROOT}/tmp/xstage-kconfig/${n}-$(basename "${f}")"
     done
+    # every fragment must have its own number, or the merge order is not frags[]
+    local staged
+    staged=$(find "${LIVE_ROOT}/tmp/xstage-kconfig" -maxdepth 1 -name '[0-9][0-9]-*' -printf '%f\n' | cut -c1-2 | sort -u | wc -l)
+    (( staged == ${#frags[@]} )) ||
+        die "kernel fragments staged under ${staged} distinct numbers, expected ${#frags[@]}: merge order would not follow frags[]"
     if [[ ${base} != defconfig && ${base} != host ]]; then
         [[ -f ${base} ]] || die "XSTAGE_LIVE_KCONFIG_BASE='${base}' is neither 'defconfig', 'host', nor a file"
         command cp -f "${base}" "${LIVE_ROOT}/tmp/xstage-kconfig/base.config"
@@ -1772,6 +1783,15 @@ live_prep_kconfig() {
 	    grep -q "^\${sym}=m" .config ||
 	        { echo "FATAL: \${sym} is not =m after merge — audio.fragment lost a gate" >&2; exit 1; }
 	done
+	# 5. hardened.fragment must win over live/systemd (they sort after it
+	#    alphabetically; the 10-11..10-16 numbering bug let them override it)
+	if ls /tmp/xstage-kconfig/[0-9][0-9]-hardened.fragment >/dev/null 2>&1; then
+	    grep -q '^CONFIG_LSM=".*bpf' .config ||
+	        { echo "FATAL: CONFIG_LSM lacks bpf — a later fragment overrode hardened.fragment" >&2; exit 1; }
+	    if grep -q '^CONFIG_DEVMEM=y' .config; then
+	        echo "FATAL: CONFIG_DEVMEM=y — a later fragment overrode hardened.fragment" >&2; exit 1
+	    fi
+	fi
 	EOF
 }
 
