@@ -1,0 +1,7 @@
+# 2026-10-16: installed ~amd64 packages that the python3_13 drop must rebuild (as on the host)
+dev-python/autoeq ~amd64
+dev-python/fastsafetensors ~amd64
+dev-python/nvidia-cudnn-frontend ~amd64
+dev-python/optuna ~amd64
+dev-python/plotly ~amd64
+dev-python/soundfile ~amd64

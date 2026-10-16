@@ -23,7 +23,12 @@ CONFIG_SCHED_STACK_END_CHECK=y
 CONFIG_SHUFFLE_PAGE_ALLOCATOR=y
 CONFIG_SLAB_FREELIST_RANDOM=y
 CONFIG_SLAB_FREELIST_HARDENED=y
-CONFIG_RANDOM_KMALLOC_CACHES=y
+# 2026-10-16: RANDOM_KMALLOC_CACHES is a transitional stub since the 7.2 rename; the fragment's
+# value was silently lost because defconfig already carries "# KMALLOC_PARTITION_CACHES is not set"
+# and olddefconfig never lets a default override it. Name the real symbols. TYPED needs clang
+# alloc tokens (CC_HAS_ALLOC_TOKEN, clang >= 22 — the image toolchain is 22.1).
+CONFIG_KMALLOC_PARTITION_CACHES=y
+CONFIG_KMALLOC_PARTITION_TYPED=y
 CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
 CONFIG_INIT_ON_FREE_DEFAULT_ON=y
 CONFIG_ZERO_CALL_USED_REGS=y

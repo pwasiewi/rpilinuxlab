@@ -1,0 +1,9 @@
+# 2026-10-16: python3_13 dropped on the hard images, as on the host (py314-images-queue.sh).
+# Sorts after common/host.use, which still carries the 3_13 lines for the non-hard images.
+*/* PYTHON_TARGETS: -* python3_14
+net-firewall/ufw PYTHON_SINGLE_TARGET: -* python3_14
+sys-apps/polychromatic PYTHON_SINGLE_TARGET: -* python3_14
+sys-devel/distcc PYTHON_SINGLE_TARGET: -* python3_14
+dev-util/gtk-builder-convert PYTHON_SINGLE_TARGET: -* python3_14
+media-libs/libffado PYTHON_SINGLE_TARGET: -* python3_14
+net-mail/mailutils PYTHON_SINGLE_TARGET: -* python3_14
