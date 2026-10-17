@@ -1,0 +1,5 @@
+# 2026-10-17: dev-python/wxpython-4.2.5 does not build from source against doxygen 1.18 (common/host.keywords
+# takes ~amd64): 'build.py etg' dies with "Unable to find item named 'wxPGSortCallback' within ModuleDef named
+# 'propgriddefs'" (corehard, python3_13 drop). The host builds it with the stable 1.16.1; the znver3 images got
+# away with the host's binpkg. Drop this mask once wxpython or doxygen fixes the XML extraction.
+>=app-text/doxygen-1.17
