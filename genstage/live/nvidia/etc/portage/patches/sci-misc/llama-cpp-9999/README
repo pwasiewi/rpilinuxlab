@@ -1,6 +1,12 @@
 sci-misc/llama-cpp-9999 user patches (portage applies only *.patch / *.diff here)
 
-Currently NONE.
+Currently:
+  0005-cuda-fa-mma-q-dequant-pr30202.patch  (added 2026-10-18)
+    PR #30202 (am17an, OPEN DRAFT as of 10-18): the flash-attention MMA kernel dequantizes a
+    q8_0/q4_0 KV cache on the fly instead of a separate dequant pass. Measured on the 5070 Ti host
+    (same binary, same model, interleaved): +10.6 % decode at 49K context, +3.6 % at 16K, prefill
+    unchanged; quality gates clean (bench_07 10/10, paired regex 4/4 vs 3/4 unpatched). Applies to
+    master 5aeac37 (2026-10-18, 'git apply --check' rc=0). Drop it the day the PR merges.
 
 0002-cuda-mmq-mul-mat-id-pad-src1-q8-1-issue27792.patch was RETIRED on 2026-10-16:
   upstream fixed issue #27792 with PR #29941 (merged 10-04, MMQ fault when n_expert >> n_ubatch)
