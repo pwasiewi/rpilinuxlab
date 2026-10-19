@@ -17,7 +17,9 @@
 # API — see the pin at vllm-9999.ebuild:143 and memory project_pwr_overlay.
 
 # --- pinned by dev-python/vllm-9999 (~exact-version deps in the ebuild) -------
->dev-python/tilelang-0.1.9
+# 2026-10-18 Evening C: tilelang pin 0.1.9 -> 0.1.12 (what the pinned vLLM commit requires), CUDA 13.4.3 + cuda-bindings/
+# cuda-python 13.4.4 allowed (13.4.1 tarball issue does not affect 13.4.4), toolkit >13.4.3 still held.
+>dev-python/tilelang-0.1.12-r1
 >dev-python/humming-kernels-0.1.4
 >dev-python/nvidia-cutlass-dsl-4.5.2
 # the CUTLASS sub-packages move in lockstep with the parent; 4.6.x also split
@@ -63,8 +65,8 @@
 # ~cuda-bindings-13.4.1 and falls with it.
 # The rest of the CUDA 13.4 wave is held back anyway by xgrammar's
 # nvidia-cuda-toolkit:0/13.3.1= slot dep, so keep the python halves at 13.3 too.
->=dev-python/cuda-bindings-13.4
->=dev-python/cuda-python-13.4
+>dev-python/cuda-bindings-13.4.4
+>dev-python/cuda-python-13.4.4
 # cuda-tile-bin-1.6.0: python_install runs `installer` once per PYTHON_COMPAT impl
 # and the wheel ships a console script (usr/bin/cutile-cache) — the second impl
 # dies with FileExistsError. Ebuild bug; 1.5.0 installs and satisfies the
@@ -83,7 +85,7 @@
 # deps, and the installed tilelang-0.1.9-4 can no longer be rebuilt (0.1.9 is
 # gone from ::stuff, >0.1.9 is masked above for vLLM) — so the toolkit cannot
 # move until vLLM's tilelang pin moves. Same 13.4 wave as cuda-bindings above.
->=dev-util/nvidia-cuda-toolkit-13.4
+>dev-util/nvidia-cuda-toolkit-13.4.3
 # fastsafetensors::stuff switched to DISTUTILS_SINGLE_IMPL (PYTHON_SINGLE_TARGET)
 # in EVERY version it still carries (0.2.2-r1, 0.3.3-r1, 0.4.0), but vllm-9999
 # asks for >=fastsafetensors-0.3.2[python_targets_python3_14] — a multi-impl USE
