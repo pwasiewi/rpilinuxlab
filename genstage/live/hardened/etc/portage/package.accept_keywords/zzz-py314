@@ -1,4 +1,4 @@
-# 2026-10-16: installed ~amd64 packages that the python3_13 drop must rebuild (as on the host)
+# 2026-10-16: installed ~amd64 packages that the python3_13 drop must rebuild (py314-queue.sh)
 dev-python/autoeq ~amd64
 dev-python/fastsafetensors ~amd64
 dev-python/nvidia-cudnn-frontend ~amd64

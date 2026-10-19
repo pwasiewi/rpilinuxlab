@@ -46,6 +46,8 @@ x11-libs/libxcb xkb
 dev-libs/libgudev introspection
 xfce-base/xfdesktop thunar
 net-nds/openldap minimal
+media-sound/strawberry chromaprint
+
 
 # --- targets/desktop/plasma/package.use ---
 net-dns/avahi mdnsresponder-compat

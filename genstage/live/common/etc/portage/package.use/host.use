@@ -14,14 +14,8 @@
 # Regenerate with:
 #   cat /etc/portage/package.use/{moje,systemowe}.use
 
-*/* PYTHON_TARGETS: -* python3_13 python3_14
+*/* PYTHON_TARGETS: -* python3_14
 */* PYTHON_SINGLE_TARGET: -* python3_14
-net-firewall/ufw PYTHON_SINGLE_TARGET: -* python3_13
-sys-apps/polychromatic PYTHON_SINGLE_TARGET: -* python3_13
-sys-devel/distcc PYTHON_SINGLE_TARGET: -* python3_13
-dev-util/gtk-builder-convert PYTHON_SINGLE_TARGET: -* python3_13
-media-libs/libffado PYTHON_SINGLE_TARGET: -* python3_13
-net-mail/mailutils PYTHON_SINGLE_TARGET: -* python3_13
 app-misc/fastfetch lua_single_target_lua5-4
 app-crypt/tpm2-tss -gcrypt
 dev-lang/ruby -rdoc
