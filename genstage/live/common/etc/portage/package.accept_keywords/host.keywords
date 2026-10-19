@@ -1365,7 +1365,7 @@ net-libs/serf
 # ::pwr carries: Cisco Secure Client's acwebhelper links libwebkit2gtk-4.0.so.37
 # and slots 4.1/6 do not substitute (different soname, and only the :4 ebuild
 # builds -DUSE_SOUP2=ON). That one is pinned by exact version in image.keywords
-# as '=net-libs/webkit-gtk-2.48.3-r1 ~amd64' — keep it there, not here.
+# as '=net-libs/webkit-gtk-2.48.3* ~amd64' (-r1, and -r2 with python3_14) — keep it there, not here.
 net-misc/bridge-utils
 net-misc/curl
 net-misc/dropbox

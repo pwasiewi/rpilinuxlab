@@ -105,7 +105,7 @@ media-libs/shaderc
 # 'xp <profile> restrict-run'. webkit-gtk:4 is the slot ::gentoo dropped, so it
 # only exists in ::pwr and only as ~amd64; the client itself is ~amd64 because
 # nothing about a vendor binary earns a stable keyword.
-=net-libs/webkit-gtk-2.48.3-r1 ~amd64
+=net-libs/webkit-gtk-2.48.3* ~amd64
 net-vpn/cisco-secure-client ~amd64
 
 # nvidiahard unsloth/vllm chain via ::stuff (2026-08-08): the five ~amd64
