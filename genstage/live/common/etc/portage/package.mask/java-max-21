@@ -1,0 +1,11 @@
+# Cap the JDK at 21 (user 2026-10-19). Nothing installed needs more: every consumer
+# asks for >=1.8 / >=11 / >=21, a fixed :1.8 / :17 / :21 slot, or <26 (prismlauncher),
+# so 25 and 27 only arrived because open '>=' ranges pick the newest slot.
+# >=22 rather than >21.0.x so 21 keeps its security updates. The virtuals are capped
+# too, otherwise the resolver walks into the masked providers and backtracks.
+# Minecraft: the official launcher and Prism Launcher fetch Mojang's own Java runtime
+# per version, so this does not limit which Minecraft releases run.
+>=dev-java/openjdk-bin-22
+>=dev-java/openjdk-22
+>=virtual/jdk-22
+>=virtual/jre-22
