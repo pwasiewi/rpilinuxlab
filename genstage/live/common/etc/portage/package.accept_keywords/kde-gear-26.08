@@ -57,3 +57,5 @@
 <sys-block/partitionmanager-26.08.50
 <sys-libs/kpmcore-26.08.50
 <www-client/falkon-26.08.50
+# new dependency of keepsecret-26.08 (Gear 26.08), ~amd64 only
+dev-libs/kirigami-app-components
