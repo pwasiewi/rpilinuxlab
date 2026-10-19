@@ -1041,7 +1041,7 @@ cmd_verify() {
         die "Chroot smoke test failed"
     umount -R "${vdir}/dev"
     umount "${vdir}/proc"
-    trap - EXIT INT TERM
+    trap - EXIT HUP INT TERM
     info "OK: tarball $(du -h "${tarball}" | cut -f1), unpacked $(du -sh "${vdir}" | cut -f1)"
 }
 
@@ -1215,6 +1215,12 @@ live_chroot() {  # live_chroot <label>  (script on stdin)
     # so the EXIT trap firing again after these is harmless. Armed BEFORE the
     # first mount: a failing bind below (set -e) must still unwind the ones
     # that already succeeded.
+    live_chroot_mounted "${LIVE_ROOT}"
+    # No HUP trap on purpose: bash defers a trap until the foreground command
+    # returns, and for 'enter' that is the interactive shell - a closed terminal
+    # then left xstage waiting until sudo killed it, with no cleanup at all
+    # (2026-10-19). Bash's default SIGHUP handling runs the EXIT trap at once;
+    # live_chroot_reap inside it ends what the session left behind.
     trap "live_chroot_umount '${LIVE_ROOT}'" EXIT
     trap "live_chroot_umount '${LIVE_ROOT}'; exit 130" INT
     trap "live_chroot_umount '${LIVE_ROOT}'; exit 143" TERM
@@ -1241,8 +1247,48 @@ live_chroot() {  # live_chroot <label>  (script on stdin)
 	$(cat)
 	EOF
     live_chroot_umount "${LIVE_ROOT}"
-    trap - EXIT INT TERM
+    trap - EXIT HUP INT TERM
     [[ ${rc} -eq 0 ]] || die "chroot step '${label}' failed (exit ${rc})"
+}
+
+# live_chroot_reap ROOT — end what this session left running inside ROOT.
+# Closing the terminal (SIGHUP) runs the EXIT trap, but the interactive shell
+# of 'enter' and whatever it started survive as orphans inside the image
+# (seen 2026-10-19: bash + its job outlived xstage); one holding a file under a
+# bind mount makes that umount fail. Only processes whose root IS this image
+# and whose session is OURS are touched — another session on the same tree
+# (XP_NOLOCK, a direct xstage call) has a different SID and is left alone.
+live_chroot_reap() {
+    local r="$1" sid p pids=""
+    sid=$(ps -o sid= -p $$ 2>/dev/null | tr -d ' ')
+    [[ -n ${sid} ]] || return 0
+    for p in /proc/[0-9]*; do
+        p=${p#/proc/}
+        [[ ${p} == "$$" ]] && continue
+        [[ $(readlink "/proc/${p}/root" 2>/dev/null) == "${r}" ]] || continue
+        [[ $(ps -o sid= -p "${p}" 2>/dev/null | tr -d ' ') == "${sid}" ]] || continue
+        pids+=" ${p}"
+    done
+    [[ -n ${pids} ]] || return 0
+    warn "ending processes this session left inside the image:${pids}"
+    kill -TERM ${pids} 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+        sleep 1
+        kill -0 ${pids} 2>/dev/null || return 0
+    done
+    kill -KILL ${pids} 2>/dev/null || true
+    sleep 1
+}
+
+# live_chroot_mounted ROOT — refuse to mount over a session that is already
+# there: bind mounts stack, and the first session to exit would then unmount
+# /proc, /dev and /sys under the other one. Called BEFORE the traps are armed,
+# so dying here unmounts nothing.
+live_chroot_mounted() {
+    mountpoint -q "$1/proc" 2>/dev/null || return 0
+    die "${1} already has /proc mounted — another session is inside the image, or one leaked its mounts.
+    Running: for p in /proc/[0-9]*; do [ \"\$(readlink \$p/root)\" = \"$1\" ] && echo \${p#/proc/}; done
+    Leaked (nothing running): findmnt -R $1 ; then umount -R the listed targets"
 }
 
 live_chroot_umount() {
@@ -1253,6 +1299,7 @@ live_chroot_umount() {
     # (stacked binds from an earlier leak included); what stays mounted (busy)
     # is reported, with the command to finish the job once it is free.
     local r="$1" t left=""
+    live_chroot_reap "${r}"
     for t in "${LIVE_CCACHE_MNT}" "${LIVE_DISTFILES_MNT}" "${LIVE_BUILDDIR_MNT}" "${LIVE_BINPKGS_MNT}"; do
         while mountpoint -q "${r}${t}" 2>/dev/null; do
             umount "${r}${t}" 2>/dev/null || { left+=" ${r}${t}"; break; }
@@ -3483,6 +3530,12 @@ cmd_live_enter() {
     [[ -x ${LIVE_ROOT}/bin/bash ]] || die "No rootfs — run: sudo $0 ${TGT:-amd64} unpack"
     # shellcheck disable=SC2064 — expand ${LIVE_ROOT} now, not at trap time
     # (armed before the first mount, INT/TERM exit — same reasons as live_chroot)
+    live_chroot_mounted "${LIVE_ROOT}"
+    # No HUP trap on purpose: bash defers a trap until the foreground command
+    # returns, and for 'enter' that is the interactive shell - a closed terminal
+    # then left xstage waiting until sudo killed it, with no cleanup at all
+    # (2026-10-19). Bash's default SIGHUP handling runs the EXIT trap at once;
+    # live_chroot_reap inside it ends what the session left behind.
     trap "live_chroot_umount '${LIVE_ROOT}'" EXIT
     trap "live_chroot_umount '${LIVE_ROOT}'; exit 130" INT
     trap "live_chroot_umount '${LIVE_ROOT}'; exit 143" TERM
@@ -3509,7 +3562,7 @@ cmd_live_enter() {
          export PS1="(${XPROFILE:-live}) \w \\\$ "
          exec /bin/bash --norc -i' "$@" || rc=$?
     live_chroot_umount "${LIVE_ROOT}"
-    trap - EXIT INT TERM
+    trap - EXIT HUP INT TERM
     info "Left the image chroot (exit ${rc})"
     return 0
 }
@@ -4090,7 +4143,7 @@ tiny_make_image() {  # tiny_make_image <rpi400|rpi3|zero2w>
 
     losetup -d "${loop}"
     [[ -z $(losetup -j "${TINY_IMG}") ]] || die "${TINY_IMG} is still attached to a loop device after losetup -d"
-    trap - EXIT INT TERM
+    trap - EXIT HUP INT TERM
     echo "${board}" > "${TINY_BOARD_F}"
     if [[ -n ${SUDO_UID:-} ]]; then
         chown "${SUDO_UID}:${SUDO_GID}" "${TINY_IMG}" "${TINY_BLD}/ptuuid" "${TINY_BOARD_F}"
@@ -4163,7 +4216,7 @@ cmd_tiny_run_rpi() {
         kill -0 "${qpid}" 2>/dev/null || { verdict=FAIL; warn "qemu exited on its own"; break; }
     done
     kill "${qpid}" 2>/dev/null || true; wait "${qpid}" 2>/dev/null || true   # 143 = our SIGTERM
-    trap - EXIT INT TERM
+    trap - EXIT HUP INT TERM
     [[ -n ${SUDO_UID:-} ]] && chown "${SUDO_UID}:${SUDO_GID}" "${log}"
     local failed
     failed=$(sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' "${log}" | grep -oE 'Failed to start .*' | sort -u || true)
