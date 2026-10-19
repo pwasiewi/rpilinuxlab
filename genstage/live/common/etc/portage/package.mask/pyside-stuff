@@ -1,0 +1,6 @@
+# ::stuff's dev-python/pyside-6.11.2-r99 (fork adding USE=datavis for sasview) rewrites every
+# ${PACKAGE_PREFIX_DIR}/ in the installed CMake config to ${PACKAGE_PREFIX_DIR}/share/PySide6/,
+# so PYSIDE_PYTHONPATH points at /usr/share/PySide6/lib/python3.14/site-packages/PySide6, which
+# does not exist, and every find_package(PySide6) dies (www-client/falkon[python] 26.08.2,
+# 2026-10-19). datavis is enabled nowhere here; ::gentoo's 6.11.2 has no such sed.
+dev-python/pyside::stuff
