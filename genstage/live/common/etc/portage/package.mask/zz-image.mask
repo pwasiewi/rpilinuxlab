@@ -45,14 +45,6 @@ app-misc/ddcutil::gentoo
 # carries the same ebuild with a refreshed Manifest (2026-08-24).
 =dev-python/cuda-pathfinder-1.7.0::stuff
 
-# KDE Gear 26.08 reached the tree (2026-10): host.keywords accepts ~amd64 for
-# kde-apps/ark, so @installed proposes ark-26.08.1, but the image's
-# @pwr-kdeutils-26.04 set requires <kde-apps/ark-26.04.50 -> slot conflict and
-# update-seed merges nothing (xp nvidiahard pkgs, 2026-10-03). Hold ark on the
-# 26.04 line until the image moves to 26.08 sets; any other set member that
-# shows the same conflict gets the same cap here.
->=kde-apps/ark-26.04.50
-
 # net-libs/webkit-gtk 2.54.0 (-r411 :4.1, -r601 :6) is stable (seen 2026-10-03); every hard
 # image has 2.52.6 in both slots and binpkgs of it. Each bump is a multi-hour
 # rebuild of two slots that nothing in the images asks for. Hold on 2.52.x; lift
@@ -66,10 +58,3 @@ app-misc/ddcutil::gentoo
 # satisfies openai's >=2.12.0 on its own.
 dev-python/httpx2::stuff
 dev-python/httpcore2::stuff
-
-# Resolver hold (2026-10-04): every 'pkgs' / @world run retried kde-apps/dolphin-26.08.1,
-# which the @pwr-*-26.04 sets cannot take, and backtracked on it each time. Holding it
-# changes nothing that gets merged and cuts resolver backtracks (measured with the
-# nvidia-layer holds: 177 s / 10 backtracks -> 70 s / 2). Lift with the move to the
-# 26.08 sets, together with the ark cap above.
->=kde-apps/dolphin-26.08
