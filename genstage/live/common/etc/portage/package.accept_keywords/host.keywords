@@ -1814,6 +1814,3 @@ acct-user/ntfy
 dev-util/maturin
 # aiohttp 3.14.4 (vllm/unsloth-zoo chain) needs >=yarl-1.25.1, ~amd64 only (2026-10-10)
 ~dev-python/yarl-1.25.1 ~amd64
-
-# h5i 0.5.0 sandbox for skill tests (2026-10-15, audit info/h5i-0.5.0-delta-audit.md)
-=dev-util/h5i-0.5.0 ~amd64
