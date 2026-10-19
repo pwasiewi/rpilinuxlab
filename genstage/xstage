@@ -3322,6 +3322,41 @@ cmd_live_emerge() {
 	EOF
 }
 
+# Serve this profile's binpkg cache over HTTP for other machines running the same
+# image (a laptop on amdkdehard pulling from the build host). One cache = one -march
+# (amdkdehard/nvidiahard znver3, intelhard x86-64-v3, corehard x86-64-v2), so the
+# stanza printed below names both; the real protection is client-side: the image's
+# bashrc.d/05-xp-binpkg-march.sh refuses any binary package whose -march is not a
+# subset of the client's own, whichever binhost it came from. Plain HTTP, no auth:
+# LAN only. Root because the per-package dirs in a binpkg cache are 0700.
+cmd_live_binhost() {
+    need_root
+    local port="${1:-${LAB_LIVE_BINHOST_PORT:-8687}}"
+    local dir="${LIVE_BINPKGS_DIR}"
+    [[ -n ${dir} && -d ${dir} ]] || die "No binpkg cache for this profile (PROF_LIVE_BINPKGS_DIR='${dir}')"
+    [[ -f ${dir}/Packages ]] || die "${dir} has no Packages index — run: PKGDIR=${dir} emaint binhost --fix"
+    local ip march name
+    ip=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+') || true
+    [[ -n ${ip} ]] || die "Cannot work out this host's LAN address (no default route?)"
+    march=$(grep -oP -- '-march=\K\S+' <<< "${LIVE_CFLAGS}" | tail -n 1)
+    name="xp-$(basename "${dir}")"
+    info "Serving ${dir} (-march=${march:-unset}, $(du -sh "${dir}" 2>/dev/null | cut -f1)) on http://${ip}:${port}/"
+    echo
+    echo "On the client — /etc/portage/binrepos.conf/${name}.conf:"
+    echo "  [${name}]"
+    echo "  # binpkgs built with -march=${march:-unset}; only for machines that can run it"
+    echo "  sync-uri = http://${ip}:${port}/"
+    echo "  priority = 10"
+    echo "  verify-signature = false"
+    echo
+    echo "Then: emerge -avuDN --getbinpkg --binpkg-respect-use=y \\"
+    echo "        --usepkg-exclude 'sys-kernel/* x11-drivers/nvidia-drivers app-emulation/virtualbox-modules' @world"
+    echo "(kernel modules never come from a binhost: they are bound to one kernel build)"
+    echo "Guard: /etc/portage/bashrc.d/05-xp-binpkg-march.sh must be on the client (hard images ship it)."
+    echo "Ctrl-C here to stop serving."
+    exec python3 -m http.server --bind "${ip}" --directory "${dir}" "${port}"
+}
+
 # Hold a package at the version the rootfs already has. 'pkgs' pass 1
 # (--update @world @installed) follows the tree every time 'conf' re-seeds
 # ::gentoo from the host, and sys-devel/gcc is the expensive mover: a new
@@ -4852,6 +4887,7 @@ amd64)
         usb)        need_native_profile; cmd_live_usb "$@" ;;
         live-enter) need_native_profile; cmd_live_enter "$@" ;;
         live-emerge) need_native_profile; cmd_live_emerge "$@" ;;
+        binhost)    need_native_profile; cmd_live_binhost "$@" ;;
         live-status) live_status ;;
         live-clean)  need_native_profile; cmd_live_clean "$@" ;;
         *)        die "Unknown amd64 subcommand: ${CMD} (see: $0 --help)" ;;

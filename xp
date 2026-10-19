@@ -102,7 +102,7 @@
 #                   Boards have no world file and are refused    [root for -i]
 #   run             xlab run for the profile's xlab target
 #   kernel          xlab kernel build (the QEMU lab, not the live image)
-#   binhost         serve sysroot binpkgs over HTTP (port from global.conf)
+#   binhost         serve binpkgs over HTTP: board = cross sysroot (xarm), live profile = image cache [PORT]
 #   distcc ...      xarm distcc start|stop|status
 #
 # Auxiliary — read-only, any time:
@@ -800,8 +800,14 @@ sd)
     timed "${XSTAGE}" "${T}" sd "$1"
     ;;
 binhost)
-    need_board; no_args "$@"
-    exec "$(xarm_bin)" binhost "${LAB_BINHOST_PORT}"
+    # board: the cross sysroot's cache via xarm; native live profile: the image's
+    # own binpkg cache (one -march per cache), optional port argument
+    if is_board; then
+        no_args "$@"
+        exec "$(xarm_bin)" binhost "${LAB_BINHOST_PORT}"
+    fi
+    need_native
+    exec "${XSTAGE}" "${T}" binhost "$@"
     ;;
 distcc)
     need_board
