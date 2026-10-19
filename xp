@@ -116,8 +116,18 @@
 #   Interactive and read-only verbs (enter, status, gate, log, qlop, run,
 #   binhost, distcc, the passthroughs) are exempt.
 #
+# Run lock: every verb that writes a tree holds an flock on
+#   <build dir>/.xp-locks/<tree>.lock while it runs (inherited by the chroot
+#   and emerge, released by the kernel with the last process). A second
+#   writing verb on the same tree is refused, naming the holder's verb, pid
+#   and start time; other trees are independent; status, log, qlop, binhost
+#   and distcc never lock. The passthroughs (xarm, xstage, xlab) lock too.
+#   Only xp locks — a direct xstage/xarm call bypasses it.
+#
 # Env:
 #   XPROFILE        active profile when no <profile> arg (export per tab)
+#   XP_NOLOCK=1     skip the run lock (expert escape: the two verbs are known
+#                   not to touch the same files)
 #   XP_LAB_DIR      lab root override; else /etc/xp.conf, else xp's own dir
 #
 # Typical flow:
@@ -241,6 +251,48 @@ prof_build_dir() {
         [[ ${T} == tiny ]] && sub=tinyroot || sub=arm64sd
     fi
     echo "${XP_BUILD_DIR:-${XP_LAB_DIR}/build}/${sub}"
+}
+
+# --- per-tree run lock -----------------------------------------------------
+# xp has no daemon, so until 2026-10-19 nothing stopped two verbs from working
+# the same tree at once: 'conf' rewriting /etc/portage under a running 'pkgs',
+# or two 'pkgs' in one rootfs. Now every verb that writes takes an flock on
+# <build dir>/.xp-locks/<tree>.lock before it dispatches. Keyed by BUILD TREE,
+# not by profile name: board variants may share one tree, and the xlab verbs
+# of every profile with the same xlab target share build/<target>. The fd stays
+# open across exec/timed and is inherited by the child, the chroot and emerge,
+# so the lock lives exactly as long as the verb and the kernel drops it with
+# the last process — it cannot go stale. Read-only verbs (status, log, qlop,
+# binhost, distcc) never take it. XP_NOLOCK=1 skips it: the expert escape for
+# when the two verbs are known not to touch the same files.
+# Only xp locks; a direct xstage/xarm call bypasses it.
+XP_LOCK_DIR="${XP_BUILD_DIR:-${XP_LAB_DIR}/build}/.xp-locks"
+lock_key() { if is_host; then echo host; else basename "$(prof_build_dir)"; fi; }
+xp_lock() {   # xp_lock KEY — return holding KEY, or die naming who holds it
+    local key="$1" f="${XP_LOCK_DIR}/$1.lock" fd who pid
+    if [[ -n ${XP_NOLOCK:-} ]]; then warn "XP_NOLOCK: '${VERB}' runs without the ${key} run lock"; return 0; fi
+    # 1777 like /tmp: root and user verbs both create their own lock files here
+    [[ -d ${XP_LOCK_DIR} ]] || { mkdir -p "${XP_LOCK_DIR}" && chmod 1777 "${XP_LOCK_DIR}"; } 2>/dev/null || true
+    # read-write (creates the file), or read-only when the file is another
+    # user's — flock(2) needs no write access, only an open fd
+    if [[ -w ${f} || ( ! -e ${f} && -w ${XP_LOCK_DIR} ) ]]; then
+        exec {fd}<>"${f}"
+    elif [[ -r ${f} ]]; then
+        exec {fd}<"${f}"
+    else
+        warn "no access to ${f} — '${VERB}' runs without the run lock"; return 0
+    fi
+    if ! flock -n "${fd}"; then
+        who=$(head -n1 "${f}" 2>/dev/null)
+        pid=$(grep -oP 'pid \K[0-9]+' <<< "${who}" || true)
+        [[ -z ${pid} ]] || kill -0 "${pid}" 2>/dev/null || who="${who} [that run ended; a process that did not record itself holds the lock]"
+        die "${PROF}: tree '${key}' is busy${who:+ — ${who}}
+    Let it finish (or stop it) first. Read-only verbs (status, log, qlop, binhost) are not blocked.
+    XP_NOLOCK=1 skips the lock — two verbs writing one tree corrupt it, so know why before you do."
+    fi
+    [[ ! -w ${f} ]] || printf 'xp %s %s  pid %s  user %s  since %s\n' "${PROF}" "${VERB}" "$$" "${SUDO_USER:-${USER:-?}}" "$(date '+%F %T')" > "${f}"
+    XP_LOCK_FD="${fd}"   # the fd must stay open: it IS the lock (inherited by exec and children)
+    return 0
 }
 
 # rootgcc_guard ROOT — a cross-emerge COMPILES with the cross gcc and LINKS
@@ -490,6 +542,13 @@ update_qt_lockstep() {
     done
     info "Qt: sysroot modules all at ${ver}"
 }
+
+# --- run lock (xp_lock above): read-only verbs pass, everything else locks its tree
+case "${VERB}" in
+    status|log|qlop|qlog|binhost|distcc) ;;
+    run|kernel) xp_lock "xlab-${L:-none}" ;;   # the QEMU lab tree, shared by every profile with this xlab target
+    *)          xp_lock "$(lock_key)" ;;
+esac
 
 case "${VERB}" in
 status)

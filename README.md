@@ -69,6 +69,15 @@ replaces that argument — but **only for commands that do not go through
 refuses rather than guessing, so nothing runs against the wrong tree). Either
 spell the profile out as above, or use `sudo -E xp build`.
 
+One verb per tree at a time: every writing verb holds an `flock` on
+`<build dir>/.xp-locks/<tree>.lock` for as long as it runs — the fd is
+inherited by the chroot and by emerge, and the kernel releases it with the
+last process, so it cannot go stale. A second writing verb on the same tree
+is refused and told who holds it (`xp amdkdehard pkgs  pid … since …`);
+different trees are independent, and `status`, `log`, `qlop`, `binhost`,
+`distcc` never lock. `XP_NOLOCK=1` skips it when you know the two verbs touch
+different files. Only `xp` locks — a direct `xstage`/`xarm` call does not.
+
 `build` unpacks the newest `dl/stage3-arm64-<flavour>-*.tar.xz`, so the block
 above is the whole path from nothing to a bootable card. Building the stage3
 **yourself** instead is a separate, optional branch — catalyst under qemu-user

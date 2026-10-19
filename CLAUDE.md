@@ -37,6 +37,11 @@ then the verified walkthrough).
   `rsync --chown=root:root`; `conf` is **additive** — it never deletes files an
   earlier run laid into a rootfs. A layer carries arbitrary paths, not just
   `etc/portage/`.
+- `xp` takes a per-tree run lock (`<build dir>/.xp-locks/<tree>.lock`, flock,
+  inherited by the verb's whole process tree) for every writing verb; a second
+  verb on a busy tree is refused. Check `pgrep -x emerge` + `/proc/PID/root`
+  before touching a tree from outside xp — direct `xstage`/`xarm` calls bypass
+  the lock, and `XP_NOLOCK=1` disables it.
 - Never edit `xstage` in place while a run is live: copy aside, edit, `mv`
   over (rename = new inode; the running bash keeps the old one).
 - Tool scripts in `genstage/live/tools/` are mirrors — the canonical copies
