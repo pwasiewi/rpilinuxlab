@@ -1246,14 +1246,27 @@ live_chroot() {  # live_chroot <label>  (script on stdin)
 }
 
 live_chroot_umount() {
-    local r="$1"
-    umount "${r}${LIVE_CCACHE_MNT}" 2>/dev/null || true
-    umount "${r}${LIVE_DISTFILES_MNT}" 2>/dev/null || true
-    umount "${r}${LIVE_BUILDDIR_MNT}" 2>/dev/null || true
-    umount "${r}${LIVE_BINPKGS_MNT}" 2>/dev/null || true
-    umount -R "${r}/dev"  2>/dev/null || true
-    umount -R "${r}/sys"  2>/dev/null || true
-    umount    "${r}/proc" 2>/dev/null || true
+    # Idempotent, and no longer silent: an 'umount || true' left two binds
+    # (binpkgs, ccache) under amdkdehard after an interrupted 'enter'
+    # (2026-10-19) and nothing said so — du then counted 166 GB of host cache
+    # as rootfs. Each target is unmounted until it is no longer a mount point
+    # (stacked binds from an earlier leak included); what stays mounted (busy)
+    # is reported, with the command to finish the job once it is free.
+    local r="$1" t left=""
+    for t in "${LIVE_CCACHE_MNT}" "${LIVE_DISTFILES_MNT}" "${LIVE_BUILDDIR_MNT}" "${LIVE_BINPKGS_MNT}"; do
+        while mountpoint -q "${r}${t}" 2>/dev/null; do
+            umount "${r}${t}" 2>/dev/null || { left+=" ${r}${t}"; break; }
+        done
+    done
+    for t in /dev /sys; do
+        while mountpoint -q "${r}${t}" 2>/dev/null; do
+            umount -R "${r}${t}" 2>/dev/null || { left+=" ${r}${t}"; break; }
+        done
+    done
+    while mountpoint -q "${r}/proc" 2>/dev/null; do
+        umount "${r}/proc" 2>/dev/null || { left+=" ${r}/proc"; break; }
+    done
+    [[ -z ${left} ]] || warn "still mounted under the image (busy):${left} — when free: umount -R <path>"
 }
 
 cmd_live_unpack() {
