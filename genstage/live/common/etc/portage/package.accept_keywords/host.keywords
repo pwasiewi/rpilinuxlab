@@ -1136,6 +1136,7 @@ kde-plasma/kscreenlocker
 kde-plasma/ksshaskpass
 kde-plasma/ksysguard
 kde-plasma/ksystemstats
+kde-plasma/kup
 kde-plasma/kwallet-pam
 kde-plasma/kwayland
 kde-plasma/kwayland-integration
