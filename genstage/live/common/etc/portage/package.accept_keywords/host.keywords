@@ -4,7 +4,7 @@
 # {moje,systemowe}.keywords, taken 2026-08-04.
 #
 # Why the image needs it at all: PROF_LIVE_PKGS in profiles/amdkdehard.conf
-# is this host's world(5), and 45 of those atoms — awscli-bin, keepassxc,
+# is this host's world(5), and 45 of those atoms — awscli, keepassxc,
 # suricata, lynis, hashcat, zen-sources, every *-bin browser, all twelve
 # ::pwr overlay atoms — have no stable amd64 keyword. A keyword mask is a
 # resolver error, so emerge aborts the whole run on the first one rather than
@@ -53,7 +53,7 @@ acct-user/trezord
 app-accessibility/at-spi2-atk
 app-accessibility/onboard
 app-admin/aws-cli
-app-admin/awscli-bin
+app-admin/awscli
 app-admin/aws-session-manager-plugin
 app-admin/aws-vault
 app-admin/bitwarden-cli-bin

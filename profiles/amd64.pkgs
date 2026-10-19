@@ -589,7 +589,7 @@ dev-db/dbeaver-bin
 dev-db/sqldeveloper
 dev-db/oracle-instantclient
 dev-util/postman
-app-admin/awscli-bin
+app-admin/awscli
 app-admin/aws-session-manager-plugin
 app-admin/bitwarden-desktop-bin
 games-util/steam-launcher

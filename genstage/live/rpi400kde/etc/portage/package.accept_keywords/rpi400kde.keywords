@@ -32,7 +32,7 @@ dev-util/spirv-headers
 # probe instead: an md5-cache keyword scan (skill gentoo-live-image #1b) of
 # the whole transplanted list. Every atom below is ~arm64-only in ::gentoo
 # and listed in PROF_PKGS — a missing entry is a guaranteed resolver abort.
-app-admin/awscli-bin
+app-admin/awscli
 app-admin/bitwarden-cli-bin
 app-admin/keepassxc
 app-admin/passwordsafe
