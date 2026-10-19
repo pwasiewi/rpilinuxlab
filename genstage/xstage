@@ -87,7 +87,7 @@
 #                    partitions untouched). --wipe or no ESP+LIVE layout:
 #                    wipes the WHOLE stick — build-usb repartitions, installs
 #                    GRUB, then the same copies                    [root,confirm]
-#   live-status      rootfs / kernel / squashfs / iso state
+#   live-status [--du]  rootfs / kernel / squashfs / iso state (--du: walk the rootfs for its size, slow)
 #   live-clean       rm the profile's live build tree                    [confirm]
 #
 # Subcommands (tiny):
@@ -3290,9 +3290,16 @@ ${still}"
     info "USB ready: UEFI GRUB on ${p1}, initrd finds ${p2} by UUID=${uuid}."
 }
 
+# live_status [--du] — the rootfs size is opt-in: du over a built image walks
+# 60-200 GB and took 82 s on amdkdehard (2026-10-19), which made 'xp status'
+# look hung. Without --du the rootfs field says ok/- in milliseconds.
 live_status() {
-    local rootfs="-" sq="-" krn="-" iso="-" n=0
-    [[ -x ${LIVE_ROOT}/bin/bash ]] && rootfs=$(du -sh "${LIVE_ROOT}" 2>/dev/null | cut -f1 || true)
+    local rootfs="-" sq="-" krn="-" iso="-" n=0 du=no
+    [[ ${1:-} == --du ]] && du=yes
+    if [[ -x ${LIVE_ROOT}/bin/bash ]]; then
+        if [[ ${du} == yes ]]; then rootfs=$(du -sh "${LIVE_ROOT}" 2>/dev/null | cut -f1 || true)
+        else rootfs="ok (--du for size)"; fi
+    fi
     [[ -f ${LIVE_ISO_DIR}/livecd.squashfs ]] && sq=$(du -h "${LIVE_ISO_DIR}/livecd.squashfs" | cut -f1)
     [[ -f ${LIVE_BLD}/bzImage ]] && krn=$(du -h "${LIVE_BLD}/bzImage" | cut -f1)
     [[ -f ${LIVE_IMG} ]] && iso=$(du -h "${LIVE_IMG}" | cut -f1)
@@ -4888,7 +4895,7 @@ amd64)
         live-enter) need_native_profile; cmd_live_enter "$@" ;;
         live-emerge) need_native_profile; cmd_live_emerge "$@" ;;
         binhost)    need_native_profile; cmd_live_binhost "$@" ;;
-        live-status) live_status ;;
+        live-status) live_status "$@" ;;
         live-clean)  need_native_profile; cmd_live_clean "$@" ;;
         *)        die "Unknown amd64 subcommand: ${CMD} (see: $0 --help)" ;;
     esac ;;

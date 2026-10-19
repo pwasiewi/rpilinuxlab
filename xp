@@ -106,7 +106,8 @@
 #   distcc ...      xarm distcc start|stop|status
 #
 # Auxiliary — read-only, any time:
-#   status          xarm + xstage + xlab status for the profile
+#   status [--du]   xarm + xstage + xlab status for the profile (--du adds
+#                   the rootfs size: a du over the whole image, slow)
 #   log [emerge]    follow the running catalyst build: newest package
 #                   log, or the run chroot's emerge.log                 [root]
 #   qlop [ARGS]     merge times from the run chroot's emerge.log        [root]
@@ -552,10 +553,11 @@ esac
 
 case "${VERB}" in
 status)
-    no_args "$@"
+    # --du: also walk the rootfs for its size (minutes on a built image; off by default)
+    [[ $# -eq 0 || ( $# -eq 1 && $1 == --du ) ]] || die "Usage: xp ${PROF} status [--du]"
     if is_board; then "$(xarm_bin)" status || warn "xarm status failed"; fi
     "${XSTAGE}" "${T}" status || warn "xstage status failed"
-    is_board || "${XSTAGE}" "${T}" live-status || warn "xstage live-status failed"
+    is_board || "${XSTAGE}" "${T}" live-status "$@" || warn "xstage live-status failed"
     "${XLAB}" "${L}" status || warn "xlab status failed"
     ;;
 setup)
