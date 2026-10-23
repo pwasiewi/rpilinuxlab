@@ -1434,6 +1434,9 @@ sci-biology/admixtools
 sci-biology/eigensoft
 sci-biology/plink
 sci-biology/plink2-bin
+sci-biology/bcftools
+sci-biology/samtools
+sci-libs/htslib
 sci-libs/armadillo
 sci-libs/arpack
 sci-libs/arprec
@@ -1761,8 +1764,8 @@ x11-misc/lightdm
 x11-misc/picom-jonaburg
 x11-misc/primus 
 x11-misc/read-edid
-x11-misc/sddm
-x11-misc/sddm
+gui-apps/sddm
+gui-apps/sddm
 x11-misc/virtualgl
 x11-misc/x11vnc
 x11-misc/xsettingsd

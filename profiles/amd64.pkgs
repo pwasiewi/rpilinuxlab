@@ -373,7 +373,7 @@ x11-terms/xterm
 
 # @tier kde
 # KDE Plasma session — pair with PROF_LIVE_SETS="@kde-baseapps-26.04 …".
-x11-misc/sddm
+gui-apps/sddm
 media-fonts/oxygen-fonts
 sys-auth/polkit-qt
 app-crypt/qca
