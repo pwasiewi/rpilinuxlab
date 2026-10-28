@@ -29,3 +29,53 @@
 # keyworded (#dev-libs/boost in host.keywords - a boost bump rebuilds every consumer). 2026-10-10.
 # Lift when boost >=1.91 goes stable, or when the boost keyword is taken on purpose.
 >=dev-python/scipy-1.18
+
+# 2026-10-28: dev-python/msgpack-1.2.4 needs >=cython-3.3, which the hold above forbids.
+# Lift together with the cython hold.
+>=dev-python/msgpack-1.2.4
+
+# 2026-10-28: every dev-python/tilelang in ::stuff (0.1.12-r1 .. 0.1.15-r1) pins
+# ~dev-python/apache-tvm-ffi-0.1.11. Lift when a tilelang accepts a newer tvm-ffi.
+>dev-python/apache-tvm-ffi-0.1.11
+
+# 2026-10-28: dev-python/pyside-6.11.2 pins =dev-qt/*-6.11.2* and ::gentoo has no
+# pyside-6.11.3 (only 6.12.0), so a Qt 6.11.3 update is a slot conflict across the whole
+# Qt set. Lift when ::gentoo ships pyside-6.11.3, or when the image moves to Qt 6.12.
+>=dev-qt/qt3d-6.11.3:6
+>=dev-qt/qt5compat-6.11.3:6
+>=dev-qt/qtbase-6.11.3:6
+>=dev-qt/qtcharts-6.11.3:6
+>=dev-qt/qtconnectivity-6.11.3:6
+>=dev-qt/qtdeclarative-6.11.3:6
+>=dev-qt/qtgraphs-6.11.3:6
+>=dev-qt/qthttpserver-6.11.3:6
+>=dev-qt/qtimageformats-6.11.3:6
+>=dev-qt/qtlanguageserver-6.11.3:6
+>=dev-qt/qtlocation-6.11.3:6
+>=dev-qt/qtmultimedia-6.11.3:6
+>=dev-qt/qtnetworkauth-6.11.3:6
+>=dev-qt/qtpositioning-6.11.3:6
+>=dev-qt/qtquick3d-6.11.3:6
+>=dev-qt/qtquicktimeline-6.11.3:6
+>=dev-qt/qtremoteobjects-6.11.3:6
+>=dev-qt/qtscxml-6.11.3:6
+>=dev-qt/qtsensors-6.11.3:6
+>=dev-qt/qtserialbus-6.11.3:6
+>=dev-qt/qtserialport-6.11.3:6
+>=dev-qt/qtshadertools-6.11.3:6
+>=dev-qt/qtspeech-6.11.3:6
+>=dev-qt/qtsvg-6.11.3:6
+>=dev-qt/qttasktree-6.11.3:6
+>=dev-qt/qttools-6.11.3:6
+>=dev-qt/qttranslations-6.11.3:6
+>=dev-qt/qtvirtualkeyboard-6.11.3:6
+>=dev-qt/qtwayland-6.11.3:6
+>=dev-qt/qtwebchannel-6.11.3:6
+>=dev-qt/qtwebengine-6.11.3:6
+>=dev-qt/qtwebsockets-6.11.3:6
+>=dev-qt/qtwebview-6.11.3:6
+
+# 2026-10-28: sci-ml/datasets (every ::gentoo version up to 5.1.0) requires
+# <sci-ml/huggingface_hub-2, and ::stuff carries huggingface_hub-2.3.0.
+# Lift when a datasets accepts huggingface_hub 2.
+>=sci-ml/huggingface_hub-2

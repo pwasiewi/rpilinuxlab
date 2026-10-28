@@ -229,3 +229,8 @@ dev-libs/yyjson
 # app-admin/chezmoi-bin (::pwr, KEYWORDS="-* ~amd64 ~arm64"): dotfile manager,
 # in amdkde's and amdkdehard's overlay lists (all hard x86 children inherit).
 app-admin/chezmoi-bin
+# --- qemu 11 (2026-10-28) ---------------------------------------------------
+# app-emulation/qemu is ~amd64 via host.keywords; qemu-11.1.2-r1 needs
+# >=dev-python/qemu-qmp-0.0.5, whose only ebuild (0.0.6) is ~amd64. Without it
+# the update is skipped on every pkgs run and costs backtracks.
+dev-python/qemu-qmp
