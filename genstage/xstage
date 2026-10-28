@@ -2564,7 +2564,11 @@ cmd_live_configure() {
     info "Service manager: ${LIVE_RC} (stage3 flavour ${LIVE_FLAVOR_NAME})"
     local want=(sshd dbus)
     if [[ ${LIVE_RC} == systemd ]]; then
-        local units=(sshd.service dbus.service)
+        # dbus.service is static (no [Install]): the dbus package ships its own
+        # sockets.target.wants/dbus.socket + multi-user.target.wants links, so
+        # 'systemctl enable' on it is a no-op that only prints the long
+        # "no installation config" notice. Not listed for that reason.
+        local units=(sshd.service)
         [[ -e ${LIVE_ROOT}/usr/lib/systemd/system/NetworkManager.service ]] &&
             units+=(NetworkManager.service)
         [[ -n ${XSTAGE_LIVE_XSESSION:-} && -e ${LIVE_ROOT}/usr/lib/systemd/system/sddm.service ]] &&
