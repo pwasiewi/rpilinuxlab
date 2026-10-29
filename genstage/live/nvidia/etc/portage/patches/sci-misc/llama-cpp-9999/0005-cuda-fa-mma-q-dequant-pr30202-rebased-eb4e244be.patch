@@ -1,9 +1,8 @@
-From f4a771241f6183b5846384ea8536baf8868420f7 Mon Sep 17 00:00:00 2001
+From 81d1956bb055d8359d8c2dc19959021cbb00055e Mon Sep 17 00:00:00 2001
 From: Aman Gupta <amangupta052@gmail.com>
 Date: Fri, 9 Oct 2026 10:49:38 +0530
 Subject: [PATCH] CUDA: dequant quantized kv on-the-fly for vec kernels
 
-(cherry picked from commit b9e92c439eadf567dc368ee22d4b84aad956c5b5)
 ---
  ggml/src/ggml-cuda/fattn-mma-f16.cuh          | 141 ++++++++++++++----
  ggml/src/ggml-cuda/fattn.cu                   | 128 +++++++++++++++-
@@ -13,8 +12,7 @@ Subject: [PATCH] CUDA: dequant quantized kv on-the-fly for vec kernels
  .../fattn-mma-q-instance-q8_0-d128.cu         |  12 ++
  .../fattn-mma-q-instance-q8_0-d256.cu         |  12 ++
  .../fattn-mma-q-instance-q8_0-d512.cu         |  11 ++
- tests/test-backend-ops.cpp                    |  30 ++++
- 9 files changed, 336 insertions(+), 33 deletions(-)
+ 8 files changed, 306 insertions(+), 33 deletions(-)
  create mode 100644 ggml/src/ggml-cuda/template-instances/fattn-mma-q-instance-q4_0-d128.cu
  create mode 100644 ggml/src/ggml-cuda/template-instances/fattn-mma-q-instance-q4_0-d256.cu
  create mode 100644 ggml/src/ggml-cuda/template-instances/fattn-mma-q-instance-q4_0-d512.cu
@@ -23,7 +21,7 @@ Subject: [PATCH] CUDA: dequant quantized kv on-the-fly for vec kernels
  create mode 100644 ggml/src/ggml-cuda/template-instances/fattn-mma-q-instance-q8_0-d512.cu
 
 diff --git a/ggml/src/ggml-cuda/fattn-mma-f16.cuh b/ggml/src/ggml-cuda/fattn-mma-f16.cuh
-index 7f0f6abfd..968665c47 100644
+index 56decfa2b..c4a2b489a 100644
 --- a/ggml/src/ggml-cuda/fattn-mma-f16.cuh
 +++ b/ggml/src/ggml-cuda/fattn-mma-f16.cuh
 @@ -484,6 +484,44 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
@@ -255,7 +253,7 @@ index 7f0f6abfd..968665c47 100644
 @@ -2055,10 +2104,10 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
      if (logit_softcap == 0.0f) {
          constexpr bool use_logit_softcap = false;
- #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+ #if !defined(GGML_USE_MUSA)
 -        if constexpr (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, ncols1, ncols2)) {
 +        if constexpr (type_KV == GGML_TYPE_F16 && ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, ncols1, ncols2)) {
              if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, ncols1, ncols2)) {
@@ -275,7 +273,7 @@ index 7f0f6abfd..968665c47 100644
                  static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
                  if (!shared_memory_limit_raised[id]) {
 @@ -2080,7 +2129,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
- #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+ #endif // !defined(GGML_USE_MUSA)
          {
              constexpr bool use_sparse_kernel = false;
 -            fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_sparse_kernel>;
@@ -342,7 +340,7 @@ index 7f0f6abfd..968665c47 100644
 +extern DECL_FATTN_MMA_Q_CASE(128, 128, 8, 1, GGML_TYPE_Q8_0);
 +extern DECL_FATTN_MMA_Q_CASE(256, 256, 8, 1, GGML_TYPE_Q8_0);
 diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
-index bb34e01f3..733a7a1da 100644
+index f1ebd4e8b..499f88734 100644
 --- a/ggml/src/ggml-cuda/fattn.cu
 +++ b/ggml/src/ggml-cuda/fattn.cu
 @@ -5,6 +5,8 @@
@@ -351,10 +349,10 @@ index bb34e01f3..733a7a1da 100644
  
 +#include <cstdlib>
 +
- #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+ #if !defined(GGML_USE_MUSA)
+ 
  // one list per group of ncols1 queries: a column is selected if any query of the group can see it
- template <int ncols1, bool oob>
-@@ -285,6 +287,119 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
+@@ -302,6 +304,119 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
      }
  }
  
@@ -474,7 +472,7 @@ index bb34e01f3..733a7a1da 100644
  static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
      const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
      const ggml_tensor * KQV  = dst;
-@@ -293,6 +408,11 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
+@@ -310,6 +425,11 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
      const ggml_tensor * V    = dst->src[2];
      const ggml_tensor * mask = dst->src[3];
  
@@ -486,7 +484,7 @@ index bb34e01f3..733a7a1da 100644
      switch (Q->ne[0]) {
          case 64:
              GGML_ASSERT(V->ne[0] == 64);
-@@ -636,6 +756,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+@@ -654,6 +774,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
  
      // If Turing tensor cores are available, use them:
      if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
@@ -496,7 +494,7 @@ index bb34e01f3..733a7a1da 100644
          if (can_use_vector_kernel) {
              if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
                  // the sparse gather exists only in the MMA kernel: (DKQ, DV, 1, 8) with GQA > 4
-@@ -736,10 +859,13 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
+@@ -759,10 +882,13 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
  
      switch (kernel) {
          case BEST_FATTN_KERNEL_TILE:
@@ -617,54 +615,3 @@ index 000000000..7c85c0982
 +DECL_FATTN_MMA_Q_CASE(512, 512, 2, 8, GGML_TYPE_Q8_0);
 +DECL_FATTN_MMA_Q_CASE(512, 512, 4, 8, GGML_TYPE_Q8_0);
 +DECL_FATTN_MMA_Q_CASE(512, 512, 8, 8, GGML_TYPE_Q8_0);
-diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
-index 2abbe505d..3b4608aa3 100644
---- a/tests/test-backend-ops.cpp
-+++ b/tests/test-backend-ops.cpp
-@@ -11238,6 +11238,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
-         }
-     }
- 
-+    // decode-shaped cases with quantized K/V (small nb, GQA, unpadded and padded KV)
-+    for (int hs : { 128, 256, 512, }) {
-+        for (int nr2 : { 1, 2, 4, 6, 8, }) {
-+            for (int kv : { 113, 512, 1024, }) {
-+                for (int nb : { 1, 2, 3, 4, 5, 8, }) {
-+                    for (ggml_type type_KV : { GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, }) {
-+                        test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {nr2, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, type_KV, type_KV));
-+                    }
-+                }
-+            }
-+        }
-+    }
-+    for (ggml_type type_KV : { GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, }) {
-+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {8, 1}, 1024, 4, true, true,  0,  0, GGML_PREC_F32, type_KV, type_KV));
-+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {4, 1},  512, 3, true, false, 0, 10, GGML_PREC_F32, type_KV, type_KV));
-+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {4, 1}, 1024, 6, true, false, 0,  0, GGML_PREC_F32, type_KV, type_KV, {0, 2, 1, 3}));
-+        test_cases.emplace_back(new test_flash_attn_ext(512, 512, 2, {8, 1}, 1024, 5, true, true,  0,  0, GGML_PREC_F32, type_KV, type_KV));
-+    }
-+
-     for (int hsk : { 40, 64, 72, 80, 96, 128, 192, 256, 320, 512, 576 }) {
-         for (int hsv : { 40, 64, 72, 80, 96, 128, 192, 256, 512 }) {
-             if (hsk != 96 && hsk != 192 && hsk != 320 && hsk != 576 && hsk != hsv) continue;
-@@ -11610,6 +11629,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
- static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
-     std::vector<std::unique_ptr<test_case>> test_cases;
- 
-+    // TEMP experiment: small-batch FA with quantized KV, shapes of Llama-3-8B, Qwen3.5-35B-A3B, Qwen3.8-27B, Gemma-4 (SWA and global)
-+    for (auto [hs, nh, gqa] : { std::array<int, 3>{128, 8, 4}, {128, 8, 8}, {256, 2, 8}, {256, 4, 6}, {256, 8, 2}, {512, 2, 8} }) {
-+        for (int64_t kv : {4096, 16384, 65536}) {
-+            for (ggml_type t : {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
-+                for (int64_t nb = 1; nb <= 8; ++nb) {
-+                    test_cases.emplace_back(new test_flash_attn_ext(hs, hs, nh, {gqa, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, t, t));
-+                }
-+            }
-+        }
-+    }
-+
-     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
-     // note: same bytes either way, so a backend that indexes them differently shows it here
-     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
--- 
-2.56.0
-
