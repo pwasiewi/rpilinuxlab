@@ -234,3 +234,9 @@ app-admin/chezmoi-bin
 # >=dev-python/qemu-qmp-0.0.5, whose only ebuild (0.0.6) is ~amd64. Without it
 # the update is skipped on every pkgs run and costs backtracks.
 dev-python/qemu-qmp
+
+# --- pam_mount 2.23 (2026-10-31) --------------------------------------------
+# sys-auth/pam_mount is ~amd64 via host.keywords; pam_mount-2.23 needs
+# >=sys-libs/libhx-5.5:=, and libhx 5.4/5.5 are ~amd64 only (5.3 stable). The
+# host still runs pam_mount-2.22 + libhx-5.3, so its list never named libhx.
+sys-libs/libhx

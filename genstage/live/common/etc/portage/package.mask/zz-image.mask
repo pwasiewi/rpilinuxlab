@@ -58,3 +58,12 @@ app-misc/ddcutil::gentoo
 # satisfies openai's >=2.12.0 on its own.
 dev-python/httpx2::stuff
 dev-python/httpcore2::stuff
+
+# 2026-11-01: ffmpeg-chromium-155.0.8059.85 is not on distfiles.gentoo.org (404) and its
+# fallback, a googlesource '+archive' tarball, is generated per request: the fetch got
+# 18926241 bytes against the Manifest's 18924505, so it dies on VERIFY FAILED every time.
+# opera-developer-140 is the only image package with CHROMIUM_VERSION=155, so it goes too;
+# the images stay on opera-developer-139 + ffmpeg-chromium-153. Lift when the mirror
+# carries the distfile or ::gentoo refreshes the Manifest (re-test: emerge -f =<atom>).
+=media-video/ffmpeg-chromium-155.0.8059.85
+=www-client/opera-developer-140.0.6066.0
