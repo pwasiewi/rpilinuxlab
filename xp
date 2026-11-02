@@ -103,6 +103,7 @@
 #   run             xlab run for the profile's xlab target
 #   kernel          xlab kernel build (the QEMU lab, not the live image)
 #   binhost         serve binpkgs over HTTP: board = cross sysroot (xarm), live profile = image cache [PORT]
+#                   (live: opens PORT for the LAN in iptables while serving, closed on Ctrl-C)
 #   distcc ...      xarm distcc start|stop|status
 #
 # Auxiliary — read-only, any time:

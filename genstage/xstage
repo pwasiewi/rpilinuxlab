@@ -3425,7 +3425,42 @@ cmd_live_binhost() {
     echo "(kernel modules never come from a binhost: they are bound to one kernel build)"
     echo "Guard: /etc/portage/bashrc.d/05-xp-binpkg-march.sh must be on the client (hard images ship it)."
     echo "Ctrl-C here to stop serving."
-    exec python3 -m http.server --bind "${ip}" --directory "${dir}" "${port}"
+    binhost_fw_open "${ip}" "${port}"
+    trap 'binhost_fw_close' EXIT
+    trap 'binhost_fw_close; exit 130' INT
+    trap 'binhost_fw_close; exit 143' TERM
+    python3 -m http.server --bind "${ip}" --directory "${dir}" "${port}" || true
+    binhost_fw_close
+    trap - EXIT HUP INT TERM
+}
+
+# A host whose INPUT policy is DROP (nvhard: only ssh, mDNS and ntfy from the LAN) silently drops the
+# binhost port: clients hang on Packages instead of being refused. Open the port for the LAN of the
+# serving address only, for as long as http.server runs. -C/-D match the exact rule spec, so the close
+# (and a leftover from a killed run) removes only this rule. No '-m comment': the hardened kernels lack
+# xt_comment. iptables only (legacy or nft backend); without iptables this does nothing and says so.
+BINHOST_FW_RULE=()
+binhost_fw_open() {
+    local ip=$1 port=$2 lan
+    command -v iptables >/dev/null || { warn "no iptables: open tcp ${port} in your firewall by hand if clients hang"; return 0; }
+    lan=$(ip -4 route show proto kernel scope link src "${ip}" 2>/dev/null | awk 'NR==1 {print $1}')
+    [[ -n ${lan} ]] || { warn "cannot find the LAN of ${ip}: firewall left as it is"; return 0; }
+    BINHOST_FW_RULE=(INPUT -s "${lan}" -p tcp --dport "${port}" -m conntrack --ctstate NEW -j ACCEPT)
+    if iptables -C "${BINHOST_FW_RULE[@]}" 2>/dev/null; then
+        info "firewall: tcp ${port} from ${lan} already open (rule left by an earlier run, closed on exit)"
+    elif iptables -I "${BINHOST_FW_RULE[@]}"; then
+        info "firewall: opened tcp ${port} for ${lan} until Ctrl-C"
+    else
+        warn "firewall: could not open tcp ${port} - clients may hang"; BINHOST_FW_RULE=()
+    fi
+}
+binhost_fw_close() {
+    [[ ${#BINHOST_FW_RULE[@]} -gt 0 ]] || return 0
+    while iptables -C "${BINHOST_FW_RULE[@]}" 2>/dev/null; do
+        iptables -D "${BINHOST_FW_RULE[@]}" || break
+    done
+    info "firewall: closed tcp ${BINHOST_FW_RULE[6]}"
+    BINHOST_FW_RULE=()
 }
 
 # Hold a package at the version the rootfs already has. 'pkgs' pass 1
