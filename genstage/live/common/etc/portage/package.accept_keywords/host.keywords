@@ -1817,3 +1817,5 @@ acct-user/ntfy
 dev-util/maturin
 # aiohttp 3.14.4 (vllm/unsloth-zoo chain) needs >=yarl-1.25.1, ~amd64 only (2026-10-10)
 ~dev-python/yarl-1.25.1 ~amd64
+dev-python/nvidia-cutlass-dsl-libs-core
+dev-python/oss-harmony

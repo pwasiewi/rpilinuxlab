@@ -9,3 +9,4 @@ app-crypt/trezor-suite-bin T-RSL
 dev-python/nvidia-cutlass-dsl NVIDIA-CUTLASS
 dev-python/nvidia-cutlass-dsl-libs-base NVIDIA-CUTLASS
 dev-python/nvidia-cutlass-dsl-libs-cu13 NVIDIA-CUTLASS
+dev-python/nvidia-cutlass-dsl-libs-core NVIDIA-CUTLASS

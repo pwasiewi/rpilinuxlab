@@ -7,4 +7,4 @@
 # works. Keep it until upstream supports transformers 5 - then drop this mask
 # rather than assume a newer version is safe, because a bump that keeps the cap
 # would resurrect exactly this failure.
->=dev-python/xgrammar-0.2.5
+# >=dev-python/xgrammar-0.2.5   lifted 2026-11-02 (step 3): 0.2.8 has no transformers cap, vllm b8c04dd3 needs ==0.2.8
