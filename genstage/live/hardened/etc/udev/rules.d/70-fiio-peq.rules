@@ -1,0 +1,4 @@
+# FiiO USB DACs (QX13 2972:0128, KA17 2972:0093, any 2972:*): let the logged-in seat
+# user open the HID interface for hardware-PEQ control (bin/fiiopeq, Chromium
+# WebHID tools). Audio (UAC2) interfaces are untouched.
+KERNEL=="hidraw*", ATTRS{idVendor}=="2972", TAG+="uaccess"
