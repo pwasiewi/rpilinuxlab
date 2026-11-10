@@ -20,8 +20,12 @@
 # nothing at all instead of merging what it can.
 # sys-apps/usbguard-1.1.3 requires <dev-cpp/catch-3
 >=dev-cpp/catch-3
-# app-emulation/qemu-10.2.3 requires ~sys-firmware/edk2-bin-202408
->sys-firmware/edk2-bin-202408
+# app-emulation/qemu (10.2.3 .. 11.1.2-r2) requires =sys-firmware/edk2-bin-202408*.
+# A hold written as '>202408' also hid 202408_p1, the only 202408 ebuild left once
+# ::gentoo dropped the plain 202408 (found 2026-11-10: installed orphan, no ebuild).
+# Range form: keeps 2026xx out, lets the _pN revisions of 202408 through. Lift when
+# qemu moves its EDK2_OVMF_VERSION.
+>=sys-firmware/edk2-bin-202500
 # 2026-11-07: libfmt-12.2.0 (::gentoo) and cudnn-9.28.0.42 (::stuff) change a subslot that
 # pool gpkgs the images have INSTALLED were built against: spdlog-1.17.0-2, android-tools-36.0.1-2,
 # mangohud-0.8.4-1 and caffe2-9999-10 carry libfmt:0/12.1.0=, cudnn-frontend-1.28.0-3 carries

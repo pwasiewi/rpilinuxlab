@@ -1828,3 +1828,4 @@ sci-biology/refined-ibd
 sci-biology/relate
 dev-python/scikit-allel
 dev-python/ancibd
+sci-biology/bwa

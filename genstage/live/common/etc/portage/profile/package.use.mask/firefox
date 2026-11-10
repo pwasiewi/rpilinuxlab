@@ -1,0 +1,6 @@
+# 2026-11-10: features/hardened/package.use.mask masks gmp-autoupdate on www-client/firefox
+# ("no way of knowing what Gecko Media Plugins will install"). On these desktops Widevine
+# and OpenH264 are ALREADY in the profiles; the mask only stops their updates (stale DRM
+# blob, stale WebRTC codec). host.use asks for the flag; this file lets it through.
+# Same file on the host and in the common image layer.
+www-client/firefox -gmp-autoupdate

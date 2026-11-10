@@ -1,0 +1,13 @@
+# gcc stays at the installed 16.2.0 (user 2026-11-10). Until then the upgrade was
+# blocked by a package.provided entry (sys-devel/gcc-16.2.1_p20260926), which made
+# every world update warn "listed in package.provided ... pulled in by selected,
+# system". A mask is the honest tool: the installed version stays visible and
+# rebuildable, only newer ones (16.2.1_p* snapshots, 17.x) are out. The host and
+# the hard images share one gcc slot and one binpkg lineage, so this file is the
+# same on both sides. Lift deliberately, never by accident: a gcc bump means
+# rebuilding the toolchain-sensitive stack (CUDA host compiler cap, kmods).
+>sys-devel/gcc-16.2.0
+# amdkdehard/corehard/intelhard/ryzenhard still carry gcc:15 (15.3.1_p20261009) next
+# to 16.2.0 (the nvcc host-compiler cap era); its newer snapshots are churn, not fixes.
+# Slot-scoped on purpose: without ':15' this atom also matches 16.2.0 (seen in a pretend).
+>sys-devel/gcc-15.3.1_p20261009:15
