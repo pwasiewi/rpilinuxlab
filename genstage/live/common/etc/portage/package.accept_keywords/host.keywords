@@ -1822,3 +1822,9 @@ dev-util/maturin
 ~dev-python/yarl-1.25.1 ~amd64
 dev-python/nvidia-cutlass-dsl-libs-core
 dev-python/oss-harmony
+sci-biology/glimpse
+sci-biology/beagle
+sci-biology/refined-ibd
+sci-biology/relate
+dev-python/scikit-allel
+dev-python/ancibd
