@@ -2,18 +2,54 @@
 # tarballs are DELETED upstream within days — by the time a synced ebuild
 # reaches this image the distfile is a 404 on every CTAN mirror
 # (texlive-luatex r79730, 2026-08-10: gone from tu-chemnitz and gust.org.pl
-# alike, killed the whole post-kernel emerge). The installed ::pwr copies
-# keep working and nothing in the image needs the newer snapshots; unmask
-# deliberately after a sync if a texlive bump is actually wanted, and fetch
-# the same day.
-dev-texlive/*::stuff
+# alike, killed the whole post-kernel emerge; texlive-core 2026-r3 pinned
+# texlive-scripts.r80004 and CTAN had already rotated it out, 2026-08-21).
+#
+# 2026-08-10 -> 2026-11-07: this file used to mask dev-texlive/*::stuff and
+# >texlive-core-2026-r1::stuff outright. On 2026-10-06 the ::stuff snapshot
+# below was deliberately unmasked, fetched the same day and installed on the
+# host AND in every hard rootfs (gpkgs of that date in the shared pool) — but
+# the blanket mask stayed, so the next 'update-seed' (--update @installed)
+# DOWNGRADED the whole stack to ::gentoo (texlive-core 2026-r6 -> r2 built
+# from source, 12 dev-texlive modules from stale pool gpkgs) and died on a
+# file collision: ::gentoo's texlive-core-2026-r2 ships
+# texmf-dist/dvips/xdvipsk/xdvipsk-cid.pro, and so does the pool's
+# texlive-binextra-2026_p77772-r1-1 gpkg (::pwr copy, built 2026-08-06).
+# Lesson: a mask that says "unmask deliberately when a bump is wanted" must be
+# re-pinned to the new snapshot the day the bump is installed, or it becomes a
+# downgrade order. Same shape as the libfmt/cudnn and opera holds in
+# zz-image.mask (gentoo-live-image failures.md §34).
+#
+# Holds: everything ABOVE the installed 2026-10-06 snapshot stays masked
+# (future tlnet revisions rot before pkgs runs); the snapshot itself is
+# visible so --update @installed keeps it. To take a newer ::stuff bump:
+# sync, fetch the same day on the host, install, then move every line below
+# to the new version in the same commit (host copy: /etc/portage/package.mask/texlive-stuff).
+>app-text/texlive-core-2026-r6::stuff
+>dev-texlive/texlive-basic-2026_p72890-r3::stuff
+>dev-texlive/texlive-bibtexextra-2026_p79975-r1::stuff
+>dev-texlive/texlive-binextra-2026_p80064-r1::stuff
+>dev-texlive/texlive-fontsextra-2026_p80219::stuff
+>dev-texlive/texlive-fontsrecommended-2026_p54074-r1::stuff
+>dev-texlive/texlive-fontutils-2026_p61207-r2::stuff
+>dev-texlive/texlive-formatsextra-2026_p72250-r4::stuff
+>dev-texlive/texlive-latex-2026_p80015::stuff
+>dev-texlive/texlive-latexextra-2026_p80217::stuff
+>dev-texlive/texlive-latexrecommended-2026_p78568-r4::stuff
+>dev-texlive/texlive-luatex-2026_p79926-r1::stuff
+>dev-texlive/texlive-pictures-2026_p80119::stuff
+>dev-texlive/texlive-plaingeneric-2026_p79318-r2::stuff
+>dev-texlive/texlive-xetex-2026_p78834-r5::stuff
 
-# app-text/texlive-core is the same rot one category over: 2026-r3 pins
-# texlive-scripts.r80004, and CTAN's tlnet/archive already rotated it out
-# (2026-08-21: the mirror carries r80029 and r80039, nothing older), so every
-# SRC_URI entry — gentoo mirrors, dev.gentoo.org, tu-chemnitz, CTAN — is a 404
-# and the fetch cannot be repaired locally. The installed 2026-r1 keeps working
-# even though ::stuff has since dropped its ebuild. Masking above r1 rather
-# than the whole package leaves the older 2025 ebuild visible without letting
-# --update pick it. Drop this line once ::stuff bumps to a live revision.
->app-text/texlive-core-2026-r1::stuff
+# 2026-11-07, ryzenhard (and every image whose TeX stack is the ::pwr copy:
+# amdkdehard, corehard, intelhard): ::gentoo bumped texlive-core to 2026-r2,
+# which builds xdvipsk and ships texmf-dist/dvips/xdvipsk/xdvipsk-cid.pro;
+# ::gentoo's texlive-binextra-2026_p77772-r1 deletes that file in src_install.
+# The ::pwr binextra is the SAME version without the rm (its core, r1, has
+# --disable-xdvipsk), so portage keeps the installed ::pwr module and moves
+# only the core to ::gentoo -> file collision, texlive-core NOT merged.
+# Hold ::gentoo's core away from a ::pwr-module stack; the ::pwr r1 is then
+# rebuilt against kpathsea 6.4.2 (>=6.4.0:=). Drop this line when the ::pwr
+# dev-texlive copies are bumped to a snapshot whose binextra matches a
+# ::gentoo core, or when the image takes its stack from ::stuff (nvidiahard).
+>=app-text/texlive-core-2026-r2::gentoo

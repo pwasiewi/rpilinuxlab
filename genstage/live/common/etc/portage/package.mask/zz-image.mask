@@ -22,6 +22,17 @@
 >=dev-cpp/catch-3
 # app-emulation/qemu-10.2.3 requires ~sys-firmware/edk2-bin-202408
 >sys-firmware/edk2-bin-202408
+# 2026-11-07: libfmt-12.2.0 (::gentoo) and cudnn-9.28.0.42 (::stuff) change a subslot that
+# pool gpkgs the images have INSTALLED were built against: spdlog-1.17.0-2, android-tools-36.0.1-2,
+# mangohud-0.8.4-1 and caffe2-9999-10 carry libfmt:0/12.1.0=, cudnn-frontend-1.28.0-3 carries
+# cudnn:0/9.27.0=. With --usepkg the slot-operator rebuild selects the SAME stale gpkg as the
+# "rebuild" (the installed instance and the pool file are one build id), which pulls the old
+# library back in: two libfmt / two cudnn in one slot and pass 1 aborts (nvidiahard, probed
+# 2026-11-07: --usepkg-exclude on every consumer resolves it, but that is a 3 h caffe2 source
+# build for a libfmt point release). The host builds first (same lineage): hold until its
+# rebuilt gpkgs are copied into the pool (build-pipeline.md §35), then lift both lines together.
+>=dev-libs/libfmt-12.2
+>=dev-libs/cudnn-9.28
 
 # libddcutil aborts its client when a monitor answers VCP xDF with a version
 # outside the MCCS spec — this host's PG34WCDN says 2.18 — so ddcui dies with
@@ -59,11 +70,12 @@ app-misc/ddcutil::gentoo
 dev-python/httpx2::stuff
 dev-python/httpcore2::stuff
 
-# 2026-11-01: ffmpeg-chromium-155.0.8059.85 is not on distfiles.gentoo.org (404) and its
-# fallback, a googlesource '+archive' tarball, is generated per request: the fetch got
-# 18926241 bytes against the Manifest's 18924505, so it dies on VERIFY FAILED every time.
-# opera-developer-140 is the only image package with CHROMIUM_VERSION=155, so it goes too;
-# the images stay on opera-developer-139 + ffmpeg-chromium-153. Lift when the mirror
-# carries the distfile or ::gentoo refreshes the Manifest (re-test: emerge -f =<atom>).
-=media-video/ffmpeg-chromium-155.0.8059.85
-=www-client/opera-developer-140.0.6066.0
+# 2026-11-01 -> lifted 2026-11-07: ffmpeg-chromium-155.0.8059.85 was unfetchable (404 on
+# distfiles.gentoo.org, the googlesource '+archive' fallback regenerated per request and
+# never matched the Manifest), so it and opera-developer-140.0.6066.0 (the only image
+# package with CHROMIUM_VERSION=155) were masked here. ::gentoo has since moved the
+# SRC_URI to deps.gentoo.zip and refreshed the Manifest (11643376 bytes); 'ebuild ... fetch'
+# verified the digest on 2026-11-07, so both masks are gone. Lesson: the opera mask was
+# pinned to 140.0.6066.0 and rotted the moment ::gentoo bumped to 140.0.6072.0 - @installed
+# then pulled the unmasked 140.0.6072.0 and died on the still-masked ffmpeg-chromium:155.
+# A hold on a package that tracks another must cover the range (>=), not one version.

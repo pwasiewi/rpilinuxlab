@@ -445,6 +445,9 @@ dev-python/attrs
 dev-python/automat
 #dev-python/awscli
 dev-python/awscli
+dev-python/awscrt
+dev-libs/aws-c-io
+dev-libs/aws-c-s3
 dev-python/aws-sam-cli
 dev-python/aws-sam-translator
 dev-python/backcall

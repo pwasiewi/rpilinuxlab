@@ -1025,10 +1025,11 @@ cmd_verify() {
     # and /proc — without them 'emerge --version' prints warnings and fails
     # while the chroot's exit status still comes from the last command
     mount -t proc none "${vdir}/proc"
-    mount --rbind /dev "${vdir}/dev"
-    mount --make-rslave "${vdir}/dev"
+    # one mount process: a deferred Ctrl-C can no longer land between the
+    # bind and the propagation change (2026-11-08, see live_chroot_umount)
+    mount --rbind --make-rslave /dev "${vdir}/dev"
     # shellcheck disable=SC2064 — expand ${vdir} now, not at trap time
-    local _vdir_umount="umount -R '${vdir}/dev' 2>/dev/null || true; umount '${vdir}/proc' 2>/dev/null || true"
+    local _vdir_umount="mount --make-rprivate '${vdir}/dev' 2>/dev/null; umount -R '${vdir}/dev' 2>/dev/null || true; umount '${vdir}/proc' 2>/dev/null || true"
     trap "${_vdir_umount}" EXIT
     trap "${_vdir_umount}; exit 130" INT
     trap "${_vdir_umount}; exit 143" TERM
@@ -1039,6 +1040,7 @@ cmd_verify() {
         emerge --version
         head -1 /etc/os-release' ||
         die "Chroot smoke test failed"
+    mount --make-rprivate "${vdir}/dev" 2>/dev/null
     umount -R "${vdir}/dev"
     umount "${vdir}/proc"
     trap - EXIT HUP INT TERM
@@ -1225,9 +1227,17 @@ live_chroot() {  # live_chroot <label>  (script on stdin)
     trap "live_chroot_umount '${LIVE_ROOT}'; exit 130" INT
     trap "live_chroot_umount '${LIVE_ROOT}'; exit 143" TERM
     command cp -f /etc/resolv.conf "${LIVE_ROOT}/etc/resolv.conf"
+    # a leak from an interrupted session (binds, no /proc - the guard above
+    # passed) must go BEFORE the new binds: a bind stacked on a leaked
+    # SHARED one propagates a copy of the whole tree onto the host's /sys
+    # peers (measured: +4 stacked /sys per conf, 2026-11-08)
+    live_chroot_umount "${LIVE_ROOT}"
     mount -t proc  none "${LIVE_ROOT}/proc"
-    mount --rbind /sys  "${LIVE_ROOT}/sys";  mount --make-rslave "${LIVE_ROOT}/sys"
-    mount --rbind /dev  "${LIVE_ROOT}/dev";  mount --make-rslave "${LIVE_ROOT}/dev"
+    # bind + propagation in ONE mount process: bash delivers a deferred Ctrl-C
+    # between two commands, and a tree left as a shared peer of the host's
+    # /sys cannot be unmounted while the host's cgroup2 is busy (2026-11-08)
+    mount --rbind --make-rslave /sys "${LIVE_ROOT}/sys"
+    mount --rbind --make-rslave /dev "${LIVE_ROOT}/dev"
     live_ccache_mount
     live_distfiles_mount
     live_builddir_mount
@@ -1291,6 +1301,12 @@ live_chroot_mounted() {
     Leaked (nothing running): findmnt -R $1 ; then umount -R the listed targets"
 }
 
+# live_mount_count PATH - mount instances at PATH or below it (stacked ones
+# count separately; findmnt -R shows only the top instance of a path)
+live_mount_count() {
+    awk -v p="$1" '$5 == p || index($5, p "/") == 1' /proc/self/mountinfo | wc -l
+}
+
 live_chroot_umount() {
     # Idempotent, and no longer silent: an 'umount || true' left two binds
     # (binpkgs, ccache) under amdkdehard after an interrupted 'enter'
@@ -1305,9 +1321,20 @@ live_chroot_umount() {
             umount "${r}${t}" 2>/dev/null || { left+=" ${r}${t}"; break; }
         done
     done
+    local n
     for t in /dev /sys; do
         while mountpoint -q "${r}${t}" 2>/dev/null; do
-            umount -R "${r}${t}" 2>/dev/null || { left+=" ${r}${t}"; break; }
+            # a bind left SHARED (Ctrl-C before --make-rslave, 2026-11-08) makes
+            # umount propagate to the host's busy cgroup2 -> EBUSY forever;
+            # private first: no effect on the host, the image copy then goes.
+            # --make-rprivate reaches only the TOP instance at the path: with a
+            # fresh bind stacked on a leaked one, umount -R drops the top and
+            # fails on the shared tree below - keep looping while instances go.
+            n=$(live_mount_count "${r}${t}")
+            mount --make-rprivate "${r}${t}" 2>/dev/null
+            umount -R "${r}${t}" 2>/dev/null && continue
+            (( $(live_mount_count "${r}${t}") < n )) && continue
+            left+=" ${r}${t}"; break
         done
     done
     while mountpoint -q "${r}/proc" 2>/dev/null; do
@@ -1505,6 +1532,11 @@ cmd_live_conf() {
         {
             echo "[${r}]"
             echo "location = /var/db/repos/${r}"
+            # ::pwr is the personal override: with no priority both overlays
+            # are priority=None and for a cat/pkg-version present in both
+            # ::stuff wins (xrt-999999::stuff picked over ::pwr, host 2026-11-10).
+            # Restored here so every image copy and the installed host agree.
+            [[ ${r} == pwr ]] && echo "priority = 100"
             if [[ -n ${rurl} ]]; then
                 echo "sync-type = git"
                 echo "sync-uri = ${rurl}"
@@ -3579,9 +3611,17 @@ cmd_live_enter() {
     trap "live_chroot_umount '${LIVE_ROOT}'; exit 130" INT
     trap "live_chroot_umount '${LIVE_ROOT}'; exit 143" TERM
     command cp -f /etc/resolv.conf "${LIVE_ROOT}/etc/resolv.conf"
+    # a leak from an interrupted session (binds, no /proc - the guard above
+    # passed) must go BEFORE the new binds: a bind stacked on a leaked
+    # SHARED one propagates a copy of the whole tree onto the host's /sys
+    # peers (measured: +4 stacked /sys per conf, 2026-11-08)
+    live_chroot_umount "${LIVE_ROOT}"
     mount -t proc  none "${LIVE_ROOT}/proc"
-    mount --rbind /sys  "${LIVE_ROOT}/sys";  mount --make-rslave "${LIVE_ROOT}/sys"
-    mount --rbind /dev  "${LIVE_ROOT}/dev";  mount --make-rslave "${LIVE_ROOT}/dev"
+    # bind + propagation in ONE mount process: bash delivers a deferred Ctrl-C
+    # between two commands, and a tree left as a shared peer of the host's
+    # /sys cannot be unmounted while the host's cgroup2 is busy (2026-11-08)
+    mount --rbind --make-rslave /sys "${LIVE_ROOT}/sys"
+    mount --rbind --make-rslave /dev "${LIVE_ROOT}/dev"
     live_ccache_mount
     live_distfiles_mount
     live_builddir_mount
