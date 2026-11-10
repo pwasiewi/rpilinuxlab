@@ -9,3 +9,9 @@
 >=dev-java/openjdk-22
 >=virtual/jdk-22
 >=virtual/jre-22
+
+# 2026-11-10: dev-java/maven-bin:3.10 (3.10.0-r1) requires >=virtual/jdk-25, i.e. exactly what the
+# cap above forbids. The image lists and the host world carry the unslotted atom, so without this
+# line every resolve reaches for 3.10, and in an image that is a fatal update-seed error once
+# backtracking is spent (corehard 2026-11-10). 3.9.16 (slot 3.9, jdk >=1.8) is installed everywhere.
+>=dev-java/maven-bin-3.10
