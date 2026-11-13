@@ -42,6 +42,12 @@ then the verified walkthrough).
   verb on a busy tree is refused. Check `pgrep -x emerge` + `/proc/PID/root`
   before touching a tree from outside xp — direct `xstage`/`xarm` calls bypass
   the lock, and `XP_NOLOCK=1` disables it.
+- Chroot sessions (amd64 image verbs, `xarm chroot`/`1by1`) run in private
+  mount + UTS + IPC namespaces since 2026-11-13: their binds are invisible on
+  the host (`nsenter -m -t <pid>` to look), a leak is impossible, and the
+  guard against a second session checks `/proc/*/root`, not mounts.
+  `XSTAGE_NO_NS=1` / `XARM_NO_NS=1` are the escapes. No PID namespace on
+  purpose (bash as PID 1 ignores Ctrl-C outside a trap).
 - Never edit `xstage` in place while a run is live: copy aside, edit, `mv`
   over (rename = new inode; the running bash keeps the old one).
 - Tool scripts in `genstage/live/tools/` are mirrors — the canonical copies

@@ -1295,10 +1295,36 @@ live_chroot_reap() {
 # /proc, /dev and /sys under the other one. Called BEFORE the traps are armed,
 # so dying here unmounts nothing.
 live_chroot_mounted() {
-    mountpoint -q "$1/proc" 2>/dev/null || return 0
-    die "${1} already has /proc mounted — another session is inside the image, or one leaked its mounts.
+    if mountpoint -q "$1/proc" 2>/dev/null; then
+        die "${1} already has /proc mounted — another session is inside the image, or one leaked its mounts.
     Running: for p in /proc/[0-9]*; do [ \"\$(readlink \$p/root)\" = \"$1\" ] && echo \${p#/proc/}; done
     Leaked (nothing running): findmnt -R $1 ; then umount -R the listed targets"
+    fi
+    # A session in its own mount namespace (the default since 2026-11-13) is
+    # invisible to the check above: its /proc bind does not exist here. Look
+    # for processes rooted in the image from ANOTHER mount namespace instead.
+    # Leftovers of this session's earlier steps share our namespace and pass.
+    local pids; pids=$(live_foreign_sessions "$1")
+    [[ -n ${pids} ]] || return 0
+    if [[ -n ${XP_NOLOCK:-} ]]; then
+        warn "XP_NOLOCK: another session is inside ${1} (pids:${pids}) — two writers corrupt a tree"
+        return 0
+    fi
+    die "another session is inside ${1} (pids:${pids}), in its own mount namespace — wait for it.
+    Its mounts: nsenter -m -t <pid> findmnt -R $1"
+}
+
+# live_foreign_sessions ROOT - pids rooted in ROOT whose mount namespace is
+# not ours (needs root to read other users' /proc/PID/root; empty otherwise)
+live_foreign_sessions() {
+    local r="$1" p mine out=""
+    mine=$(readlink /proc/self/ns/mnt 2>/dev/null) || return 0
+    for p in /proc/[0-9]*; do
+        [[ $(readlink "${p}/root" 2>/dev/null) == "${r}" ]] || continue
+        [[ $(readlink "${p}/ns/mnt" 2>/dev/null) == "${mine}" ]] && continue
+        out+=" ${p#/proc/}"
+    done
+    echo "${out}"
 }
 
 # live_mount_count PATH - mount instances at PATH or below it (stacked ones
@@ -2898,7 +2924,7 @@ live_write_release() {
         echo "# xstage image provenance — the inputs of this build"
         echo "profile=${XPROFILE:-none}"
         echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        echo "builder=$(hostname)"
+        echo "builder=${XSTAGE_BUILD_HOST:-$(hostname)}"
         echo "rpilinuxlab=${labhead}"
         [[ -f ${LIVE_BLD}/stage3.provenance ]] && cat "${LIVE_BLD}/stage3.provenance"
         echo "gentoo_tree=${treestamp}"
@@ -3402,6 +3428,8 @@ live_status() {
     n=$(live_pkg_list 2>/dev/null | grep -c . || true)
     echo "live   profile:${XPROFILE:-none}  stage3:${LIVE_FLAVOR_NAME}  rc:${LIVE_RC}  tree:${LIVE_BLD#"${REPO}"/}  pkgs:${n}"
     echo "       rootfs:${rootfs}  kernel:${krn}  squashfs:${sq}  iso:${iso}"
+    local sess; sess=$(live_foreign_sessions "${LIVE_ROOT}" 2>/dev/null || true)
+    [[ -z ${sess} ]] || echo "       session inside (pids:${sess}) — its mounts: sudo nsenter -m -t <pid> findmnt -R ${LIVE_ROOT}"
 }
 
 cmd_live_clean() {
@@ -3627,6 +3655,7 @@ cmd_live_enter() {
     live_builddir_mount
     live_binpkgs_mount
     info "Entering ${LIVE_ROOT} — 'exit' to leave (mounts are undone on the way out)"
+    in_session_ns && info "session namespace: the binds are invisible on the host; from another shell: sudo nsenter -m -t $$ findmnt -R ${LIVE_ROOT}"
     local rc=0
     # PS1 so a root shell inside the image is never mistaken for the host's.
     # Start in /root, not /: chroot always lands on the new root, and that is
@@ -3634,7 +3663,7 @@ cmd_live_enter() {
     chroot "${LIVE_ROOT}" /usr/bin/env -i HOME=/root TERM="${TERM:-dumb}" LC_ALL=C.UTF-8 \
         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
         ${http_proxy:+http_proxy="${http_proxy}"} ${https_proxy:+https_proxy="${https_proxy}"} \
-        ${no_proxy:+no_proxy="${no_proxy}"} /bin/bash -c \
+        ${no_proxy:+no_proxy="${no_proxy}"} XPROFILE="${XPROFILE:-live}" /bin/bash -c \
         'source /etc/profile >/dev/null 2>&1 || true
          cd /root 2>/dev/null || cd /
          export HOME=/root
@@ -5000,8 +5029,56 @@ case "$1" in
     clean)          cmd_clean_all; exit 0 ;;
 esac
 
+XSTAGE_ARGV=("$@")
 TGT="$1"; shift
 CMD="${1:-status}"; shift || true
+
+# --- session namespaces (2026-11-13) -----------------------------------------
+# Every amd64 verb that enters the image chroot re-executes itself once inside
+# its own mount, UTS and IPC namespaces (same PID: unshare execs in place, the
+# xp run lock fd is inherited):
+#   mount  every bind of live_chroot exists only in this namespace. The kernel
+#          drops them when the last process of the session exits, so SIGKILL,
+#          a closed terminal or a Ctrl-C between two mounts cannot leak onto
+#          the host, and nothing can propagate back to the host's /sys peers
+#          (2026-11-08). Propagation is 'slave': host mount events still arrive.
+#   uts    the session runs under the IMAGE's hostname, so a package that
+#          records its build host (the kernel: "root@host" in /proc/version)
+#          does not carry this machine's name into a shipped image.
+#   ipc    SysV IPC and POSIX queues of the build are not the host's.
+# No PID namespace on purpose: xstage would be PID 1 in it, bash as init
+# ignores INT/TERM outside a trap ("Ctrl-C does nothing"), and the host /proc
+# checks (reap, foreign-session guard, status) would go blind.
+# The mount/umount helpers and traps stay: they keep the normal path
+# deterministic and still report a process that holds a bind.
+# XSTAGE_NO_NS=1 keeps the old single-namespace behaviour (expert escape).
+ns_verb() {
+    case "$1" in
+        conf|pkgs|restrict-run|configure|kernel|rmkernel|squash|live|live-enter|live-emerge) return 0 ;;
+    esac
+    return 1
+}
+# true only when this process really is outside the host's mount namespace -
+# the env marker alone could be inherited or set by hand
+in_session_ns() {
+    [[ -n ${XSTAGE_IN_NS:-} ]] || return 1
+    [[ $(readlink /proc/self/ns/mnt 2>/dev/null) != "$(readlink /proc/1/ns/mnt 2>/dev/null)" ]]
+}
+if [[ ${TGT} == amd64 && ${EUID} -eq 0 && -z ${XSTAGE_NO_NS:-} ]] && ns_verb "${CMD}" && ! in_session_ns; then
+    need_native_profile
+    command -v unshare >/dev/null 2>&1 || die "unshare (sys-apps/util-linux) not found — install it, or run with XSTAGE_NO_NS=1"
+    # A leak left on the HOST by an older run must go here, before the
+    # namespace exists: inside it the cleanup would only remove the copy.
+    live_chroot_mounted "${LIVE_ROOT}"
+    live_chroot_umount "${LIVE_ROOT}"
+    export XSTAGE_IN_NS=1
+    XSTAGE_BUILD_HOST="$(hostname 2>/dev/null || true)"; export XSTAGE_BUILD_HOST
+    exec unshare --mount --uts --ipc --propagation slave -- "$0" "${XSTAGE_ARGV[@]}"
+fi
+if in_session_ns && [[ $(readlink /proc/self/ns/uts 2>/dev/null) != "$(readlink /proc/1/ns/uts 2>/dev/null)" ]]; then
+    hostname "${LIVE_HOSTNAME}" 2>/dev/null ||
+        warn "could not set the session hostname to '${LIVE_HOSTNAME}' — builds will record $(hostname)"
+fi
 
 case "${TGT}" in
 amd64)

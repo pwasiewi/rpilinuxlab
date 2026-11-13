@@ -884,8 +884,10 @@ chroot_mount() {
     mountpoint -q "${tgt}" && return 0
     case "$1" in
         proc)  mount -t proc proc "${tgt}" || die "mount proc on ${tgt} failed" ;;
-        rbind) mount --rbind "$3" "${tgt}" || die "rbind $3 -> ${tgt} failed"
-               mount --make-rslave "${tgt}" || { umount -R "${tgt}"; die "make-rslave ${tgt} failed — would propagate umounts to the host"; } ;;
+        # bind + propagation in ONE mount process: a Ctrl-C delivered between
+        # two commands left the tree a shared peer of the host's /sys
+        # (xstage, 2026-11-08)
+        rbind) mount --rbind --make-rslave "$3" "${tgt}" || die "rbind $3 -> ${tgt} failed" ;;
         bind)  mount --bind "$3" "${tgt}" || die "bind $3 -> ${tgt} failed" ;;
     esac
     MOUNTED+=("${tgt}")
@@ -1170,9 +1172,36 @@ cmd_clean() {
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
+XARM_ARGV=("$@")
 CMD="${1:-}"
 [[ -n ${CMD} ]] || { help; exit 0; }
 shift
+
+# --- session namespaces (2026-11-13, same design as genstage/xstage) ---------
+# The two verbs that enter the qemu chroot re-execute themselves once inside
+# their own mount, UTS and IPC namespaces (same PID, unshare execs in place):
+# the binds of chroot_mount then exist only for this session and the kernel
+# drops them when its last process exits, so a kill or a closed terminal
+# cannot leak mounts onto the host; with XPROFILE set the session runs under
+# the profile's name, so a package that records its build host does not carry
+# this machine's name onto the card. No PID namespace: bash as PID 1 ignores
+# INT/TERM outside a trap, and qemu-user already forces -pid-sandbox.
+# XARM_NO_NS=1 keeps the old single-namespace behaviour.
+in_session_ns() {
+    [[ -n ${XARM_IN_NS:-} ]] || return 1
+    [[ $(readlink /proc/self/ns/mnt 2>/dev/null) != "$(readlink /proc/1/ns/mnt 2>/dev/null)" ]]
+}
+if [[ ${EUID} -eq 0 && -z ${XARM_NO_NS:-} ]] && [[ ${CMD} == chroot || ${CMD} == 1by1 ]] && ! in_session_ns; then
+    if command -v unshare >/dev/null 2>&1; then
+        export XARM_IN_NS=1
+        exec unshare --mount --uts --ipc --propagation slave -- "$0" "${XARM_ARGV[@]}"
+    fi
+    warn "unshare (sys-apps/util-linux) not found — '${CMD}' runs in the host's mount namespace"
+fi
+if in_session_ns && [[ -n ${XPROFILE:-} ]] &&
+   [[ $(readlink /proc/self/ns/uts 2>/dev/null) != "$(readlink /proc/1/ns/uts 2>/dev/null)" ]]; then
+    hostname "${XPROFILE}" 2>/dev/null || warn "could not set the session hostname to '${XPROFILE}'"
+fi
 
 case "${CMD}" in
     setup)          cmd_setup "$@" ;;

@@ -47,7 +47,8 @@ do_mount() {
     mkdir -p "${tgt}"
     case "$1" in
         proc)  mountpoint -q "${tgt}" || mount -t proc proc "${tgt}" ;;
-        rbind) mountpoint -q "${tgt}" || { mount --rbind "$3" "${tgt}"; mount --make-rslave "${tgt}"; } ;;
+        # one mount process: a Ctrl-C between two leaves a shared peer of the host's /sys
+        rbind) mountpoint -q "${tgt}" || mount --rbind --make-rslave "$3" "${tgt}" ;;
         bind)  mountpoint -q "${tgt}" || mount --bind "$3" "${tgt}" ;;
     esac
     MOUNTED+=("${tgt}")

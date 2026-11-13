@@ -78,6 +78,21 @@ different trees are independent, and `status`, `log`, `qlop`, `binhost`,
 `distcc` never lock. `XP_NOLOCK=1` skips it when you know the two verbs touch
 different files. Only `xp` locks — a direct `xstage`/`xarm` call does not.
 
+Chroot sessions run in their own namespaces: every amd64 verb that enters the
+image (`conf`, `pkgs`, `restrict-run`, `configure`, `livekernel`, `rmkernel`,
+`squash`, `live`, `enter`, `emerge`) and the board verbs `xarm chroot` / `1by1`
+re-execute themselves once under `unshare --mount --uts --ipc`. The binds
+(`/proc`, `/sys`, `/dev`, ccache, distfiles, build dir, binpkgs) exist only for
+that session and vanish with its last process, so a kill or a closed terminal
+cannot leave mounts on the host; the session's hostname is the image's, so a
+kernel built there says `root@<image>` instead of the build machine's name.
+On the host `findmnt` shows nothing while a session runs — look inside with
+`sudo nsenter -m -t <pid> findmnt -R <rootfs>` (`xp <profile> status` as root
+prints the pids). A second session on the same tree is refused by pid, not by
+mount. `XSTAGE_NO_NS=1` / `XARM_NO_NS=1` switch the namespaces off. A process
+that survives a `kill -9` of xstage (an orphaned emerge) keeps its namespace
+alive until it ends; it is listed by the refusal message.
+
 `build` unpacks the newest `dl/stage3-arm64-<flavour>-*.tar.xz`, so the block
 above is the whole path from nothing to a bootable card. Building the stage3
 **yourself** instead is a separate, optional branch — catalyst under qemu-user
